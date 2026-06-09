@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>오늘 날씨</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind으로 표현하기 어려운 부드러운 떠오름 애니메이션 */
+    @keyframes floatUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .animate-float-up { animation: floatUp 0.6s ease-out both; }
+
+    @keyframes iconBob {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-8px); }
+    }
+    .animate-icon-bob { animation: iconBob 3.5s ease-in-out infinite; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    // ========================================
+    // 📡 OpenWeatherMap API 연동
+    // ========================================
+    // ⚠️ 학습용 프로젝트라 API 키를 클라이언트에 직접 넣었습니다.
+    //    실제 서비스에서는 서버(프록시)를 두어 키를 숨겨야 합니다.
+    const API_KEY = "1d5926b624ef458b103acdefc47d5cbc";
+    const API_BASE = "https://api.openweathermap.org/data/2.5";
+
+    // OpenWeatherMap 날씨(main) → 내부 컨디션 매핑
+    function mapCondition(main) {
+      switch (main) {
+        case "Clear": return "sunny";
+        case "Clouds": return "cloudy";
+        case "Rain":
+        case "Drizzle": return "rainy";
+        case "Snow": return "snowy";
+        case "Thunderstorm": return "thunder";
+        // Mist, Fog, Haze, Smoke, Dust, Sand, Ash, Squall, Tornado 등
+        default: return "foggy";
+      }
+    }
+
+    // OpenWeatherMap 날씨 코드(id) → 자연스러운 한국어 설명
+    // (API의 lang=kr 번역이 어색해서 직접 매핑합니다)
+    function describeKo(id) {
+      if (id >= 200 && id < 300) return "천둥번개";
+      if (id >= 300 && id < 400) return "이슬비";
+      if (id >= 500 && id < 600) {
+        if (id === 500) return "약한 비";
+        if (id === 511) return "어는 비";
+        if (id >= 520) return "소나기";
+        return "비";
+      }
+      if (id >= 600 && id < 700) {
+        if (id === 611 || id === 612 || id === 613) return "진눈깨비";
+        return "눈";
+      }
+      if (id >= 700 && id < 800) {
+        if (id === 701 || id === 741) return "안개";
+        if (id === 711) return "연무";
+        if (id === 721) return "실안개";
+        if (id === 731 || id === 751 || id === 761) return "흙먼지";
+        if (id === 781) return "토네이도";
+        return "안개";
+      }
+      if (id === 800) return "맑음";
+      if (id === 801) return "구름 조금";
+      if (id === 802) return "구름 많음";
+      if (id === 803) return "대체로 흐림";
+      if (id === 804) return "흐림";
+      return "흐림";
+    }
+
+    // API 응답(현재 + 예보) → UI 데이터 형태로 변환
+    function transform(current, forecast) {
+      const tz = forecast.city.timezone; // 도시 시간대 오프셋 (초)
+      const dayKey = (dt) => new Date((dt + tz) * 1000).toISOString().slice(0, 10);
+      const todayStr = dayKey(current.dt);
+
+      // 오늘 날짜의 예보로 최고/최저 계산 (없으면 현재 응답값 사용)
+      const temps = forecast.list
+        .filter((it) => dayKey(it.dt) === todayStr)
+        .map((it) => it.main.temp);
+      const high = Math.round(
+        temps.length ? Math.max(...temps, current.main.temp) : current.main.temp_max
+      );
+      const low = Math.round(
+        temps.length ? Math.min(...temps, current.main.temp) : current.main.temp_min
+      );
+
+      // 시간대별 예보 5개 (3시간 간격)
+      const hourly = forecast.list.slice(0, 5).map((it) => {
+        const local = new Date((it.dt + tz) * 1000);
+        return {
+          time: `${local.getUTCHours()}시`,
+          temp: Math.round(it.main.temp),
+          condition: mapCondition(it.weather[0].main),
+        };
+      });
+
+      return {
+        city: current.name || forecast.city.name,
+        country: current.sys?.country || forecast.city.country || "",
+        condition: mapCondition(current.weather[0].main),
+        conditionText: describeKo(current.weather[0].id), // 자연스러운 한국어 설명
+        temperature: Math.round(current.main.temp),
+        feelsLike: Math.round(current.main.feels_like),
+        high,
+        low,
+        humidity: current.main.humidity,
+        windSpeed: Math.round(current.wind.speed * 10) / 10,
+        pressure: current.main.pressure,
+        updatedAt: new Date(),
+        hourly,
+      };
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (res.status === 404) throw new Error("도시를 찾을 수 없습니다.");
+        if (res.status === 401) throw new Error("API 키가 올바르지 않습니다.");
+        throw new Error("날씨 정보를 불러오지 못했습니다.");
+      }
+      return res.json();
+    }
+
+    // 도시 이름({ city }) 또는 좌표({ coords })로 날씨 조회
+    async function fetchWeather(query) {
+      const params = query.coords
+        ? `lat=${query.coords.lat}&lon=${query.coords.lon}`
+        : `q=${encodeURIComponent(query.city)}`;
+      const common = `${params}&appid=${API_KEY}&units=metric`;
+      const [current, forecast] = await Promise.all([
+        fetchJson(`${API_BASE}/weather?${common}`),
+        fetchJson(`${API_BASE}/forecast?${common}`),
+      ]);
+      return transform(current, forecast);
+    }
+
+    // ========================================
+    // 🎨 날씨별 표현 매핑 (정적 매핑 — Tailwind JIT 안전)
+    // ========================================
+    const WEATHER_THEME = {
+      sunny:   { icon: "☀️", gradient: "from-sky-400 via-blue-400 to-amber-300", label: "맑음" },
+      cloudy:  { icon: "☁️", gradient: "from-slate-400 via-slate-500 to-slate-600", label: "흐림" },
+      rainy:   { icon: "🌧️", gradient: "from-slate-600 via-blue-700 to-slate-800", label: "비" },
+      snowy:   { icon: "❄️", gradient: "from-sky-200 via-blue-300 to-indigo-300", label: "눈" },
+      thunder: { icon: "⛈️", gradient: "from-slate-700 via-indigo-800 to-slate-900", label: "뇌우" },
+      foggy:   { icon: "🌫️", gradient: "from-gray-300 via-gray-400 to-gray-500", label: "안개" },
+    };
+
+    function getTheme(condition) {
+      return WEATHER_THEME[condition] || WEATHER_THEME.cloudy;
+    }
+
+    // ========================================
+    // 🎨 DESIGN SYSTEM COMPONENTS
+    // ========================================
+
+    // 반투명 글래스 카드
+    function GlassCard({ children, className = "" }) {
+      return (
+        <div className={`bg-white/15 backdrop-blur-md border border-white/25 rounded-3xl shadow-xl ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    // 상세 정보 한 칸
+    function DetailItem({ icon, label, value, unit = "" }) {
+      return (
+        <div className="flex flex-col items-center justify-center gap-1 p-4 rounded-2xl bg-white/10 border border-white/15">
+          <span className="text-2xl" aria-hidden="true">{icon}</span>
+          <span className="text-xs text-white/70">{label}</span>
+          <span className="text-base font-semibold text-white">
+            {value}<span className="text-sm font-normal text-white/80">{unit}</span>
+          </span>
+        </div>
+      );
+    }
+
+    // 로딩 스피너
+    function Spinner() {
+      return (
+        <div
+          className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin"
+          role="status"
+          aria-label="날씨 정보를 불러오는 중"
+        />
+      );
+    }
+
+    // ========================================
+    // 🧩 COMMON COMPONENTS
+    // ========================================
+
+    function LocationHeader({ city, country, dateText }) {
+      return (
+        <div className="text-center text-white">
+          <p className="text-sm font-medium text-white/80 mb-1">오늘 날씨</p>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center justify-center gap-2">
+            <span aria-hidden="true">📍</span>
+            {city}
+          </h1>
+          <p className="text-sm text-white/70 mt-1">{country}</p>
+          <p className="text-xs text-white/60 mt-2">{dateText}</p>
+        </div>
+      );
+    }
+
+    // 메인 기온 표시
+    function CurrentWeather({ data }) {
+      const theme = getTheme(data.condition);
+      return (
+        <div className="flex flex-col items-center text-white py-2">
+          <span className="text-7xl sm:text-8xl animate-icon-bob mb-2" aria-hidden="true">
+            {theme.icon}
+          </span>
+          <div className="flex items-start">
+            <span className="text-7xl sm:text-8xl font-extralight leading-none">
+              {data.temperature}
+            </span>
+            <span className="text-3xl font-light mt-2">°C</span>
+          </div>
+          <p className="text-xl font-medium mt-1">{data.conditionText}</p>
+          <p className="text-sm text-white/80 mt-1">
+            체감 {data.feelsLike}° · 최고 {data.high}° / 최저 {data.low}°
+          </p>
+        </div>
+      );
+    }
+
+    // 시간대별 예보 스트립
+    function HourlyForecast({ hourly }) {
+      return (
+        <GlassCard className="p-4">
+          <p className="text-xs font-semibold text-white/80 mb-3 px-1">시간별 예보</p>
+          <div className="flex gap-3 overflow-x-auto pb-1">
+            {hourly.map((h, i) => {
+              const theme = getTheme(h.condition);
+              return (
+                <div
+                  key={i}
+                  className="flex flex-col items-center gap-1 min-w-[56px] py-2 px-1 rounded-2xl bg-white/10"
+                >
+                  <span className="text-xs text-white/70">{h.time}</span>
+                  <span className="text-2xl" aria-hidden="true">{theme.icon}</span>
+                  <span className="text-sm font-semibold text-white">{h.temp}°</span>
+                </div>
+              );
+            })}
+          </div>
+        </GlassCard>
+      );
+    }
+
+    // 상세 그리드
+    function DetailsGrid({ data }) {
+      return (
+        <GlassCard className="p-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <DetailItem icon="💧" label="습도" value={data.humidity} unit="%" />
+            <DetailItem icon="💨" label="풍속" value={data.windSpeed} unit=" m/s" />
+            <DetailItem icon="🌡️" label="체감" value={data.feelsLike} unit="°" />
+            <DetailItem icon="⬆️" label="최고" value={data.high} unit="°" />
+            <DetailItem icon="⬇️" label="최저" value={data.low} unit="°" />
+            <DetailItem icon="🧭" label="기압" value={data.pressure} unit=" hPa" />
+          </div>
+        </GlassCard>
+      );
+    }
+
+    // ========================================
+    // 📄 PAGE COMPONENT
+    // ========================================
+
+    function WeatherPage() {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [input, setInput] = useState("");
+      const [lastQuery, setLastQuery] = useState({ city: "Seoul" });
+
+      const loadWeather = (query) => {
+        setLastQuery(query);
+        setLoading(true);
+        setError(null);
+        fetchWeather(query)
+          .then(setData)
+          .catch((e) => setError(e.message || "날씨 정보를 불러오지 못했습니다."))
+          .finally(() => setLoading(false));
+      };
+
+      // 최초 진입: 현재 위치 시도 → 거부/실패 시 서울
+      useEffect(() => {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) =>
+              loadWeather({
+                coords: { lat: pos.coords.latitude, lon: pos.coords.longitude },
+              }),
+            () => loadWeather({ city: "Seoul" }),
+            { timeout: 8000 }
+          );
+        } else {
+          loadWeather({ city: "Seoul" });
+        }
+      }, []);
+
+      const handleSearch = (e) => {
+        e.preventDefault();
+        const c = input.trim();
+        if (c) loadWeather({ city: c });
+      };
+
+      const dateText = useMemo(() => {
+        const d = new Date();
+        return d.toLocaleDateString("ko-KR", {
+          year: "numeric", month: "long", day: "numeric", weekday: "long",
+        });
+      }, []);
+
+      const theme = data ? getTheme(data.condition) : getTheme("cloudy");
+
+      const updatedText = data
+        ? `업데이트 ${data.updatedAt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`
+        : "";
+
+      return (
+        <div className={`min-h-screen w-full bg-gradient-to-br ${theme.gradient} transition-all duration-700 flex items-center justify-center p-4`}>
+          <main className="w-full max-w-md animate-float-up">
+            <form onSubmit={handleSearch} className="mb-4 flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="도시 검색 (예: Busan, Tokyo, London)"
+                className="flex-1 px-4 py-2.5 rounded-full bg-white/20 backdrop-blur-md border border-white/30 text-white placeholder-white/60 text-sm focus:outline-none focus:ring-2 focus:ring-white/40"
+              />
+              <button
+                type="submit"
+                className="px-4 py-2.5 rounded-full bg-white/25 hover:bg-white/35 border border-white/30 text-white text-sm font-medium transition-colors"
+              >
+                검색
+              </button>
+            </form>
+
+            {loading && (
+              <div className="flex flex-col items-center justify-center gap-4 py-24 text-white">
+                <Spinner />
+                <p className="text-sm text-white/80">날씨 정보를 불러오는 중...</p>
+              </div>
+            )}
+
+            {!loading && error && (
+              <GlassCard className="p-8 text-center text-white">
+                <span className="text-5xl" aria-hidden="true">⚠️</span>
+                <p className="mt-4 text-base">{error}</p>
+                <button
+                  onClick={() => loadWeather(lastQuery)}
+                  className="mt-6 px-5 py-2 rounded-full bg-white/20 hover:bg-white/30 border border-white/30 text-sm font-medium transition-colors"
+                >
+                  다시 시도
+                </button>
+              </GlassCard>
+            )}
+
+            {!loading && data && (
+              <div className="flex flex-col gap-5">
+                <GlassCard className="p-6 flex flex-col gap-4">
+                  <LocationHeader city={data.city} country={data.country} dateText={dateText} />
+                  <CurrentWeather data={data} />
+                </GlassCard>
+
+                <HourlyForecast hourly={data.hourly} />
+                <DetailsGrid data={data} />
+
+                <div className="flex items-center justify-between px-2">
+                  <span className="text-xs text-white/70">{updatedText}</span>
+                  <button
+                    onClick={() => loadWeather(lastQuery)}
+                    className="text-xs text-white/80 hover:text-white px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 transition-colors"
+                    aria-label="날씨 새로고침"
+                  >
+                    🔄 새로고침
+                  </button>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 APP
+    // ========================================
+
+    function App() {
+      return <WeatherPage />;
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
