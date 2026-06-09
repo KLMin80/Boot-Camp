@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BMI 계산기</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Pretendard: refined modern sans-serif with excellent Korean rendering -->
+  <link rel="stylesheet" as="style" crossorigin
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <style>
+    :root {
+      --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+    body {
+      font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+        "Apple SD Gothic Neo", system-ui, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      color: #1e1b2e;
+      position: relative;
+      overflow-x: hidden;
+      background: #0f0c29;
+    }
+
+    /* Aurora mesh gradient background — layered radial blends of indigo / purple / teal / blue */
+    .aurora {
+      position: fixed;
+      inset: -20%;
+      z-index: -2;
+      background:
+        radial-gradient(40% 50% at 18% 22%, rgba(129, 140, 248, 0.55) 0%, transparent 60%),
+        radial-gradient(45% 55% at 82% 18%, rgba(168, 85, 247, 0.45) 0%, transparent 60%),
+        radial-gradient(50% 55% at 78% 82%, rgba(45, 212, 191, 0.40) 0%, transparent 62%),
+        radial-gradient(45% 50% at 22% 85%, rgba(96, 165, 250, 0.45) 0%, transparent 62%),
+        linear-gradient(135deg, #1e1b4b 0%, #312e81 45%, #155e75 100%);
+      filter: saturate(1.05);
+      animation: auroraShift 18s var(--ease-soft) infinite alternate;
+    }
+    /* a soft veil to keep contrast comfortable */
+    .aurora-veil {
+      position: fixed; inset: 0; z-index: -1;
+      background: radial-gradient(60% 60% at 50% 40%, transparent 0%, rgba(8, 6, 30, 0.35) 100%);
+    }
+
+    @keyframes auroraShift {
+      0%   { transform: translate3d(0, 0, 0) scale(1); }
+      50%  { transform: translate3d(-2%, 1.5%, 0) scale(1.05); }
+      100% { transform: translate3d(1.5%, -1%, 0) scale(1.03); }
+    }
+
+    /* Frosted glass card */
+    .glass {
+      background: rgba(255, 255, 255, 0.62);
+      backdrop-filter: blur(28px) saturate(160%);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+      border: 1px solid rgba(255, 255, 255, 0.55);
+      box-shadow:
+        0 24px 60px -18px rgba(30, 27, 75, 0.45),
+        0 8px 24px -12px rgba(30, 27, 75, 0.30),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.65);
+    }
+
+    .glass-subtle {
+      background: rgba(255, 255, 255, 0.45);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+    }
+
+    /* Remove number spinners for clean look */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+
+    .tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+    /* Result reveal animation */
+    @keyframes revealUp {
+      0%   { opacity: 0; transform: translateY(14px) scale(0.98); filter: blur(4px); }
+      100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+    }
+    .animate-reveal { animation: revealUp 0.55s var(--ease-soft) both; }
+
+    @keyframes countPop {
+      0%   { opacity: 0; transform: scale(0.85); }
+      60%  { opacity: 1; transform: scale(1.04); }
+      100% { transform: scale(1); }
+    }
+    .animate-count { animation: countPop 0.6s var(--ease-soft) both; }
+
+    /* Gauge fill transition */
+    .gauge-marker { transition: left 0.9s var(--ease-soft); }
+
+    /* Button shine */
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #6366f1 100%);
+      background-size: 180% 180%;
+      box-shadow: 0 10px 24px -8px rgba(99, 102, 241, 0.65),
+                  inset 0 1px 0 0 rgba(255,255,255,0.35);
+      transition: transform 0.25s var(--ease-soft), box-shadow 0.25s var(--ease-soft),
+                  background-position 0.5s var(--ease-soft);
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      background-position: 100% 50%;
+      box-shadow: 0 16px 34px -10px rgba(99, 102, 241, 0.75),
+                  inset 0 1px 0 0 rgba(255,255,255,0.45);
+    }
+    .btn-primary:active { transform: translateY(0); }
+
+    .btn-ghost {
+      transition: transform 0.25s var(--ease-soft), box-shadow 0.25s var(--ease-soft),
+                  background-color 0.25s var(--ease-soft);
+    }
+    .btn-ghost:hover { transform: translateY(-2px); }
+
+    .focus-ring:focus-within { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18); }
+
+    ::selection { background: rgba(139, 92, 246, 0.25); }
+  </style>
+</head>
+<body>
+  <div class="aurora"></div>
+  <div class="aurora-veil"></div>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks Destructuring
+    // ========================================
+    const { useState, useMemo } = React;
+
+    // ========================================
+    // 🎨 Design System Components (Modern / Glassmorphism)
+    // ========================================
+
+    function Card({ children, className = "" }) {
+      return (
+        <div className={`glass rounded-3xl p-6 sm:p-8 ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    // Clean minimal input with floating-style label and smooth focus transitions
+    function Input({ label, unit, value, onChange, placeholder, error, ...props }) {
+      return (
+        <div className="w-full">
+          <label className="block text-[13px] font-semibold text-slate-600 mb-1.5 ml-0.5 tracking-tight">
+            {label}
+          </label>
+          <div
+            className={`focus-ring relative rounded-2xl bg-white/70 border transition-all duration-300
+              ${error
+                ? "border-rose-300/80 bg-rose-50/60"
+                : "border-white/70 hover:border-indigo-200/80"}`}
+          >
+            <input
+              type="number"
+              inputMode="decimal"
+              value={value}
+              onChange={onChange}
+              placeholder={placeholder}
+              aria-label={label}
+              aria-invalid={!!error}
+              className="w-full bg-transparent px-4 py-3.5 pr-14 text-slate-800 text-lg font-semibold tnum
+                placeholder:font-normal placeholder:text-slate-400
+                focus:outline-none rounded-2xl"
+              {...props}
+            />
+            {unit && (
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium pointer-events-none">
+                {unit}
+              </span>
+            )}
+          </div>
+          {error && (
+            <p className="mt-1.5 ml-0.5 text-[13px] font-medium text-rose-500 flex items-center gap-1" role="alert">
+              <span aria-hidden="true">⚠</span> {error}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    function Button({ children, onClick, variant = "primary", className = "", ...props }) {
+      const base = "rounded-2xl px-5 py-3.5 text-[15px] font-bold tracking-tight focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/40";
+      const variants = {
+        primary: "btn-primary text-white",
+        ghost: "btn-ghost text-slate-600 bg-white/60 border border-white/70 hover:bg-white/85 hover:text-slate-800",
+      };
+      return (
+        <button onClick={onClick} className={`${base} ${variants[variant]} ${className}`} {...props}>
+          {children}
+        </button>
+      );
+    }
+
+    // ========================================
+    // 🧩 Helper: BMI Category Logic (muted, sophisticated tones)
+    // ========================================
+
+    function getCategory(bmi) {
+      if (bmi < 18.5) {
+        return {
+          label: "저체중",
+          desc: "체중이 표준보다 낮습니다.",
+          pill: "bg-sky-100 text-sky-700 ring-1 ring-sky-200/70",
+          accent: "#38bdf8",
+          dot: "bg-sky-400",
+        };
+      }
+      if (bmi < 23) {
+        return {
+          label: "정상",
+          desc: "건강한 체중 범위입니다.",
+          pill: "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/70",
+          accent: "#34d399",
+          dot: "bg-emerald-400",
+        };
+      }
+      if (bmi < 25) {
+        return {
+          label: "과체중",
+          desc: "표준보다 약간 높습니다.",
+          pill: "bg-amber-100 text-amber-700 ring-1 ring-amber-200/70",
+          accent: "#fbbf24",
+          dot: "bg-amber-400",
+        };
+      }
+      return {
+        label: "비만",
+        desc: "체중 관리가 필요합니다.",
+        pill: "bg-rose-100 text-rose-700 ring-1 ring-rose-200/70",
+        accent: "#fb7185",
+        dot: "bg-rose-400",
+      };
+    }
+
+    // BMI 범위 참고 표 데이터
+    const RANGES = [
+      { label: "저체중", range: "18.5 미만", dot: "bg-sky-400" },
+      { label: "정상", range: "18.5 ~ 22.9", dot: "bg-emerald-400" },
+      { label: "과체중", range: "23 ~ 24.9", dot: "bg-amber-400" },
+      { label: "비만", range: "25 이상", dot: "bg-rose-400" },
+    ];
+
+    // ========================================
+    // 📊 Animated BMI Gauge — positions the score across categories
+    // ========================================
+
+    function BmiGauge({ bmi, accent }) {
+      // Map BMI onto a 0..100% scale, clamped to a sensible 14–34 visual window.
+      const min = 14, max = 34;
+      const pct = Math.max(0, Math.min(100, ((bmi - min) / (max - min)) * 100));
+      // Segment widths within the 14–34 window: 18.5, 23, 25 thresholds
+      const seg = [
+        { w: ((18.5 - min) / (max - min)) * 100, color: "#7dd3fc" }, // 저체중
+        { w: ((23 - 18.5) / (max - min)) * 100, color: "#6ee7b7" },  // 정상
+        { w: ((25 - 23) / (max - min)) * 100, color: "#fcd34d" },    // 과체중
+        { w: ((max - 25) / (max - min)) * 100, color: "#fda4af" },   // 비만
+      ];
+
+      return (
+        <div className="mt-6">
+          <div className="relative">
+            {/* segmented track */}
+            <div className="flex h-3 w-full overflow-hidden rounded-full ring-1 ring-black/5">
+              {seg.map((s, i) => (
+                <div key={i} style={{ width: `${s.w}%`, background: s.color }} />
+              ))}
+            </div>
+            {/* animated marker */}
+            <div
+              className="gauge-marker absolute -top-1 -translate-x-1/2"
+              style={{ left: `${pct}%` }}
+            >
+              <div
+                className="h-5 w-5 rounded-full bg-white shadow-lg ring-2"
+                style={{ boxShadow: `0 4px 14px -2px ${accent}aa`, borderColor: accent, ["--tw-ring-color"]: accent }}
+              >
+                <div className="h-full w-full rounded-full" style={{ background: accent, transform: "scale(0.45)" }} />
+              </div>
+            </div>
+          </div>
+          <div className="mt-2.5 flex justify-between text-[11px] font-medium text-slate-400 tnum">
+            <span>저체중</span>
+            <span>정상</span>
+            <span>과체중</span>
+            <span>비만</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 Result Display Component
+    // ========================================
+
+    function ResultCard({ bmi }) {
+      const cat = getCategory(bmi);
+
+      return (
+        <div className="animate-reveal mt-6 rounded-3xl glass-subtle p-6 sm:p-7">
+          <div className="flex flex-col items-center text-center">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">
+              YOUR BMI
+            </span>
+            <div className="mt-1 flex items-end gap-1">
+              <span
+                key={bmi}
+                className="animate-count text-6xl sm:text-7xl font-extrabold leading-none tnum text-slate-800"
+              >
+                {bmi.toFixed(1)}
+              </span>
+            </div>
+
+            <span className={`mt-4 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-bold ${cat.pill}`}>
+              <span className={`h-2 w-2 rounded-full ${cat.dot}`}></span>
+              {cat.label}
+            </span>
+
+            <p className="mt-3 text-sm font-medium text-slate-500">{cat.desc}</p>
+          </div>
+
+          <BmiGauge bmi={bmi} accent={cat.accent} />
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 Page Component: BMI Calculator
+    // ========================================
+
+    function BMICalculator() {
+      const [height, setHeight] = useState("");
+      const [weight, setWeight] = useState("");
+      const [errors, setErrors] = useState({});
+      const [bmi, setBmi] = useState(null);
+
+      const validate = () => {
+        const e = {};
+        const h = parseFloat(height);
+        const w = parseFloat(weight);
+
+        if (height.trim() === "") {
+          e.height = "키를 입력해 주세요.";
+        } else if (isNaN(h) || h <= 0) {
+          e.height = "올바른 키를 입력해 주세요.";
+        } else if (h < 50 || h > 250) {
+          e.height = "키는 50~250cm 사이여야 합니다.";
+        }
+
+        if (weight.trim() === "") {
+          e.weight = "몸무게를 입력해 주세요.";
+        } else if (isNaN(w) || w <= 0) {
+          e.weight = "올바른 몸무게를 입력해 주세요.";
+        } else if (w < 10 || w > 400) {
+          e.weight = "몸무게는 10~400kg 사이여야 합니다.";
+        }
+
+        return e;
+      };
+
+      const handleCalculate = () => {
+        const e = validate();
+        setErrors(e);
+        if (Object.keys(e).length > 0) {
+          setBmi(null);
+          return;
+        }
+        const h = parseFloat(height) / 100;
+        const w = parseFloat(weight);
+        setBmi(w / (h * h));
+      };
+
+      const handleReset = () => {
+        setHeight("");
+        setWeight("");
+        setErrors({});
+        setBmi(null);
+      };
+
+      const handleKeyDown = (ev) => {
+        if (ev.key === "Enter") handleCalculate();
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 sm:p-6">
+          <div className="w-full max-w-md">
+            {/* Refined header */}
+            <div className="mb-7 text-center">
+              <div className="inline-flex items-center justify-center mb-4">
+                <span className="grid place-items-center h-14 w-14 rounded-2xl glass text-2xl">
+                  🩺
+                </span>
+              </div>
+              <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-sm">
+                BMI 계산기
+              </h1>
+              <p className="mt-2 text-sm font-medium text-indigo-100/80">
+                체질량지수를 간편하고 정확하게 확인하세요
+              </p>
+            </div>
+
+            <Card>
+              <div className="space-y-5" onKeyDown={handleKeyDown}>
+                <Input
+                  label="키"
+                  unit="cm"
+                  value={height}
+                  onChange={(e) => setHeight(e.target.value)}
+                  placeholder="예: 170"
+                  error={errors.height}
+                  min="0"
+                />
+                <Input
+                  label="몸무게"
+                  unit="kg"
+                  value={weight}
+                  onChange={(e) => setWeight(e.target.value)}
+                  placeholder="예: 65"
+                  error={errors.weight}
+                  min="0"
+                />
+
+                <div className="flex gap-3 pt-1">
+                  <Button onClick={handleCalculate} className="flex-1">계산하기</Button>
+                  <Button onClick={handleReset} variant="ghost" className="px-6">
+                    초기화
+                  </Button>
+                </div>
+              </div>
+
+              {bmi !== null && <ResultCard bmi={bmi} />}
+
+              {/* BMI 범위 참고표 */}
+              <div className="mt-7 pt-6 border-t border-white/50">
+                <h2 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400 mb-3.5 ml-0.5">
+                  BMI 기준표
+                </h2>
+                <ul className="space-y-2">
+                  {RANGES.map((r) => (
+                    <li
+                      key={r.label}
+                      className="flex items-center justify-between rounded-2xl glass-subtle px-4 py-2.5 transition-transform duration-200 hover:translate-x-0.5"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <span className={`h-2.5 w-2.5 rounded-full ${r.dot}`}></span>
+                        <span className="text-slate-700 font-semibold text-sm">{r.label}</span>
+                      </span>
+                      <span className="text-slate-500 font-medium text-sm tnum">{r.range}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Card>
+
+            <p className="text-center text-xs font-medium text-indigo-100/70 mt-6 tnum">
+              BMI = 몸무게(kg) ÷ 키(m)²
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App Component
+    // ========================================
+
+    function App() {
+      return <BMICalculator />;
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

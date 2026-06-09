@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D-day 카운터</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind 유틸로 표현이 어려운 애니메이션만 별도 정의 */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up { animation: fadeInUp 0.35s ease-out both; }
+
+    @keyframes pulseGlow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.45); }
+      50%      { box-shadow: 0 0 0 8px rgba(244, 63, 94, 0); }
+    }
+    .animate-pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useMemo, useCallback } = React;
+
+    // ========================================
+    // 🛠 유틸리티 (D-day 계산)
+    // ========================================
+    const STORAGE_KEY = 'dday-counter-items';
+
+    // 시/분/초를 제거하고 자정 기준 날짜로 정규화
+    function startOfDay(date) {
+      const d = new Date(date);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    }
+
+    // 오늘과 목표 날짜의 일수 차이. 양수=미래, 0=오늘, 음수=과거
+    function getDayDiff(targetDateStr) {
+      const today = startOfDay(new Date());
+      const target = startOfDay(targetDateStr);
+      const msPerDay = 1000 * 60 * 60 * 24;
+      return Math.round((target.getTime() - today.getTime()) / msPerDay);
+    }
+
+    // D-30 / D-DAY / D+5 형태 라벨 생성
+    function formatDday(diff) {
+      if (diff === 0) return 'D-DAY';
+      if (diff > 0) return `D-${diff}`;
+      return `D+${Math.abs(diff)}`;
+    }
+
+    // 남은 일수에 따른 강조 단계
+    function getUrgency(diff) {
+      if (diff < 0) return 'past';      // 지난 날짜
+      if (diff === 0) return 'today';   // 오늘
+      if (diff <= 7) return 'urgent';   // 임박 (1주 이내)
+      if (diff <= 30) return 'soon';    // 다가옴 (한 달 이내)
+      return 'far';                     // 여유
+    }
+
+    // 요일 포함 한국어 날짜 포맷
+    function formatKoreanDate(dateStr) {
+      const days = ['일', '월', '화', '수', '목', '금', '토'];
+      const d = new Date(dateStr);
+      return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
+    }
+
+    function todayStr() {
+      const d = new Date();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${d.getFullYear()}-${mm}-${dd}`;
+    }
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+    function Button({ variant = 'primary', size = 'md', disabled = false, onClick, type = 'button', className = '', children }) {
+      const base = 'inline-flex items-center justify-center font-semibold rounded-xl transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
+      const variants = {
+        primary: 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-500 shadow-sm',
+        secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 focus:ring-slate-400',
+        danger: 'bg-rose-50 text-rose-600 hover:bg-rose-100 focus:ring-rose-400',
+        ghost: 'bg-transparent text-slate-500 hover:bg-slate-100 focus:ring-slate-300',
+      };
+      const sizes = {
+        sm: 'px-3 py-1.5 text-sm',
+        md: 'px-4 py-2.5 text-sm',
+        lg: 'px-6 py-3 text-base',
+      };
+      return (
+        <button type={type} disabled={disabled} onClick={onClick}
+          className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}>
+          {children}
+        </button>
+      );
+    }
+
+    function Input({ type = 'text', label, value, onChange, placeholder, error, min, disabled = false, className = '' }) {
+      return (
+        <div className={`flex flex-col gap-1.5 ${className}`}>
+          {label && <label className="text-sm font-medium text-slate-700">{label}</label>}
+          <input
+            type={type} value={value} onChange={onChange} placeholder={placeholder}
+            min={min} disabled={disabled}
+            className={`w-full px-4 py-2.5 rounded-xl border bg-white text-slate-800 placeholder-slate-400 transition-colors focus:outline-none focus:ring-2 ${
+              error ? 'border-rose-400 focus:ring-rose-300'
+                    : 'border-slate-300 focus:ring-indigo-400 focus:border-indigo-400'
+            }`}
+          />
+          {error && <span className="text-xs text-rose-500">{error}</span>}
+        </div>
+      );
+    }
+
+    function Card({ className = '', children }) {
+      return <div className={`bg-white rounded-2xl shadow-sm ${className}`}>{children}</div>;
+    }
+
+    function Badge({ tone = 'slate', className = '', children }) {
+      const tones = {
+        slate: 'bg-slate-100 text-slate-600',
+        rose: 'bg-rose-100 text-rose-700',
+        amber: 'bg-amber-100 text-amber-700',
+        indigo: 'bg-indigo-100 text-indigo-700',
+        emerald: 'bg-emerald-100 text-emerald-700',
+      };
+      return (
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${tones[tone]} ${className}`}>
+          {children}
+        </span>
+      );
+    }
+
+    // ========================================
+    // 🧩 D-day 시각화 매핑 (강조 단계별 스타일 일원화)
+    // ========================================
+    const URGENCY_STYLE = {
+      today:  { accent: 'text-rose-600',  ring: 'ring-2 ring-rose-300 animate-pulse-glow', badgeTone: 'rose',   badgeText: '오늘!' },
+      urgent: { accent: 'text-rose-600',  ring: 'ring-1 ring-rose-200',                    badgeTone: 'rose',   badgeText: '임박' },
+      soon:   { accent: 'text-amber-600', ring: 'ring-1 ring-amber-200',                   badgeTone: 'amber',  badgeText: '다가옴' },
+      far:    { accent: 'text-indigo-600',ring: 'ring-1 ring-slate-200',                   badgeTone: 'indigo', badgeText: '여유' },
+      past:   { accent: 'text-slate-400', ring: 'ring-1 ring-slate-200',                   badgeTone: 'slate',  badgeText: '지남' },
+    };
+
+    // ========================================
+    // 🧩 D-day 카드
+    // ========================================
+    function DdayCard({ item, onDelete }) {
+      const diff = getDayDiff(item.date);
+      const style = URGENCY_STYLE[getUrgency(diff)];
+
+      return (
+        <Card className={`p-5 animate-fade-in-up ${style.ring}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <Badge tone={style.badgeTone} className="mb-1">{style.badgeText}</Badge>
+              <h3 className="text-lg font-bold text-slate-800 truncate" title={item.title}>
+                {item.title}
+              </h3>
+              <p className="text-sm text-slate-500 mt-0.5">{formatKoreanDate(item.date)}</p>
+            </div>
+            <div className="flex flex-col items-end shrink-0">
+              <span className={`text-3xl font-extrabold tabular-nums ${style.accent}`}>
+                {formatDday(diff)}
+              </span>
+              <button
+                onClick={() => onDelete(item.id)}
+                aria-label={`${item.title} 삭제`}
+                className="mt-2 text-xs text-slate-400 hover:text-rose-500 transition-colors"
+              >
+                삭제
+              </button>
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🧩 D-day 추가 폼
+    // ========================================
+    function DdayForm({ onAdd }) {
+      const [title, setTitle] = useState('');
+      const [date, setDate] = useState('');
+      const [errors, setErrors] = useState({});
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        const nextErrors = {};
+        if (!title.trim()) nextErrors.title = '제목을 입력해 주세요.';
+        if (!date) nextErrors.date = '목표 날짜를 선택해 주세요.';
+        setErrors(nextErrors);
+        if (Object.keys(nextErrors).length > 0) return;
+
+        onAdd({ id: Date.now().toString(), title: title.trim(), date });
+        setTitle('');
+        setDate('');
+        setErrors({});
+      };
+
+      return (
+        <Card className="p-6">
+          <h2 className="text-base font-bold text-slate-800 mb-4">새 D-day 추가</h2>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <Input
+              label="제목"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="예: 수능, 프로젝트 마감, 여행"
+              error={errors.title}
+            />
+            <Input
+              type="date"
+              label="목표 날짜"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              error={errors.date}
+            />
+            <Button type="submit" size="lg" className="w-full">D-day 추가하기</Button>
+          </form>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🧩 정렬 컨트롤
+    // ========================================
+    function SortControl({ sortKey, onChange }) {
+      const options = [
+        { key: 'upcoming', label: '임박순' },
+        { key: 'added', label: '추가순' },
+        { key: 'title', label: '제목순' },
+      ];
+      return (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-slate-500 hidden sm:inline">정렬</span>
+          <div className="flex gap-1 bg-slate-200/60 rounded-lg p-1">
+            {options.map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => onChange(opt.key)}
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  sortKey === opt.key
+                    ? 'bg-white text-indigo-600 font-semibold shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 빈 상태
+    // ========================================
+    function EmptyState() {
+      return (
+        <Card className="p-12 text-center border-2 border-dashed border-slate-200 shadow-none">
+          <div className="text-5xl mb-3">📅</div>
+          <h3 className="text-lg font-bold text-slate-700">등록된 D-day가 없어요</h3>
+          <p className="text-sm text-slate-500 mt-1">
+            왼쪽 폼에서 목표 날짜를 추가하면 이곳에 표시됩니다.
+          </p>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🚀 App Component
+    // ========================================
+    function App() {
+      // localStorage 지연 초기화
+      const [items, setItems] = useState(() => {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          return raw ? JSON.parse(raw) : [];
+        } catch (e) {
+          console.error('localStorage 로드 실패:', e);
+          return [];
+        }
+      });
+      const [sortKey, setSortKey] = useState('upcoming');
+
+      // items 변경 시 localStorage 저장
+      useEffect(() => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+        } catch (e) {
+          console.error('localStorage 저장 실패:', e);
+        }
+      }, [items]);
+
+      const handleAdd = useCallback((item) => {
+        setItems((prev) => [...prev, item]);
+      }, []);
+
+      const handleDelete = useCallback((id) => {
+        setItems((prev) => prev.filter((it) => it.id !== id));
+      }, []);
+
+      // 정렬된 목록 (원본 불변)
+      const sortedItems = useMemo(() => {
+        const copy = [...items];
+        if (sortKey === 'upcoming') {
+          // 미래는 가까운 순, 지난 날짜는 뒤로
+          copy.sort((a, b) => {
+            const da = getDayDiff(a.date);
+            const db = getDayDiff(b.date);
+            const aPast = da < 0, bPast = db < 0;
+            if (aPast !== bPast) return aPast ? 1 : -1;
+            return da - db;
+          });
+        } else if (sortKey === 'title') {
+          copy.sort((a, b) => a.title.localeCompare(b.title, 'ko'));
+        } else {
+          copy.sort((a, b) => Number(a.id) - Number(b.id)); // 추가순
+        }
+        return copy;
+      }, [items, sortKey]);
+
+      // 가장 임박한 미래 일정 (헤더 요약용)
+      const nextUp = useMemo(() => {
+        const future = items
+          .map((it) => ({ ...it, diff: getDayDiff(it.date) }))
+          .filter((it) => it.diff >= 0)
+          .sort((a, b) => a.diff - b.diff);
+        return future[0] || null;
+      }, [items]);
+
+      return (
+        <div className="min-h-screen">
+          {/* 헤더 */}
+          <header className="bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
+            <div className="max-w-5xl mx-auto px-4 py-8">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">⏳</span>
+                <div>
+                  <h1 className="text-2xl font-extrabold">D-day 카운터</h1>
+                  <p className="text-indigo-100 text-sm mt-0.5">
+                    목표 날짜까지 남은 일수를 한눈에 관리하세요
+                  </p>
+                </div>
+              </div>
+
+              {nextUp && (
+                <div className="mt-6 inline-flex flex-wrap items-center gap-x-3 gap-y-1 bg-white/15 backdrop-blur rounded-xl px-4 py-3">
+                  <span className="text-sm text-indigo-100">가장 임박한 일정</span>
+                  <span className="font-bold">{nextUp.title}</span>
+                  <span className="text-xl font-extrabold tabular-nums">{formatDday(nextUp.diff)}</span>
+                </div>
+              )}
+            </div>
+          </header>
+
+          {/* 본문 */}
+          <main className="max-w-5xl mx-auto px-4 py-8">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* 좌측: 입력 폼 */}
+              <div className="lg:col-span-1">
+                <div className="lg:sticky lg:top-6">
+                  <DdayForm onAdd={handleAdd} />
+                </div>
+              </div>
+
+              {/* 우측: 목록 */}
+              <div className="lg:col-span-2">
+                <div className="flex items-center justify-between mb-4 gap-2">
+                  <h2 className="text-base font-bold text-slate-800">
+                    내 D-day 목록
+                    <span className="ml-2 text-sm font-normal text-slate-400">{items.length}개</span>
+                  </h2>
+                  {items.length > 0 && <SortControl sortKey={sortKey} onChange={setSortKey} />}
+                </div>
+
+                {items.length === 0 ? (
+                  <EmptyState />
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {sortedItems.map((item) => (
+                      <DdayCard key={item.id} item={item} onDelete={handleDelete} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <footer className="mt-12 text-center text-xs text-slate-400">
+              데이터는 이 브라우저에만 저장됩니다 (localStorage) · 오늘 {todayStr()}
+            </footer>
+          </main>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

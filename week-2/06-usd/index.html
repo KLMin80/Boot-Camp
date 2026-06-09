@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>원·달러 환율 변환기</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Pretendard: refined modern sans-serif with excellent Korean rendering -->
+  <link rel="stylesheet" as="style" crossorigin
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <style>
+    :root {
+      --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+    body {
+      font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+        "Apple SD Gothic Neo", system-ui, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      color: #1e1b2e;
+      position: relative;
+      overflow-x: hidden;
+      background: #0f0c29;
+    }
+
+    /* Aurora mesh gradient background — layered radial blends of indigo / purple / teal / blue */
+    .aurora {
+      position: fixed;
+      inset: -20%;
+      z-index: -2;
+      background:
+        radial-gradient(40% 50% at 18% 22%, rgba(129, 140, 248, 0.55) 0%, transparent 60%),
+        radial-gradient(45% 55% at 82% 18%, rgba(168, 85, 247, 0.45) 0%, transparent 60%),
+        radial-gradient(50% 55% at 78% 82%, rgba(45, 212, 191, 0.40) 0%, transparent 62%),
+        radial-gradient(45% 50% at 22% 85%, rgba(96, 165, 250, 0.45) 0%, transparent 62%),
+        linear-gradient(135deg, #1e1b4b 0%, #312e81 45%, #155e75 100%);
+      filter: saturate(1.05);
+      animation: auroraShift 18s var(--ease-soft) infinite alternate;
+    }
+    /* a soft veil to keep contrast comfortable */
+    .aurora-veil {
+      position: fixed; inset: 0; z-index: -1;
+      background: radial-gradient(60% 60% at 50% 40%, transparent 0%, rgba(8, 6, 30, 0.35) 100%);
+    }
+
+    @keyframes auroraShift {
+      0%   { transform: translate3d(0, 0, 0) scale(1); }
+      50%  { transform: translate3d(-2%, 1.5%, 0) scale(1.05); }
+      100% { transform: translate3d(1.5%, -1%, 0) scale(1.03); }
+    }
+
+    /* Frosted glass card */
+    .glass {
+      background: rgba(255, 255, 255, 0.62);
+      backdrop-filter: blur(28px) saturate(160%);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+      border: 1px solid rgba(255, 255, 255, 0.55);
+      box-shadow:
+        0 24px 60px -18px rgba(30, 27, 75, 0.45),
+        0 8px 24px -12px rgba(30, 27, 75, 0.30),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.65);
+    }
+
+    .glass-subtle {
+      background: rgba(255, 255, 255, 0.45);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+    }
+
+    /* Remove number spinners for clean look */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+
+    .tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+    /* Result reveal animation */
+    @keyframes revealUp {
+      0%   { opacity: 0; transform: translateY(14px) scale(0.98); filter: blur(4px); }
+      100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+    }
+    .animate-reveal { animation: revealUp 0.55s var(--ease-soft) both; }
+
+    @keyframes countPop {
+      0%   { opacity: 0; transform: scale(0.85); }
+      60%  { opacity: 1; transform: scale(1.04); }
+      100% { transform: scale(1); }
+    }
+    .animate-count { animation: countPop 0.6s var(--ease-soft) both; }
+
+    /* Swap button rotate animation on click */
+    @keyframes swapSpin {
+      0%   { transform: rotate(0deg); }
+      100% { transform: rotate(180deg); }
+    }
+    .animate-swap { animation: swapSpin 0.5s var(--ease-soft); }
+
+    /* Button shine */
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #6366f1 100%);
+      background-size: 180% 180%;
+      box-shadow: 0 10px 24px -8px rgba(99, 102, 241, 0.65),
+                  inset 0 1px 0 0 rgba(255,255,255,0.35);
+      transition: transform 0.25s var(--ease-soft), box-shadow 0.25s var(--ease-soft),
+                  background-position 0.5s var(--ease-soft);
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      background-position: 100% 50%;
+      box-shadow: 0 16px 34px -10px rgba(99, 102, 241, 0.75),
+                  inset 0 1px 0 0 rgba(255,255,255,0.45);
+    }
+    .btn-primary:active { transform: translateY(0); }
+
+    .btn-ghost {
+      transition: transform 0.25s var(--ease-soft), box-shadow 0.25s var(--ease-soft),
+                  background-color 0.25s var(--ease-soft);
+    }
+    .btn-ghost:hover { transform: translateY(-2px); }
+
+    .focus-ring:focus-within { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18); }
+
+    ::selection { background: rgba(139, 92, 246, 0.25); }
+  </style>
+</head>
+<body>
+  <div class="aurora"></div>
+  <div class="aurora-veil"></div>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks Destructuring
+    // ========================================
+    const { useState, useMemo, useRef } = React;
+
+    // ========================================
+    // 💱 환율 기준 상수
+    // ========================================
+    // 환율 기준: 2026-06-02 오전 10:00 검색 기준
+    const EXCHANGE_RATE = 1551; // 1 USD = 1551 KRW (원/달러)
+    const RATE_DATE = "2026-06-02";
+    const RATE_TIME = "오전 10:00";
+
+    // 빠른 금액 프리셋 (USD)
+    const PRESETS = [1, 10, 100, 1000];
+
+    // ========================================
+    // 🧩 Helper: 숫자 정제 & 포맷
+    // ========================================
+
+    // 입력값에서 숫자/소수점만 남기고, 음수·중복 소수점 제거
+    function sanitize(raw) {
+      let s = String(raw).replace(/[^0-9.]/g, "");
+      const firstDot = s.indexOf(".");
+      if (firstDot !== -1) {
+        // 첫 소수점만 유지
+        s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, "");
+      }
+      return s;
+    }
+
+    // KRW: 천 단위 구분, 소수점 없음
+    function formatKRW(n) {
+      return Math.round(n).toLocaleString("en-US");
+    }
+
+    // USD: 천 단위 구분, 소수점 2자리
+    function formatUSD(n) {
+      return n.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+
+    // ========================================
+    // 🎨 Design System Components (Modern / Glassmorphism)
+    // ========================================
+
+    function Card({ children, className = "" }) {
+      return (
+        <div className={`glass rounded-3xl p-6 sm:p-8 ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    // Clean minimal input with floating-style label and smooth focus transitions
+    function Input({ label, unit, value, onChange, placeholder, error, ...props }) {
+      return (
+        <div className="w-full">
+          <label className="block text-[13px] font-semibold text-slate-600 mb-1.5 ml-0.5 tracking-tight">
+            {label}
+          </label>
+          <div
+            className={`focus-ring relative rounded-2xl bg-white/70 border transition-all duration-300
+              ${error
+                ? "border-rose-300/80 bg-rose-50/60"
+                : "border-white/70 hover:border-indigo-200/80"}`}
+          >
+            <input
+              type="text"
+              inputMode="decimal"
+              value={value}
+              onChange={onChange}
+              placeholder={placeholder}
+              aria-label={label}
+              aria-invalid={!!error}
+              className="w-full bg-transparent px-4 py-3.5 pr-14 text-slate-800 text-lg font-semibold tnum
+                placeholder:font-normal placeholder:text-slate-400
+                focus:outline-none rounded-2xl"
+              {...props}
+            />
+            {unit && (
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium pointer-events-none">
+                {unit}
+              </span>
+            )}
+          </div>
+          {error && (
+            <p className="mt-1.5 ml-0.5 text-[13px] font-medium text-rose-500 flex items-center gap-1" role="alert">
+              <span aria-hidden="true">⚠</span> {error}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    function Button({ children, onClick, variant = "primary", className = "", ...props }) {
+      const base = "rounded-2xl px-5 py-3.5 text-[15px] font-bold tracking-tight focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/40";
+      const variants = {
+        primary: "btn-primary text-white",
+        ghost: "btn-ghost text-slate-600 bg-white/60 border border-white/70 hover:bg-white/85 hover:text-slate-800",
+      };
+      return (
+        <button onClick={onClick} className={`${base} ${variants[variant]} ${className}`} {...props}>
+          {children}
+        </button>
+      );
+    }
+
+    // ========================================
+    // 🔄 Swap Button — flips the visual order of the two currency fields
+    // ========================================
+
+    function SwapButton({ onClick }) {
+      const ref = useRef(null);
+
+      const handleClick = () => {
+        // 회전 애니메이션 재시작
+        const el = ref.current;
+        if (el) {
+          el.classList.remove("animate-swap");
+          // reflow 강제 → 애니메이션 재생
+          void el.offsetWidth;
+          el.classList.add("animate-swap");
+        }
+        onClick();
+      };
+
+      return (
+        <div className="flex justify-center -my-1.5">
+          <button
+            ref={ref}
+            onClick={handleClick}
+            aria-label="원화와 달러 위치 바꾸기"
+            className="btn-ghost grid place-items-center h-11 w-11 rounded-full text-slate-600
+              bg-white/70 border border-white/70 shadow-md hover:bg-white/90 hover:text-indigo-600
+              focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/40 text-lg"
+          >
+            ⇅
+          </button>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 Page Component: KRW ↔ USD Converter
+    // ========================================
+
+    function CurrencyConverter() {
+      // 입력값은 항상 문자열로 보관 (정제된 상태)
+      const [krw, setKrw] = useState("");
+      const [usd, setUsd] = useState("");
+      // 어떤 통화를 위에 둘지: "USD" 면 달러 입력이 위
+      const [usdOnTop, setUsdOnTop] = useState(true);
+
+      // 원화 입력 → 달러 자동 계산
+      const handleKrwChange = (e) => {
+        const v = sanitize(e.target.value);
+        setKrw(v);
+        if (v === "" || v === ".") {
+          setUsd("");
+          return;
+        }
+        const num = parseFloat(v);
+        setUsd(isNaN(num) ? "" : (num / EXCHANGE_RATE).toFixed(2));
+      };
+
+      // 달러 입력 → 원화 자동 계산
+      const handleUsdChange = (e) => {
+        const v = sanitize(e.target.value);
+        setUsd(v);
+        if (v === "" || v === ".") {
+          setKrw("");
+          return;
+        }
+        const num = parseFloat(v);
+        setKrw(isNaN(num) ? "" : String(Math.round(num * EXCHANGE_RATE)));
+      };
+
+      // 프리셋 칩 → 달러 채우기
+      const applyPreset = (amount) => {
+        setUsd(String(amount));
+        setKrw(String(Math.round(amount * EXCHANGE_RATE)));
+      };
+
+      const handleReset = () => {
+        setKrw("");
+        setUsd("");
+      };
+
+      const handleSwap = () => setUsdOnTop((t) => !t);
+
+      // 결과 미리보기 텍스트 (입력이 있을 때만 노출)
+      const hasValue = krw !== "" && usd !== "" && krw !== "." && usd !== ".";
+      const preview = useMemo(() => {
+        if (!hasValue) return null;
+        const k = parseFloat(krw);
+        const u = parseFloat(usd);
+        if (isNaN(k) || isNaN(u)) return null;
+        return { k, u };
+      }, [krw, usd, hasValue]);
+
+      // 역환율: 1원 = ? 달러
+      const inverseRate = (1 / EXCHANGE_RATE).toFixed(6);
+
+      // 입력 필드 두 개를 순서만 바꿔서 렌더
+      const krwField = (
+        <Input
+          key="krw"
+          label="원화 (KRW)"
+          unit="원"
+          value={krw}
+          onChange={handleKrwChange}
+          placeholder="예: 1,551"
+        />
+      );
+      const usdField = (
+        <Input
+          key="usd"
+          label="달러 (USD)"
+          unit="$"
+          value={usd}
+          onChange={handleUsdChange}
+          placeholder="예: 1.00"
+        />
+      );
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 sm:p-6">
+          <div className="w-full max-w-md">
+            {/* Refined header */}
+            <div className="mb-7 text-center">
+              <div className="inline-flex items-center justify-center mb-4">
+                <span className="grid place-items-center h-14 w-14 rounded-2xl glass text-2xl">
+                  💱
+                </span>
+              </div>
+              <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-sm">
+                원·달러 환율 변환기
+              </h1>
+              <p className="mt-2 text-sm font-medium text-indigo-100/80">
+                원화와 달러를 실시간으로 환산하세요
+              </p>
+            </div>
+
+            <Card>
+              <div className="space-y-3">
+                {usdOnTop ? usdField : krwField}
+                <SwapButton onClick={handleSwap} />
+                {usdOnTop ? krwField : usdField}
+              </div>
+
+              {/* 빠른 금액 프리셋 칩 */}
+              <div className="mt-5">
+                <p className="text-[12px] font-semibold text-slate-500 mb-2 ml-0.5">
+                  빠른 금액 (달러)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {PRESETS.map((amount) => (
+                    <button
+                      key={amount}
+                      onClick={() => applyPreset(amount)}
+                      className="btn-ghost glass-subtle rounded-full px-4 py-1.5 text-sm font-bold text-slate-700
+                        hover:text-indigo-600 focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/40 tnum"
+                      aria-label={`${amount}달러 입력`}
+                    >
+                      ${formatKRW(amount)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 초기화 */}
+              <div className="mt-5">
+                <Button onClick={handleReset} variant="ghost" className="w-full">
+                  초기화
+                </Button>
+              </div>
+
+              {/* 환산 결과 미리보기 */}
+              {preview && (
+                <div className="animate-reveal mt-6 rounded-3xl glass-subtle p-5 sm:p-6 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">
+                    환산 결과
+                  </span>
+                  <div key={`${krw}-${usd}`} className="animate-count mt-2 flex items-center justify-center gap-2 flex-wrap">
+                    <span className="text-2xl sm:text-3xl font-extrabold leading-none tnum text-slate-800">
+                      ${formatUSD(preview.u)}
+                    </span>
+                    <span className="text-slate-400 text-xl font-bold">=</span>
+                    <span className="text-2xl sm:text-3xl font-extrabold leading-none tnum text-slate-800">
+                      {formatKRW(preview.k)} <span className="text-lg font-bold text-slate-500">원</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* 현재 환율 정보 */}
+              <div className="mt-7 pt-6 border-t border-white/50">
+                <h2 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400 mb-3.5 ml-0.5">
+                  현재 환율
+                </h2>
+                <ul className="space-y-2">
+                  <li className="flex items-center justify-between rounded-2xl glass-subtle px-4 py-2.5 transition-transform duration-200 hover:translate-x-0.5">
+                    <span className="flex items-center gap-2.5">
+                      <span className="text-base" aria-hidden="true">💵</span>
+                      <span className="text-slate-700 font-semibold text-sm">1 달러</span>
+                    </span>
+                    <span className="text-slate-700 font-bold text-sm tnum">{formatKRW(EXCHANGE_RATE)} 원</span>
+                  </li>
+                  <li className="flex items-center justify-between rounded-2xl glass-subtle px-4 py-2.5 transition-transform duration-200 hover:translate-x-0.5">
+                    <span className="flex items-center gap-2.5">
+                      <span className="text-base" aria-hidden="true">🪙</span>
+                      <span className="text-slate-700 font-semibold text-sm">1 원</span>
+                    </span>
+                    <span className="text-slate-500 font-medium text-sm tnum">{inverseRate} 달러</span>
+                  </li>
+                </ul>
+                <p className="mt-3 ml-0.5 text-[12px] font-medium text-slate-400 tnum">
+                  기준: {RATE_DATE} {RATE_TIME}
+                </p>
+              </div>
+            </Card>
+
+            <p className="text-center text-xs font-medium text-indigo-100/70 mt-6">
+              환율은 {RATE_DATE} {RATE_TIME} 검색 기준이며 실제 거래 환율과 다를 수 있습니다.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App Component
+    // ========================================
+
+    function App() {
+      return <CurrencyConverter />;
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

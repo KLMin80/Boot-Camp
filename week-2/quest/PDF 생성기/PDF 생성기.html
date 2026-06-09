@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF 생성기 — 어떤 파일이든 PDF로</title>
+
+  <!-- Tailwind / React / Babel -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- PDF / Render libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    /* Tailwind으로 처리 불가한 영역만 커스텀 */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .animate-spin-slow { animation: spin 0.9s linear infinite; }
+
+    /* 드롭존 펄스 */
+    @keyframes pulseBorder {
+      0%, 100% { border-color: rgb(129 140 248); }
+      50% { border-color: rgb(99 102 241); }
+    }
+    .drop-active { animation: pulseBorder 1.2s ease-in-out infinite; }
+
+    /* 커스텀 스크롤바 */
+    .nice-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+    .nice-scroll::-webkit-scrollbar-thumb { background: rgb(203 213 225); border-radius: 9999px; }
+    .nice-scroll::-webkit-scrollbar-track { background: transparent; }
+
+    /* 마크다운 렌더 영역 기본 타이포 (html2canvas 캡처 대상) */
+    .md-body { color:#1e293b; font-family: -apple-system, "Segoe UI", Roboto, "Malgun Gothic", sans-serif; line-height:1.65; }
+    .md-body h1 { font-size:1.9rem; font-weight:800; margin:1.2rem 0 .6rem; border-bottom:2px solid #e2e8f0; padding-bottom:.3rem; }
+    .md-body h2 { font-size:1.5rem; font-weight:700; margin:1.1rem 0 .5rem; border-bottom:1px solid #e2e8f0; padding-bottom:.25rem; }
+    .md-body h3 { font-size:1.25rem; font-weight:700; margin:1rem 0 .4rem; }
+    .md-body p { margin:.6rem 0; }
+    .md-body ul, .md-body ol { margin:.6rem 0 .6rem 1.4rem; }
+    .md-body li { margin:.25rem 0; }
+    .md-body code { background:#f1f5f9; padding:.12rem .35rem; border-radius:4px; font-family: "SFMono-Regular", Consolas, monospace; font-size:.88em; }
+    .md-body pre { background:#0f172a; color:#e2e8f0; padding:1rem; border-radius:8px; overflow:auto; margin:.8rem 0; }
+    .md-body pre code { background:transparent; color:inherit; padding:0; }
+    .md-body blockquote { border-left:4px solid #c7d2fe; padding:.2rem 1rem; color:#475569; margin:.8rem 0; background:#f8fafc; }
+    .md-body table { border-collapse:collapse; margin:.8rem 0; width:100%; }
+    .md-body th, .md-body td { border:1px solid #cbd5e1; padding:.4rem .6rem; text-align:left; }
+    .md-body th { background:#f1f5f9; }
+    .md-body img { max-width:100%; }
+    .md-body a { color:#4f46e5; text-decoration:underline; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useCallback, useEffect, useMemo, createContext, useContext } = React;
+
+    // ========================================
+    // 상수 & 유틸리티
+    // ========================================
+    const { jsPDF } = window.jspdf;
+
+    const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "bmp", "webp"];
+    const TEXT_EXTS  = ["txt","md","markdown","js","jsx","ts","tsx","py","json","csv","html","htm","css","xml","log","yml","yaml","sh","c","cpp","java","go","rb","php","sql","ini","conf"];
+    const MD_EXTS    = ["md","markdown"];
+    const HTML_EXTS  = ["html","htm"];
+
+    // 파일 종류 판별
+    function detectKind(file) {
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      if (file.type === "application/pdf" || ext === "pdf") return "pdf";
+      if (IMAGE_EXTS.includes(ext) || file.type.startsWith("image/")) return "image";
+      if (MD_EXTS.includes(ext)) return "markdown";
+      if (HTML_EXTS.includes(ext)) return "html";
+      if (TEXT_EXTS.includes(ext) || file.type.startsWith("text/")) return "text";
+      return "binary";
+    }
+
+    function fmtBytes(n) {
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      return (n / 1024 / 1024).toFixed(2) + " MB";
+    }
+
+    function readAsText(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(new Error("파일 읽기 실패"));
+        r.readAsText(file);
+      });
+    }
+    function readAsDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(new Error("파일 읽기 실패"));
+        r.readAsDataURL(file);
+      });
+    }
+    function readAsArrayBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(new Error("파일 읽기 실패"));
+        r.readAsArrayBuffer(file);
+      });
+    }
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("이미지 로드 실패"));
+        img.src = src;
+      });
+    }
+    const uid = () => Math.random().toString(36).slice(2, 10);
+
+    // 페이지 크기(pt): jsPDF는 pt 단위 사용. A4=595.28x841.89, Letter=612x792
+    const PAGE_DIMS = {
+      a4:     { w: 595.28, h: 841.89 },
+      letter: { w: 612,    h: 792 },
+    };
+    function getPageSize(pageKey, orientation) {
+      const d = PAGE_DIMS[pageKey] || PAGE_DIMS.a4;
+      return orientation === "landscape"
+        ? { w: d.h, h: d.w }
+        : { w: d.w, h: d.h };
+    }
+
+    // ========================================
+    // 🎨 디자인 시스템 컴포넌트
+    // ========================================
+    const BTN_VARIANT = {
+      primary:   "bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm",
+      secondary: "bg-white hover:bg-slate-50 text-slate-700 border border-slate-300",
+      danger:    "bg-rose-600 hover:bg-rose-700 text-white shadow-sm",
+      ghost:     "bg-transparent hover:bg-slate-100 text-slate-600",
+      success:   "bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm",
+    };
+    const BTN_SIZE = {
+      sm: "px-2.5 py-1 text-xs",
+      md: "px-4 py-2 text-sm",
+      lg: "px-5 py-2.5 text-base",
+    };
+    function Button({ variant = "primary", size = "md", disabled, onClick, className = "", children, type = "button", title }) {
+      return (
+        <button
+          type={type}
+          title={title}
+          disabled={disabled}
+          onClick={onClick}
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors
+            focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1
+            disabled:opacity-50 disabled:cursor-not-allowed ${BTN_VARIANT[variant]} ${BTN_SIZE[size]} ${className}`}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    function Card({ className = "", children }) {
+      return <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 ${className}`}>{children}</div>;
+    }
+
+    const BADGE_VARIANT = {
+      idle:    "bg-slate-100 text-slate-600",
+      working: "bg-amber-100 text-amber-700",
+      done:    "bg-emerald-100 text-emerald-700",
+      error:   "bg-rose-100 text-rose-700",
+      info:    "bg-indigo-100 text-indigo-700",
+    };
+    function Badge({ variant = "idle", className = "", children }) {
+      return (
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${BADGE_VARIANT[variant]} ${className}`}>
+          {children}
+        </span>
+      );
+    }
+
+    function Select({ label, value, onChange, options, className = "", disabled }) {
+      return (
+        <label className={`flex flex-col gap-1 ${className}`}>
+          {label && <span className="text-xs font-semibold text-slate-500">{label}</span>}
+          <select
+            value={value}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700
+              focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
+          >
+            {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+      );
+    }
+
+    function NumberField({ label, value, onChange, min, max, step = 1, suffix, className = "" }) {
+      return (
+        <label className={`flex flex-col gap-1 ${className}`}>
+          {label && <span className="text-xs font-semibold text-slate-500">{label}</span>}
+          <div className="relative">
+            <input
+              type="number"
+              value={value}
+              min={min} max={max} step={step}
+              onChange={(e) => onChange(Number(e.target.value))}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700
+                focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+            {suffix && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">{suffix}</span>}
+          </div>
+        </label>
+      );
+    }
+
+    function Toggle({ label, checked, onChange }) {
+      const track = checked ? "bg-indigo-600" : "bg-slate-300";
+      const knob = checked ? "translate-x-5" : "translate-x-0.5";
+      return (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          onClick={() => onChange(!checked)}
+          className="inline-flex items-center gap-2.5 select-none"
+        >
+          <span className={`relative h-6 w-11 rounded-full transition-colors ${track}`}>
+            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${knob}`} />
+          </span>
+          <span className="text-sm font-medium text-slate-700">{label}</span>
+        </button>
+      );
+    }
+
+    function Modal({ isOpen, onClose, title, children, size = "md" }) {
+      useEffect(() => {
+        if (!isOpen) return;
+        const onKey = (e) => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [isOpen, onClose]);
+      if (!isOpen) return null;
+      const SIZE = { sm: "max-w-md", md: "max-w-2xl", lg: "max-w-4xl" };
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={title}>
+          <div className="absolute inset-0 bg-slate-900/50" onClick={onClose} />
+          <div className={`relative w-full ${SIZE[size]} bg-white rounded-2xl shadow-xl max-h-[88vh] flex flex-col`}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+              <h3 className="text-lg font-bold text-slate-800">{title}</h3>
+              <button onClick={onClose} aria-label="닫기" className="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 overflow-auto nice-scroll">{children}</div>
+          </div>
+        </div>
+      );
+    }
+
+    function Spinner({ className = "h-4 w-4" }) {
+      return (
+        <svg className={`animate-spin-slow ${className}`} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+      );
+    }
+
+    function ProgressBar({ value }) {
+      return (
+        <div className="h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
+          <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+        </div>
+      );
+    }
+
+    // 아이콘 (인라인 SVG)
+    const Icon = {
+      Upload: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+      Image: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>,
+      Text: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>,
+      Code: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
+      Pdf: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
+      Binary: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 13V7a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 7v8a2 2 0 001 1.73l7 4a2 2 0 002 0"/><path d="M12 22V12"/><path d="M22 17l-5 5-3-3"/></svg>,
+      Download: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+      Trash: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
+      Eye: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
+      Check: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+      Alert: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+    };
+
+    const KIND_META = {
+      image:    { label: "이미지",   icon: Icon.Image,  color: "text-violet-500" },
+      text:     { label: "텍스트",   icon: Icon.Text,   color: "text-sky-500" },
+      markdown: { label: "마크다운", icon: Icon.Code,   color: "text-emerald-500" },
+      html:     { label: "HTML",     icon: Icon.Code,   color: "text-orange-500" },
+      pdf:      { label: "PDF",       icon: Icon.Pdf,    color: "text-rose-500" },
+      binary:   { label: "바이너리", icon: Icon.Binary, color: "text-slate-400" },
+    };
+
+    // ========================================
+    // 🔧 변환 로직 (각 파일 종류 → jsPDF)
+    // ========================================
+
+    // 이미지: 종횡비 유지하며 페이지에 맞춤. 여러 이미지면 doc에 페이지 추가.
+    async function imageToPdfPages(doc, dataUrl, opts, isFirst) {
+      const img = await loadImage(dataUrl);
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const m = opts.margin;
+      const availW = ps.w - m * 2;
+      const availH = ps.h - m * 2;
+      const ratio = Math.min(availW / img.width, availH / img.height);
+      const drawW = img.width * ratio;
+      const drawH = img.height * ratio;
+      const x = m + (availW - drawW) / 2;
+      const y = m + (availH - drawH) / 2;
+      if (!isFirst) doc.addPage([ps.w, ps.h], opts.orientation);
+      // 포맷 추정
+      let fmt = "PNG";
+      if (/^data:image\/jpe?g/i.test(dataUrl)) fmt = "JPEG";
+      else if (/^data:image\/webp/i.test(dataUrl)) fmt = "WEBP";
+      try {
+        doc.addImage(dataUrl, fmt, x, y, drawW, drawH, undefined, "FAST");
+      } catch (e) {
+        // WEBP 등 jsPDF 미지원 → canvas로 PNG 변환 후 재시도
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width; canvas.height = img.height;
+        canvas.getContext("2d").drawImage(img, 0, 0);
+        const png = canvas.toDataURL("image/png");
+        doc.addImage(png, "PNG", x, y, drawW, drawH, undefined, "FAST");
+      }
+    }
+
+    // 텍스트/코드: splitTextToSize로 래핑 + 페이지네이션 + 페이지번호
+    function textToPdf(doc, text, opts, fileName) {
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const m = opts.margin;
+      const fontSize = opts.fontSize;
+      const lineH = fontSize * 1.45;
+      const availW = ps.w - m * 2;
+      const headerH = m + 18; // 헤더 영역
+      const footerH = m + 6;
+      const startY = headerH + lineH;
+      const bottomY = ps.h - footerH;
+
+      doc.setFont("courier", "normal");
+      doc.setFontSize(fontSize);
+
+      // 탭을 공백으로
+      const normalized = text.replace(/\t/g, "    ").replace(/\r\n/g, "\n");
+      const rawLines = normalized.split("\n");
+      // 각 줄을 래핑
+      let wrapped = [];
+      rawLines.forEach((ln) => {
+        if (ln.length === 0) { wrapped.push(""); return; }
+        const parts = doc.splitTextToSize(ln, availW);
+        wrapped = wrapped.concat(parts);
+      });
+
+      let y = startY;
+      let page = 1;
+      const drawHeader = () => {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(80);
+        const title = fileName.length > 60 ? fileName.slice(0, 57) + "..." : fileName;
+        doc.text(title, m, m + 10);
+        doc.setDrawColor(220);
+        doc.line(m, m + 14, ps.w - m, m + 14);
+        doc.setFont("courier", "normal");
+        doc.setFontSize(fontSize);
+        doc.setTextColor(20);
+      };
+      const drawFooter = () => {
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(150);
+        doc.text(`${page} 페이지`, ps.w - m, ps.h - m + 2, { align: "right" });
+        doc.setTextColor(20);
+        doc.setFont("courier", "normal");
+        doc.setFontSize(fontSize);
+      };
+
+      drawHeader();
+      for (let i = 0; i < wrapped.length; i++) {
+        if (y > bottomY) {
+          drawFooter();
+          doc.addPage([ps.w, ps.h], opts.orientation);
+          page++;
+          y = startY;
+          drawHeader();
+        }
+        doc.text(wrapped[i], m, y);
+        y += lineH;
+      }
+      drawFooter();
+    }
+
+    // HTML/마크다운 렌더 결과(DOM) → html2canvas → 멀티페이지 슬라이싱
+    async function elementToPdf(doc, element, opts, isFirstDoc = true) {
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const m = opts.margin;
+      const availW = ps.w - m * 2;
+      const availH = ps.h - m * 2;
+
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false,
+        windowWidth: element.scrollWidth,
+      });
+
+      // 캔버스를 PDF 폭에 맞춰 스케일. 1 PDF pt 당 캔버스 px
+      const pxPerPt = canvas.width / availW;
+      const pageSliceHeightPx = availH * pxPerPt; // 한 페이지에 들어갈 캔버스 픽셀 높이
+      const totalPx = canvas.height;
+      let renderedPx = 0;
+      let first = true;
+
+      while (renderedPx < totalPx) {
+        const sliceHeightPx = Math.min(pageSliceHeightPx, totalPx - renderedPx);
+        const pageCanvas = document.createElement("canvas");
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = sliceHeightPx;
+        const ctx = pageCanvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+        ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+
+        const imgData = pageCanvas.toDataURL("image/jpeg", 0.92);
+        const sliceHeightPt = sliceHeightPx / pxPerPt;
+
+        if (!(first && isFirstDoc)) {
+          doc.addPage([ps.w, ps.h], opts.orientation);
+        }
+        doc.addImage(imgData, "JPEG", m, m, availW, sliceHeightPt, undefined, "FAST");
+        renderedPx += sliceHeightPx;
+        first = false;
+      }
+    }
+
+    // 바이너리: 메타데이터 + Hex 미리보기를 텍스트로
+    async function binaryToPdf(doc, file, opts) {
+      const buf = await readAsArrayBuffer(file.file);
+      const bytes = new Uint8Array(buf);
+      const limit = Math.min(bytes.length, 2048); // 앞 2KB만
+      let hexLines = [];
+      for (let i = 0; i < limit; i += 16) {
+        const slice = bytes.slice(i, i + 16);
+        const hex = Array.from(slice).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+        const ascii = Array.from(slice).map((b) => (b >= 32 && b < 127) ? String.fromCharCode(b) : ".").join("");
+        const offset = i.toString(16).padStart(8, "0");
+        hexLines.push(`${offset}  ${hex.padEnd(47)}  ${ascii}`);
+      }
+      const meta =
+        `[ 변환 불가 파일 — 메타데이터 / Hex 미리보기 ]\n` +
+        `========================================\n` +
+        `파일명 : ${file.file.name}\n` +
+        `타입   : ${file.file.type || "(알 수 없음)"}\n` +
+        `크기   : ${fmtBytes(file.file.size)} (${file.file.size.toLocaleString()} bytes)\n` +
+        `수정일 : ${file.file.lastModified ? new Date(file.file.lastModified).toLocaleString("ko-KR") : "-"}\n` +
+        `========================================\n` +
+        `이 형식(.${(file.file.name.split(".").pop()||"").toLowerCase()})은 브라우저에서 직접 PDF로\n` +
+        `변환할 수 없어, 아래에 앞부분 Hex 덤프(최대 2KB)를 출력합니다.\n\n` +
+        `OFFSET    HEX                                              ASCII\n` +
+        `--------  -----------------------------------------------  ----------------\n` +
+        hexLines.join("\n");
+      textToPdf(doc, meta, { ...opts, fontSize: Math.min(opts.fontSize, 8) }, file.file.name);
+    }
+
+    // 단일 파일 → jsPDF 문서 생성 (DOM 렌더가 필요한 경우 hostRef 사용)
+    async function convertFileToDoc(file, opts, renderHost) {
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const doc = new jsPDF({ unit: "pt", format: [ps.w, ps.h], orientation: opts.orientation });
+
+      if (file.kind === "image") {
+        const dataUrl = file.dataUrl || await readAsDataURL(file.file);
+        await imageToPdfPages(doc, dataUrl, opts, true);
+      } else if (file.kind === "pdf") {
+        // 패스스루: 원본을 그대로 다운로드하게 별도 처리 (여기선 안내 페이지)
+        throw { passthrough: true };
+      } else if (file.kind === "markdown" && file.mdMode === "rendered") {
+        await renderMarkdownToDoc(doc, file, opts, renderHost);
+      } else if (file.kind === "html") {
+        await renderHtmlToDoc(doc, file, opts, renderHost);
+      } else if (file.kind === "binary") {
+        await binaryToPdf(doc, file, opts);
+      } else {
+        // text, markdown(raw)
+        const text = file.textContent != null ? file.textContent : await readAsText(file.file);
+        textToPdf(doc, text, opts, file.file.name);
+      }
+      return doc;
+    }
+
+    async function renderMarkdownToDoc(doc, file, opts, renderHost) {
+      const text = file.textContent != null ? file.textContent : await readAsText(file.file);
+      const html = marked.parse(text);
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const cssWidthPx = Math.round((ps.w - opts.margin * 2) * (96 / 72)); // pt→px
+      const wrap = document.createElement("div");
+      wrap.className = "md-body";
+      wrap.style.width = cssWidthPx + "px";
+      wrap.style.padding = "0";
+      wrap.style.background = "#fff";
+      wrap.innerHTML = html;
+      renderHost.appendChild(wrap);
+      try {
+        await elementToPdf(doc, wrap, opts, true);
+      } finally {
+        renderHost.removeChild(wrap);
+      }
+    }
+
+    async function renderHtmlToDoc(doc, file, opts, renderHost) {
+      const text = file.textContent != null ? file.textContent : await readAsText(file.file);
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const cssWidthPx = Math.round((ps.w - opts.margin * 2) * (96 / 72));
+      const wrap = document.createElement("div");
+      wrap.style.width = cssWidthPx + "px";
+      wrap.style.background = "#fff";
+      wrap.style.color = "#1e293b";
+      wrap.style.fontFamily = '-apple-system, "Segoe UI", Roboto, "Malgun Gothic", sans-serif';
+      // body 내용만 추출 (script 제거)
+      let inner = text;
+      const bodyMatch = text.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      if (bodyMatch) inner = bodyMatch[1];
+      inner = inner.replace(/<script[\s\S]*?<\/script>/gi, "");
+      wrap.innerHTML = inner;
+      renderHost.appendChild(wrap);
+      try {
+        await elementToPdf(doc, wrap, opts, true);
+      } finally {
+        renderHost.removeChild(wrap);
+      }
+    }
+
+    // 여러 파일 → 하나의 병합 PDF
+    async function convertMerged(files, opts, renderHost, onItemDone) {
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const doc = new jsPDF({ unit: "pt", format: [ps.w, ps.h], orientation: opts.orientation });
+      let started = false;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.kind === "pdf") {
+          // 병합 모드에서 PDF는 안내 페이지로 표시 (브라우저에서 PDF 파싱/병합은 별도 라이브러리 필요)
+          if (started) doc.addPage([ps.w, ps.h], opts.orientation);
+          textToPdf(doc, `[ 기존 PDF 파일 ]\n\n파일명: ${file.file.name}\n크기: ${fmtBytes(file.file.size)}\n\n이미 PDF이므로 원본을 그대로 사용하세요.\n(개별 다운로드 탭에서 원본 PDF를 받을 수 있습니다.)`, opts, file.file.name);
+          started = true;
+          onItemDone && onItemDone(file.id);
+          continue;
+        }
+        if (file.kind === "image") {
+          const dataUrl = file.dataUrl || await readAsDataURL(file.file);
+          await imageToPdfPages(doc, dataUrl, opts, !started);
+        } else if (file.kind === "markdown" && file.mdMode === "rendered") {
+          if (started) {} // elementToPdf가 isFirstDoc=false면 새 페이지부터
+          await renderMarkdownToDoc2(doc, file, opts, renderHost, !started);
+        } else if (file.kind === "html") {
+          await renderHtmlToDoc2(doc, file, opts, renderHost, !started);
+        } else if (file.kind === "binary") {
+          if (started) doc.addPage([ps.w, ps.h], opts.orientation);
+          await binaryToPdfMerged(doc, file, opts);
+        } else {
+          if (started) doc.addPage([ps.w, ps.h], opts.orientation);
+          const text = file.textContent != null ? file.textContent : await readAsText(file.file);
+          textToPdf(doc, text, opts, file.file.name);
+        }
+        started = true;
+        onItemDone && onItemDone(file.id);
+      }
+      return doc;
+    }
+
+    // 병합용 변형 (isFirstDoc 인자 받음)
+    async function renderMarkdownToDoc2(doc, file, opts, renderHost, isFirst) {
+      const text = file.textContent != null ? file.textContent : await readAsText(file.file);
+      const html = marked.parse(text);
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const cssWidthPx = Math.round((ps.w - opts.margin * 2) * (96 / 72));
+      const wrap = document.createElement("div");
+      wrap.className = "md-body";
+      wrap.style.width = cssWidthPx + "px";
+      wrap.style.background = "#fff";
+      wrap.innerHTML = html;
+      renderHost.appendChild(wrap);
+      try { await elementToPdf(doc, wrap, opts, isFirst); }
+      finally { renderHost.removeChild(wrap); }
+    }
+    async function renderHtmlToDoc2(doc, file, opts, renderHost, isFirst) {
+      const text = file.textContent != null ? file.textContent : await readAsText(file.file);
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const cssWidthPx = Math.round((ps.w - opts.margin * 2) * (96 / 72));
+      const wrap = document.createElement("div");
+      wrap.style.width = cssWidthPx + "px";
+      wrap.style.background = "#fff";
+      wrap.style.color = "#1e293b";
+      wrap.style.fontFamily = '-apple-system, "Segoe UI", Roboto, "Malgun Gothic", sans-serif';
+      let inner = text;
+      const bodyMatch = text.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      if (bodyMatch) inner = bodyMatch[1];
+      inner = inner.replace(/<script[\s\S]*?<\/script>/gi, "");
+      wrap.innerHTML = inner;
+      renderHost.appendChild(wrap);
+      try { await elementToPdf(doc, wrap, opts, isFirst); }
+      finally { renderHost.removeChild(wrap); }
+    }
+    async function binaryToPdfMerged(doc, file, opts) {
+      // 병합 시 새 페이지는 호출 측에서 추가했으므로 여기선 현재 페이지에 그림
+      const buf = await readAsArrayBuffer(file.file);
+      const bytes = new Uint8Array(buf);
+      const limit = Math.min(bytes.length, 2048);
+      let hexLines = [];
+      for (let i = 0; i < limit; i += 16) {
+        const slice = bytes.slice(i, i + 16);
+        const hex = Array.from(slice).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+        const ascii = Array.from(slice).map((b) => (b >= 32 && b < 127) ? String.fromCharCode(b) : ".").join("");
+        hexLines.push(`${i.toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  ${ascii}`);
+      }
+      const meta = `[ 변환 불가 — Hex 미리보기 ]\n파일명: ${file.file.name}\n크기: ${fmtBytes(file.file.size)}\n\n` + hexLines.join("\n");
+      // 현재 페이지에 그리기 위해 textToPdf 사용하되, 이미 페이지가 있으므로 그냥 출력
+      textToPdfCurrentPage(doc, meta, { ...opts, fontSize: Math.min(opts.fontSize, 8) }, file.file.name);
+    }
+
+    // 현재 페이지부터 텍스트 출력 (새 doc 페이지 추가 안 함, 첫 헤더만)
+    function textToPdfCurrentPage(doc, text, opts, fileName) {
+      const ps = getPageSize(opts.pageSize, opts.orientation);
+      const m = opts.margin;
+      const fontSize = opts.fontSize;
+      const lineH = fontSize * 1.45;
+      const availW = ps.w - m * 2;
+      const startY = m + 18 + lineH;
+      const bottomY = ps.h - (m + 6);
+      doc.setFont("courier", "normal"); doc.setFontSize(fontSize);
+      const normalized = text.replace(/\t/g, "    ").replace(/\r\n/g, "\n");
+      let wrapped = [];
+      normalized.split("\n").forEach((ln) => {
+        if (ln.length === 0) { wrapped.push(""); return; }
+        wrapped = wrapped.concat(doc.splitTextToSize(ln, availW));
+      });
+      doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(80);
+      doc.text(fileName, m, m + 10);
+      doc.setDrawColor(220); doc.line(m, m + 14, ps.w - m, m + 14);
+      doc.setFont("courier", "normal"); doc.setFontSize(fontSize); doc.setTextColor(20);
+      let y = startY;
+      for (let i = 0; i < wrapped.length; i++) {
+        if (y > bottomY) { doc.addPage([ps.w, ps.h], opts.orientation); y = m + lineH; }
+        doc.text(wrapped[i], m, y);
+        y += lineH;
+      }
+    }
+
+    // ========================================
+    // 🧩 미리보기 컴포넌트
+    // ========================================
+    function FilePreview({ file }) {
+      if (file.kind === "image") {
+        return <img src={file.dataUrl} alt={file.file.name} className="max-h-64 w-full object-contain rounded-lg bg-slate-50" />;
+      }
+      if (file.kind === "markdown" && file.mdMode === "rendered") {
+        const html = useMemo(() => {
+          try { return marked.parse(file.textContent || ""); } catch { return "<p>렌더 실패</p>"; }
+        }, [file.textContent]);
+        return <div className="md-body max-h-64 overflow-auto nice-scroll p-3 border border-slate-200 rounded-lg text-sm" dangerouslySetInnerHTML={{ __html: html }} />;
+      }
+      if (file.kind === "html") {
+        return (
+          <iframe
+            title={file.file.name}
+            sandbox=""
+            srcDoc={file.textContent || ""}
+            className="w-full h-64 border border-slate-200 rounded-lg bg-white"
+          />
+        );
+      }
+      if (file.kind === "text" || file.kind === "markdown") {
+        return (
+          <pre className="max-h-64 overflow-auto nice-scroll p-3 bg-slate-900 text-slate-100 rounded-lg text-xs leading-relaxed whitespace-pre-wrap break-all">
+            {(file.textContent || "").slice(0, 5000) || "(빈 파일)"}
+          </pre>
+        );
+      }
+      if (file.kind === "pdf") {
+        return (
+          <div className="h-64 flex flex-col items-center justify-center gap-2 bg-rose-50 rounded-lg text-rose-600">
+            <Icon.Pdf className="h-10 w-10" />
+            <p className="text-sm font-semibold">이미 PDF 파일입니다</p>
+            <p className="text-xs text-rose-400">원본을 그대로 다운로드할 수 있어요</p>
+          </div>
+        );
+      }
+      // binary
+      return (
+        <div className="h-64 flex flex-col items-center justify-center gap-2 bg-slate-50 rounded-lg text-slate-400">
+          <Icon.Binary className="h-10 w-10" />
+          <p className="text-sm font-semibold text-slate-500">미리보기를 지원하지 않는 형식</p>
+          <p className="text-xs">메타데이터 / Hex로 변환 가능</p>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 파일 카드
+    // ========================================
+    const STATUS_BADGE = {
+      idle:    { variant: "idle",    text: "대기" },
+      working: { variant: "working", text: "변환 중" },
+      done:    { variant: "done",    text: "완료" },
+      error:   { variant: "error",   text: "실패" },
+    };
+
+    function FileCard({ file, onRemove, onPreview, onDownload, onChangeMdMode }) {
+      const meta = KIND_META[file.kind];
+      const KindIcon = meta.icon;
+      const st = STATUS_BADGE[file.status];
+      return (
+        <Card className="p-4 flex flex-col gap-3">
+          <div className="flex items-start gap-3">
+            <div className={`mt-0.5 ${meta.color}`}><KindIcon className="h-8 w-8" /></div>
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-slate-800 truncate" title={file.file.name}>{file.file.name}</p>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <Badge variant="info">{meta.label}</Badge>
+                <span className="text-xs text-slate-400">{fmtBytes(file.file.size)}</span>
+              </div>
+            </div>
+            <Badge variant={st.variant}>
+              {file.status === "working" && <Spinner className="h-3 w-3" />}
+              {file.status === "done" && <Icon.Check className="h-3 w-3" />}
+              {file.status === "error" && <Icon.Alert className="h-3 w-3" />}
+              {st.text}
+            </Badge>
+          </div>
+
+          {file.kind === "markdown" && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-500 font-medium">마크다운 출력:</span>
+              <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden">
+                {[["rendered","렌더링"],["raw","원본 텍스트"]].map(([val,label]) => {
+                  const active = file.mdMode === val;
+                  return (
+                    <button key={val} onClick={() => onChangeMdMode(file.id, val)}
+                      className={active ? "px-2.5 py-1 bg-indigo-600 text-white" : "px-2.5 py-1 bg-white text-slate-600 hover:bg-slate-50"}>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {file.status === "working" && <ProgressBar value={file.progress} />}
+
+          {file.status === "error" && (
+            <p className="text-xs text-rose-600 bg-rose-50 rounded-md px-2 py-1.5 break-all">
+              오류: {file.error}
+            </p>
+          )}
+
+          <div className="flex items-center gap-2 pt-1">
+            <Button size="sm" variant="secondary" onClick={() => onPreview(file)}>
+              <Icon.Eye className="h-3.5 w-3.5" /> 미리보기
+            </Button>
+            {file.status === "done" && (
+              <Button size="sm" variant="success" onClick={() => onDownload(file)}>
+                <Icon.Download className="h-3.5 w-3.5" /> 다운로드
+              </Button>
+            )}
+            <button onClick={() => onRemove(file.id)} title="제거"
+              className="ml-auto text-slate-400 hover:text-rose-500 p-1.5 rounded-lg hover:bg-rose-50 transition-colors">
+              <Icon.Trash className="h-4 w-4" />
+            </button>
+          </div>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🧩 옵션 패널
+    // ========================================
+    function OptionsPanel({ opts, setOpts, merge, setMerge, disabled }) {
+      const set = (k, v) => setOpts((o) => ({ ...o, [k]: v }));
+      return (
+        <Card className="p-5">
+          <h2 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+            <span className="inline-block h-4 w-1 rounded bg-indigo-500" /> PDF 옵션
+          </h2>
+          <div className="grid grid-cols-2 gap-3">
+            <Select label="페이지 크기" value={opts.pageSize} onChange={(v) => set("pageSize", v)} disabled={disabled}
+              options={[{value:"a4",label:"A4"},{value:"letter",label:"Letter"}]} />
+            <Select label="방향" value={opts.orientation} onChange={(v) => set("orientation", v)} disabled={disabled}
+              options={[{value:"portrait",label:"세로"},{value:"landscape",label:"가로"}]} />
+            <NumberField label="여백 (pt)" value={opts.margin} onChange={(v) => set("margin", v)} min={0} max={120} step={4} />
+            <NumberField label="글꼴 크기" value={opts.fontSize} onChange={(v) => set("fontSize", v)} min={6} max={24} step={1} suffix="pt" />
+          </div>
+          <div className="mt-4 pt-4 border-t border-slate-100">
+            <Toggle label="하나의 PDF로 병합" checked={merge} onChange={setMerge} />
+            <p className="text-xs text-slate-400 mt-1.5 ml-[3.4rem]">
+              켜면 모든 파일이 한 PDF로 합쳐집니다. 끄면 파일별 개별 PDF가 생성됩니다.
+            </p>
+          </div>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🧩 드롭존
+    // ========================================
+    function DropZone({ onFiles }) {
+      const inputRef = useRef(null);
+      const [dragging, setDragging] = useState(false);
+      const onDrop = (e) => {
+        e.preventDefault(); setDragging(false);
+        if (e.dataTransfer.files && e.dataTransfer.files.length) onFiles(Array.from(e.dataTransfer.files));
+      };
+      return (
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={(e) => { e.preventDefault(); setDragging(false); }}
+          onDrop={onDrop}
+          onClick={() => inputRef.current && inputRef.current.click()}
+          role="button" tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") inputRef.current.click(); }}
+          aria-label="파일을 드래그하거나 클릭하여 선택"
+          className={`cursor-pointer rounded-2xl border-2 border-dashed p-10 text-center transition-colors
+            ${dragging ? "drop-active bg-indigo-50 border-indigo-400" : "bg-white border-slate-300 hover:border-indigo-300 hover:bg-slate-50"}`}
+        >
+          <input ref={inputRef} type="file" multiple className="hidden"
+            onChange={(e) => { if (e.target.files.length) onFiles(Array.from(e.target.files)); e.target.value = ""; }} />
+          <div className="flex flex-col items-center gap-3">
+            <div className="rounded-full bg-indigo-100 p-4 text-indigo-600">
+              <Icon.Upload className="h-8 w-8" />
+            </div>
+            <div>
+              <p className="text-lg font-bold text-slate-700">파일을 여기에 드래그하세요</p>
+              <p className="text-sm text-slate-400 mt-1">또는 클릭하여 선택 · 여러 파일 동시 선택 가능</p>
+            </div>
+            <p className="text-xs text-slate-400 max-w-md">
+              이미지(PNG·JPG·GIF·BMP·WebP), 텍스트·코드, 마크다운, HTML, PDF 지원.
+              그 외 형식은 메타데이터/Hex로 변환됩니다.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      const [files, setFiles] = useState([]);
+      const [opts, setOpts] = useState({ pageSize: "a4", orientation: "portrait", margin: 40, fontSize: 11 });
+      const [merge, setMerge] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [mergedBlob, setMergedBlob] = useState(null); // {url, name}
+      const [previewFile, setPreviewFile] = useState(null);
+      const [toast, setToast] = useState(null);
+      const renderHostRef = useRef(null);
+
+      const showToast = (msg, type = "info") => {
+        setToast({ msg, type });
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      // 파일 추가 + 내용 미리 로드
+      const addFiles = useCallback(async (rawFiles) => {
+        const prepared = await Promise.all(rawFiles.map(async (f) => {
+          const kind = detectKind(f);
+          const base = {
+            id: uid(), file: f, kind,
+            status: "idle", progress: 0, error: null,
+            resultUrl: null, resultName: null,
+            dataUrl: null, textContent: null,
+            mdMode: kind === "markdown" ? "rendered" : null,
+          };
+          try {
+            if (kind === "image") base.dataUrl = await readAsDataURL(f);
+            else if (kind === "text" || kind === "markdown" || kind === "html") base.textContent = await readAsText(f);
+          } catch (e) {
+            base.error = "파일 읽기 실패"; base.status = "error";
+          }
+          return base;
+        }));
+        setFiles((prev) => [...prev, ...prepared]);
+        setMergedBlob(null);
+      }, []);
+
+      const updateFile = (id, patch) => setFiles((prev) => prev.map((f) => f.id === id ? { ...f, ...patch } : f));
+      const removeFile = (id) => setFiles((prev) => {
+        const f = prev.find((x) => x.id === id);
+        if (f && f.resultUrl) URL.revokeObjectURL(f.resultUrl);
+        return prev.filter((x) => x.id !== id);
+      });
+      const clearAll = () => {
+        files.forEach((f) => f.resultUrl && URL.revokeObjectURL(f.resultUrl));
+        if (mergedBlob) URL.revokeObjectURL(mergedBlob.url);
+        setFiles([]); setMergedBlob(null);
+      };
+      const changeMdMode = (id, mode) => updateFile(id, { mdMode: mode, status: "idle", resultUrl: null });
+
+      // 개별 변환
+      const convertAllIndividually = async () => {
+        setBusy(true);
+        const host = renderHostRef.current;
+        for (const file of files) {
+          if (file.status === "done") continue;
+          updateFile(file.id, { status: "working", progress: 15, error: null });
+          try {
+            await new Promise((r) => setTimeout(r, 30)); // UI 업데이트 양보
+            if (file.kind === "pdf") {
+              // PDF 패스스루: 원본 그대로
+              const url = URL.createObjectURL(file.file);
+              updateFile(file.id, { status: "done", progress: 100, resultUrl: url, resultName: file.file.name });
+              continue;
+            }
+            updateFile(file.id, { progress: 55 });
+            const doc = await convertFileToDoc(file, opts, host);
+            const blob = doc.output("blob");
+            const url = URL.createObjectURL(blob);
+            const name = file.file.name.replace(/\.[^.]+$/, "") + ".pdf";
+            updateFile(file.id, { status: "done", progress: 100, resultUrl: url, resultName: name });
+          } catch (e) {
+            if (e && e.passthrough) {
+              const url = URL.createObjectURL(file.file);
+              updateFile(file.id, { status: "done", progress: 100, resultUrl: url, resultName: file.file.name });
+            } else {
+              console.error(e);
+              updateFile(file.id, { status: "error", progress: 0, error: (e && e.message) || "변환 실패" });
+            }
+          }
+        }
+        setBusy(false);
+        showToast("변환이 완료되었습니다.", "success");
+      };
+
+      // 병합 변환
+      const convertAndMerge = async () => {
+        setBusy(true);
+        const host = renderHostRef.current;
+        const convertible = files.filter((f) => f.status !== "error");
+        setFiles((prev) => prev.map((f) => f.status !== "error" ? { ...f, status: "working", progress: 30 } : f));
+        try {
+          const doc = await convertMerged(convertible, opts, host, (id) => {
+            updateFile(id, { status: "done", progress: 100 });
+          });
+          const blob = doc.output("blob");
+          const url = URL.createObjectURL(blob);
+          if (mergedBlob) URL.revokeObjectURL(mergedBlob.url);
+          setMergedBlob({ url, name: "merged.pdf" });
+          showToast("병합 PDF가 생성되었습니다.", "success");
+        } catch (e) {
+          console.error(e);
+          setFiles((prev) => prev.map((f) => f.status === "working" ? { ...f, status: "error", error: (e && e.message) || "병합 실패" } : f));
+          showToast("병합 중 오류가 발생했습니다.", "error");
+        }
+        setBusy(false);
+      };
+
+      const handleConvert = () => {
+        if (!files.length) return;
+        if (merge) convertAndMerge();
+        else convertAllIndividually();
+      };
+
+      const downloadOne = (file) => {
+        if (!file.resultUrl) return;
+        const a = document.createElement("a");
+        a.href = file.resultUrl; a.download = file.resultName; a.click();
+      };
+      const downloadMerged = () => {
+        if (!mergedBlob) return;
+        const a = document.createElement("a");
+        a.href = mergedBlob.url; a.download = mergedBlob.name; a.click();
+      };
+      const downloadAll = () => {
+        const done = files.filter((f) => f.status === "done" && f.resultUrl);
+        if (!done.length) { showToast("다운로드할 결과가 없습니다.", "error"); return; }
+        done.forEach((f, i) => setTimeout(() => downloadOne(f), i * 250));
+      };
+
+      // 정리
+      useEffect(() => () => {
+        files.forEach((f) => f.resultUrl && URL.revokeObjectURL(f.resultUrl));
+        if (mergedBlob) URL.revokeObjectURL(mergedBlob.url);
+      }, []);
+
+      const doneCount = files.filter((f) => f.status === "done").length;
+      const hasFiles = files.length > 0;
+
+      const TOAST_STYLE = {
+        info:    "bg-slate-800 text-white",
+        success: "bg-emerald-600 text-white",
+        error:   "bg-rose-600 text-white",
+      };
+
+      return (
+        <div className="min-h-screen">
+          {/* 헤더 */}
+          <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+            <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
+              <div className="rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 p-2 text-white shadow">
+                <Icon.Pdf className="h-6 w-6" />
+              </div>
+              <div>
+                <h1 className="text-xl font-extrabold text-slate-800 leading-tight">PDF 생성기</h1>
+                <p className="text-xs text-slate-400">어떤 파일이든 브라우저에서 바로 PDF로</p>
+              </div>
+              {hasFiles && (
+                <div className="ml-auto flex items-center gap-2 text-sm text-slate-500">
+                  <Badge variant="info">{files.length}개 파일</Badge>
+                  {doneCount > 0 && <Badge variant="done">{doneCount}개 완료</Badge>}
+                </div>
+              )}
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto px-4 py-6 grid lg:grid-cols-3 gap-6">
+            {/* 좌측: 드롭존 + 결과 */}
+            <section className="lg:col-span-2 space-y-6">
+              <DropZone onFiles={addFiles} />
+
+              {/* 액션 바 */}
+              {hasFiles && (
+                <Card className="p-4 flex flex-wrap items-center gap-3">
+                  <Button onClick={handleConvert} disabled={busy} size="lg">
+                    {busy ? <><Spinner /> 변환 중...</> : <><Icon.Pdf className="h-4 w-4" /> {merge ? "병합 PDF 생성" : "PDF로 변환"}</>}
+                  </Button>
+                  {merge ? (
+                    mergedBlob && (
+                      <Button variant="success" onClick={downloadMerged}>
+                        <Icon.Download className="h-4 w-4" /> 병합 PDF 다운로드
+                      </Button>
+                    )
+                  ) : (
+                    doneCount > 0 && (
+                      <Button variant="success" onClick={downloadAll}>
+                        <Icon.Download className="h-4 w-4" /> 전체 다운로드 ({doneCount})
+                      </Button>
+                    )
+                  )}
+                  <Button variant="ghost" onClick={clearAll} disabled={busy} className="ml-auto text-rose-500">
+                    <Icon.Trash className="h-4 w-4" /> 전체 비우기
+                  </Button>
+                </Card>
+              )}
+
+              {/* 파일 목록 / 빈 상태 */}
+              {hasFiles ? (
+                <div className="grid sm:grid-cols-2 gap-4">
+                  {files.map((f) => (
+                    <FileCard key={f.id} file={f}
+                      onRemove={removeFile}
+                      onPreview={setPreviewFile}
+                      onDownload={downloadOne}
+                      onChangeMdMode={changeMdMode}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <Card className="p-12 text-center">
+                  <div className="mx-auto w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-300 mb-4">
+                    <Icon.Text className="h-8 w-8" />
+                  </div>
+                  <p className="text-slate-500 font-semibold">아직 추가된 파일이 없습니다</p>
+                  <p className="text-sm text-slate-400 mt-1">위 영역에 파일을 드래그하거나 클릭해 시작하세요.</p>
+                </Card>
+              )}
+            </section>
+
+            {/* 우측: 옵션 패널 */}
+            <aside className="space-y-6 lg:sticky lg:top-24 self-start">
+              <OptionsPanel opts={opts} setOpts={setOpts} merge={merge} setMerge={setMerge} disabled={busy} />
+
+              <Card className="p-5">
+                <h2 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                  <span className="inline-block h-4 w-1 rounded bg-emerald-500" /> 지원 형식 안내
+                </h2>
+                <ul className="space-y-2 text-xs text-slate-500">
+                  <li className="flex gap-2"><span className="text-violet-500 font-bold">이미지</span> 종횡비 유지하며 페이지에 맞춤 (다중 이미지 → 다중 페이지)</li>
+                  <li className="flex gap-2"><span className="text-sky-500 font-bold">텍스트·코드</span> 자동 줄바꿈·페이지 번호·고정폭 글꼴</li>
+                  <li className="flex gap-2"><span className="text-emerald-500 font-bold">마크다운</span> 렌더링 또는 원본 텍스트 선택 가능</li>
+                  <li className="flex gap-2"><span className="text-orange-500 font-bold">HTML</span> 샌드박스 렌더 후 이미지로 캡처</li>
+                  <li className="flex gap-2"><span className="text-rose-500 font-bold">PDF</span> 그대로 통과(원본 다운로드)</li>
+                  <li className="flex gap-2"><span className="text-slate-400 font-bold">기타</span> 메타데이터 + Hex 미리보기로 변환</li>
+                </ul>
+              </Card>
+            </aside>
+          </main>
+
+          {/* 미리보기 모달 */}
+          <Modal isOpen={!!previewFile} onClose={() => setPreviewFile(null)}
+            title={previewFile ? previewFile.file.name : ""} size="lg">
+            {previewFile && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge variant="info">{KIND_META[previewFile.kind].label}</Badge>
+                  <span className="text-slate-400">{fmtBytes(previewFile.file.size)}</span>
+                  <span className="text-slate-300">·</span>
+                  <span className="text-slate-400">{previewFile.file.type || "타입 미상"}</span>
+                </div>
+                <FilePreview file={previewFile} />
+              </div>
+            )}
+          </Modal>
+
+          {/* 토스트 */}
+          {toast && (
+            <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-semibold ${TOAST_STYLE[toast.type]}`}>
+              {toast.msg}
+            </div>
+          )}
+
+          {/* html2canvas 렌더 호스트 (화면 밖) */}
+          <div ref={renderHostRef} aria-hidden="true"
+            style={{ position: "fixed", left: "-99999px", top: 0, width: "auto", background: "#fff" }} />
+
+          <footer className="max-w-6xl mx-auto px-4 py-8 text-center text-xs text-slate-400">
+            모든 변환은 브라우저 내에서 처리됩니다 · 파일이 외부로 전송되지 않습니다 · jsPDF · html2canvas · marked
+          </footer>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 렌더링
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

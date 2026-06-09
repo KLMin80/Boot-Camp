@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HTML / CSS / JS 의미 예제</title>
+
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+
+  <body class="min-h-screen bg-slate-950 text-slate-100">
+    <main class="mx-auto max-w-5xl px-6 py-10">
+      <h1 class="text-3xl font-black">HTML / CSS / JavaScript (의미만 살린 예제)</h1>
+      <p class="mt-2 text-slate-300">
+        HTML은 구조, CSS는 꾸미기, JavaScript는 "변화(움직임/상태)"를 만들어요.
+      </p>
+
+      <div class="mt-8 grid grid-cols-1 gap-6 md:grid-cols-3">
+        <!-- 1) HTML -->
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+          <h2 class="text-xl font-extrabold">HTML</h2>
+          <p class="mt-2 text-slate-300">
+            화면에 "무엇이 있는지" 정해요. (뼈대)
+          </p>
+
+          <div class="mt-5 rounded-xl border border-slate-800 bg-black/30 p-4">
+            <p class="text-sm text-slate-300">예: 버튼/박스/텍스트를 배치</p>
+            <pre class="mt-3 overflow-auto text-xs text-slate-200"><code>&lt;div id="box"&gt;Hello&lt;/div&gt;</code></pre>
+          </div>
+        </section>
+
+<!-- 2) CSS (Tailwind) -->
+<section class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+  <h2 class="text-xl font-extrabold">CSS (Tailwind)</h2>
+  <p class="mt-2 text-slate-300">
+    "어떻게 보일지" 정해요. (색/크기/모양)
+  </p>
+
+  <div class="mt-5 rounded-xl border border-slate-800 bg-black/30 p-4">
+    <p class="text-sm text-slate-300">
+      CSS로 만든 “멈춰있는” 모습 (JS 없이 그대로 고정)
+    </p>
+
+    <!-- ✅ JS 카드의 dancer와 같은 크기 -->
+    <div class="mt-4 flex items-center justify-center">
+      <div
+        class="flex h-28 w-28 items-center justify-center rounded-2xl bg-purple-600 text-5xl shadow-lg"
+        title="CSS로만 보이는 상태(정적)"
+      >
+        🙂
+      </div>
+    </div>
+
+    <p class="mt-4 text-sm text-slate-400">
+      포인트: 위 보라 박스/크기/둥근 모서리/그림자는 전부 <span class="text-slate-200 font-semibold">Tailwind 클래스(CSS)</span>로만 만든 거예요.
+    </p>
+
+    <pre class="mt-3 overflow-auto text-xs text-slate-200"><code>&lt;div class="flex h-28 w-28 items-center justify-center rounded-2xl bg-purple-600 text-5xl shadow-lg"&gt;
+  🙂
+&lt;/div&gt;</code></pre>
+  </div>
+</section>
+
+
+
+        <!-- 3) JavaScript -->
+        <section class="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+          <h2 class="text-xl font-extrabold">JavaScript</h2>
+          <p class="mt-2 text-slate-300">
+            클릭하면 클래스/텍스트를 바꿔서 "변화"를 만들어요.
+          </p>
+
+          <!-- JS가 조작할 실제 박스 -->
+          <div class="mt-5 rounded-xl border border-slate-800 bg-black/30 p-4">
+            <div class="flex items-center gap-3">
+              <button
+                id="toggleBtn"
+                class="rounded-xl bg-white px-4 py-2 font-bold text-slate-900 hover:opacity-90"
+              >
+                춤 ON/OFF
+              </button>
+
+              <span id="stateText" class="text-sm text-slate-300">상태: OFF</span>
+            </div>
+
+            <div class="mt-5 flex items-center justify-center">
+              <!-- ✅ 얘를 JS가 "춤추게" 함 -->
+              <div
+                id="dancer"
+                class="flex h-28 w-28 items-center justify-center rounded-2xl bg-purple-600 text-5xl shadow-lg transition-transform"
+              >
+                🙂
+              </div>
+            </div>
+
+            <p class="mt-4 text-sm text-slate-400">
+              포인트: JS는 "style.transform"을 계속 바꿔서 움직이는 것처럼 보여줘요.
+            </p>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script src="./client.js"></script>
+  </body>
+</html>

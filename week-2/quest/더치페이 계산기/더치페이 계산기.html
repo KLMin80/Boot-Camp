@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>더치페이(N빵) 계산기</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind으로 처리하기 어려운 부분만 커스텀 CSS 사용 */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in { animation: fadeIn 0.25s ease-out; }
+    /* 모바일에서 숫자 입력의 스피너 제거 */
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button {
+      -webkit-appearance: none; margin: 0;
+    }
+    input[type="number"] { -moz-appearance: textfield; }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks 구조 분해
+    // ========================================
+    const { useState, useMemo, useCallback } = React;
+
+    // ========================================
+    // 유틸 함수 (금액 포맷 / 고유 ID)
+    // ========================================
+
+    // 원화 천단위 콤마 포맷 (음수/소수도 안전하게 정수 반올림)
+    function formatWon(amount) {
+      const n = Math.round(Number(amount) || 0);
+      return '₩' + n.toLocaleString('ko-KR');
+    }
+
+    // 간단한 고유 ID 생성기
+    let _idSeq = 1;
+    function uid() {
+      return _idSeq++;
+    }
+
+    // ========================================
+    // 🎨 Design System Components (순수 프레젠테이션)
+    // ========================================
+
+    function Button({ variant = 'primary', size = 'md', disabled = false, onClick, className = '', children, type = 'button', ariaLabel }) {
+      const base = 'inline-flex items-center justify-center font-medium rounded-lg transition focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-40 disabled:cursor-not-allowed';
+      const variants = {
+        primary: 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-400',
+        secondary: 'bg-slate-200 text-slate-800 hover:bg-slate-300 focus:ring-slate-400',
+        danger: 'bg-rose-500 text-white hover:bg-rose-600 focus:ring-rose-400',
+        ghost: 'bg-transparent text-slate-600 hover:bg-slate-200 focus:ring-slate-300',
+        outline: 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 focus:ring-slate-300',
+      };
+      const sizes = {
+        sm: 'text-xs px-2.5 py-1.5 gap-1',
+        md: 'text-sm px-4 py-2 gap-1.5',
+        lg: 'text-base px-5 py-2.5 gap-2',
+      };
+      return (
+        <button
+          type={type}
+          aria-label={ariaLabel}
+          disabled={disabled}
+          onClick={onClick}
+          className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    function Input({ type = 'text', label, value, onChange, placeholder, disabled = false, className = '', min, inputMode, ariaLabel, onKeyDown }) {
+      return (
+        <label className={`block ${className}`}>
+          {label && <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>}
+          <input
+            type={type}
+            value={value}
+            min={min}
+            inputMode={inputMode}
+            aria-label={ariaLabel || label}
+            disabled={disabled}
+            placeholder={placeholder}
+            onChange={onChange}
+            onKeyDown={onKeyDown}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-100"
+          />
+        </label>
+      );
+    }
+
+    function Card({ className = '', children }) {
+      return (
+        <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    function Badge({ color = 'slate', children, className = '' }) {
+      const colors = {
+        slate: 'bg-slate-100 text-slate-600',
+        indigo: 'bg-indigo-100 text-indigo-700',
+        green: 'bg-emerald-100 text-emerald-700',
+        rose: 'bg-rose-100 text-rose-700',
+        amber: 'bg-amber-100 text-amber-700',
+      };
+      return (
+        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${colors[color]} ${className}`}>
+          {children}
+        </span>
+      );
+    }
+
+    function Toggle({ checked, onChange, label }) {
+      return (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          onClick={() => onChange(!checked)}
+          className="inline-flex items-center gap-2.5 group"
+        >
+          <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${checked ? 'bg-indigo-600' : 'bg-slate-300'}`}>
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </span>
+          {label && <span className="text-sm font-medium text-slate-700">{label}</span>}
+        </button>
+      );
+    }
+
+    function EmptyState({ icon, title, desc }) {
+      return (
+        <div className="text-center py-8 px-4">
+          <div className="text-4xl mb-2">{icon}</div>
+          <p className="text-sm font-semibold text-slate-600">{title}</p>
+          {desc && <p className="text-xs text-slate-400 mt-1">{desc}</p>}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 핵심 계산 로직 (배열 / 반복문 / 조건 분기)
+    // ========================================
+
+    // 한 참여자가 먹은 메뉴들의 "원가" 합계를 구한다.
+    // (reduce 반복문으로 menus 배열을 순회하며 가격을 누적)
+    function sumMenus(menus) {
+      return menus.reduce((acc, m) => acc + (Number(m.price) || 0), 0);
+    }
+
+    /*
+     * 메뉴 1개의 할인액을 계산한다. (조건 분기로 정률/정액 처리)
+     * - menu.discountType: 'percent'(정률 %) | 'amount'(정액 원)
+     * - menu.discountValue: 할인 값
+     * - 반환: 0 이상 ~ 원가 이하로 보정된 할인액(정수)
+     */
+    function calcMenuDiscount(menu) {
+      const price = Math.max(0, Math.round(Number(menu.price) || 0));
+      const dv = Number(menu.discountValue) || 0;
+      // 조건 분기: 할인 값이 0 이하면 할인 없음
+      if (dv <= 0 || price <= 0) return 0;
+      let discount;
+      if (menu.discountType === 'amount') {
+        // 정액 할인: dv원 (원가를 넘을 수 없음)
+        discount = Math.round(dv);
+      } else {
+        // 정률 할인: 원가의 dv%
+        discount = Math.round(price * (dv / 100));
+      }
+      // 할인은 0 이상, 원가 이하로 클램프
+      if (discount < 0) discount = 0;
+      if (discount > price) discount = price;
+      return discount;
+    }
+
+    // 메뉴의 할인 적용가(원가 - 할인액)를 구한다.
+    function menuPayable(menu) {
+      const price = Math.max(0, Math.round(Number(menu.price) || 0));
+      return price - calcMenuDiscount(menu);
+    }
+
+    /*
+     * 정산 계산 메인 함수.
+     * - 입력: participants 배열, (1/N용)할인 정보·총액, 1/N 모드 여부
+     * - 출력: 각 참여자별 부담액 배열 + 요약 합계
+     * - 배열(map/forEach/reduce), 반복문, 조건 분기를 적극 사용.
+     *
+     * [메뉴별 모드] 각 메뉴가 자체 할인을 가지므로,
+     *   참여자 부담액 = 그 사람 메뉴들의 (할인 적용가) 합계.
+     * [1/N 모드] 메뉴별 할인은 의미가 없으므로,
+     *   기존처럼 총액 단일 할인을 인원 수로 분배한다.
+     */
+    function calcSettlement({ participants, discountType, discountValue, splitEvenly, evenTotal }) {
+      const n = participants.length;
+
+      if (splitEvenly) {
+        // =========================================================
+        // [1/N 모드] 총액 단일 할인 → 인원 수로 균등 분배 (기존 방식 유지)
+        // =========================================================
+        const total = Math.max(0, Math.round(Number(evenTotal) || 0));
+
+        // 1) 1인당 base(내림), 마지막 사람이 나머지를 흡수
+        const bases = [];
+        if (n > 0) {
+          const each = Math.floor(total / n);
+          let assigned = 0;
+          for (let i = 0; i < n; i++) {            // for 반복문으로 한 명씩 배정
+            if (i === n - 1) bases.push(total - assigned);
+            else { bases.push(each); assigned += each; }
+          }
+        }
+        const subtotal = bases.reduce((acc, v) => acc + v, 0);
+
+        // 2) 총 할인액 (조건 분기: 정률/정액)
+        let totalDiscount = 0;
+        const dv = Number(discountValue) || 0;
+        if (dv > 0 && subtotal > 0) {
+          if (discountType === 'percent') totalDiscount = Math.round(subtotal * (dv / 100));
+          else totalDiscount = Math.min(dv, subtotal);
+        }
+        if (totalDiscount > subtotal) totalDiscount = subtotal;
+
+        // 3) 할인을 base 비율대로 분배 (반올림 오차는 마지막 부담자 흡수)
+        const discounts = new Array(n).fill(0);
+        if (totalDiscount > 0 && subtotal > 0) {
+          let distributed = 0;
+          let lastPayingIdx = -1;
+          for (let i = 0; i < n; i++) { if (bases[i] > 0) lastPayingIdx = i; }
+          for (let i = 0; i < n; i++) {
+            if (bases[i] <= 0) continue;
+            if (i === lastPayingIdx) discounts[i] = totalDiscount - distributed;
+            else {
+              const share = Math.round(totalDiscount * (bases[i] / subtotal));
+              discounts[i] = share;
+              distributed += share;
+            }
+          }
+        }
+
+        const rows = participants.map((p, i) => {
+          const base = bases[i] || 0;
+          const discount = discounts[i] || 0;
+          return {
+            id: p.id, name: p.name, menuCount: p.menus.length,
+            base, discount, payable: Math.max(0, base - discount),
+          };
+        });
+        const finalTotal = rows.reduce((acc, r) => acc + r.payable, 0);
+        return { rows, subtotal, totalDiscount, finalTotal };
+      }
+
+      // =========================================================
+      // [메뉴별 모드] 메뉴마다 개별 할인을 적용해 합산
+      // =========================================================
+      // 참여자 배열을 map으로 순회하고, 각자의 menus 배열을 reduce로 누적한다.
+      const rows = participants.map((p) => {
+        // reduce 반복문: 한 사람의 메뉴들을 돌며 원가/할인을 각각 누적
+        const agg = p.menus.reduce((acc, m) => {
+          const price = Math.max(0, Math.round(Number(m.price) || 0));
+          const d = calcMenuDiscount(m);          // 메뉴별 할인 계산
+          acc.base += price;                       // 할인 전 원가 합
+          acc.discount += d;                       // 할인액 합
+          return acc;
+        }, { base: 0, discount: 0 });
+
+        const payable = Math.max(0, agg.base - agg.discount); // = 할인 적용가 합
+        return {
+          id: p.id,
+          name: p.name,
+          menuCount: p.menus.length,
+          base: agg.base,
+          discount: agg.discount,
+          payable,
+        };
+      });
+
+      // 요약 합계 (reduce 누적)
+      const subtotal = rows.reduce((acc, r) => acc + r.base, 0);
+      const totalDiscount = rows.reduce((acc, r) => acc + r.discount, 0);
+      const finalTotal = rows.reduce((acc, r) => acc + r.payable, 0);
+
+      return { rows, subtotal, totalDiscount, finalTotal };
+    }
+
+    // ========================================
+    // 🧩 참여자 카드 (메뉴 입력 영역)
+    // ========================================
+
+    function ParticipantCard({ participant, index, onRename, onRemove, onAddMenu, onRemoveMenu, onMenuDiscountChange, disabledMenu }) {
+      const [menuName, setMenuName] = useState('');
+      const [menuPrice, setMenuPrice] = useState('');
+
+      // 이 참여자의 부담액 = 메뉴들의 (할인 적용가) 합계 (reduce 누적)
+      const payableSum = participant.menus.reduce((acc, m) => acc + menuPayable(m), 0);
+
+      const handleAdd = () => {
+        const name = menuName.trim();
+        const price = Number(menuPrice);
+        // 조건 분기: 이름이 비었거나 가격이 0 이하면 추가하지 않음
+        if (!name || !price || price <= 0) return;
+        // 새 메뉴는 자체 할인 정보를 기본값(할인 없음)으로 가진다.
+        onAddMenu(participant.id, {
+          id: uid(),
+          name,
+          price: Math.round(price),
+          discountType: 'percent', // 'percent' | 'amount'
+          discountValue: 0,
+        });
+        setMenuName('');
+        setMenuPrice('');
+      };
+
+      return (
+        <Card className="p-4 animate-fade-in">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="flex-shrink-0 w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold flex items-center justify-center">
+              {index + 1}
+            </span>
+            <input
+              value={participant.name}
+              onChange={(e) => onRename(participant.id, e.target.value)}
+              placeholder="참여자 이름"
+              aria-label={`참여자 ${index + 1} 이름`}
+              className="flex-1 min-w-0 font-semibold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-200 focus:border-indigo-400 focus:outline-none px-1 py-0.5"
+            />
+            <Badge color="indigo">{formatWon(payableSum)}</Badge>
+            <Button variant="ghost" size="sm" ariaLabel="참여자 삭제" onClick={() => onRemove(participant.id)}>
+              ✕
+            </Button>
+          </div>
+
+          {/* 메뉴 목록 (배열을 map으로 렌더링) */}
+          {disabledMenu ? (
+            <p className="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+              1/N 균등 분배 모드에서는 메뉴 입력이 사용되지 않습니다.
+            </p>
+          ) : (
+            <>
+              <ul className="space-y-2 mb-3">
+                {participant.menus.length === 0 && (
+                  <li className="text-xs text-slate-400 italic px-1">아직 먹은 메뉴가 없습니다.</li>
+                )}
+                {participant.menus.map((m) => {
+                  // 메뉴별 할인/적용가 계산 (조건 분기는 calcMenuDiscount 안에서)
+                  const dAmount = calcMenuDiscount(m);
+                  const payable = menuPayable(m);
+                  return (
+                    <li key={m.id} className="bg-slate-50 rounded-lg px-3 py-2">
+                      {/* 윗줄: 메뉴명 + 가격 요약 + 삭제 */}
+                      <div className="flex items-center gap-2">
+                        <span className="flex-1 min-w-0 truncate text-sm font-medium text-slate-700">{m.name}</span>
+                        <button
+                          onClick={() => onRemoveMenu(participant.id, m.id)}
+                          aria-label="메뉴 삭제"
+                          className="text-slate-400 hover:text-rose-500 text-sm leading-none"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* 가운뎃줄: 원가 / 할인 / 적용가 표시 */}
+                      <div className="flex items-center gap-2 mt-1 text-xs flex-wrap">
+                        <span className="text-slate-500">원가 {formatWon(m.price)}</span>
+                        <span className="text-emerald-600">
+                          할인 {dAmount > 0 ? '-' + formatWon(dAmount).slice(1) : '0'}
+                        </span>
+                        <span className="text-indigo-700 font-semibold">적용가 {formatWon(payable)}</span>
+                      </div>
+
+                      {/* 아랫줄: 메뉴별 할인 설정 (정률/정액 토글 + 값) */}
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <div className="inline-flex rounded-md bg-white border border-slate-200 p-0.5">
+                          <button
+                            onClick={() => onMenuDiscountChange(participant.id, m.id, { discountType: 'percent' })}
+                            className={`px-2 py-1 text-xs rounded font-medium transition ${m.discountType !== 'amount' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}
+                          >
+                            %
+                          </button>
+                          <button
+                            onClick={() => onMenuDiscountChange(participant.id, m.id, { discountType: 'amount' })}
+                            className={`px-2 py-1 text-xs rounded font-medium transition ${m.discountType === 'amount' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}
+                          >
+                            원
+                          </button>
+                        </div>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          value={m.discountValue === 0 ? '' : m.discountValue}
+                          onChange={(e) => onMenuDiscountChange(participant.id, m.id, { discountValue: Number(e.target.value) || 0 })}
+                          placeholder={m.discountType === 'amount' ? '할인액(원)' : '할인율(%)'}
+                          aria-label="메뉴 할인 값"
+                          className="flex-1 min-w-0 rounded-md border border-slate-300 px-2 py-1 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-200"
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {/* 메뉴 추가 입력 */}
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  value={menuName}
+                  onChange={(e) => setMenuName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                  placeholder="메뉴명"
+                  aria-label="메뉴명"
+                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                />
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  value={menuPrice}
+                  onChange={(e) => setMenuPrice(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                  placeholder="가격"
+                  aria-label="가격"
+                  className="w-full sm:w-28 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                />
+                <Button size="md" onClick={handleAdd}>추가</Button>
+              </div>
+            </>
+          )}
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 📄 메인 페이지 컴포넌트 (상태 + 비즈니스 로직)
+    // ========================================
+
+    function DutchPayApp() {
+      // 참여자 배열 (각 참여자는 menus 중첩 배열을 가짐)
+      const [participants, setParticipants] = useState([
+        { id: uid(), name: '참여자 1', menus: [] },
+        { id: uid(), name: '참여자 2', menus: [] },
+      ]);
+      const [newName, setNewName] = useState('');
+
+      // 할인 상태
+      // - splitEvenly(1/N) 모드: 총액에 적용되는 단일 할인 값으로 쓰임
+      // - 메뉴별 모드: "전체 메뉴에 공통 적용"할 때 일괄로 뿌리는 기준 값으로 쓰임
+      const [discountType, setDiscountType] = useState('percent'); // 'percent' | 'amount'
+      const [discountValue, setDiscountValue] = useState('');
+
+      // 1/N 균등 분배 모드
+      const [splitEvenly, setSplitEvenly] = useState(false);
+      const [evenTotal, setEvenTotal] = useState('');
+
+      // ----- 참여자 관리 핸들러 -----
+      const addParticipant = () => {
+        const name = newName.trim() || `참여자 ${participants.length + 1}`;
+        setParticipants(prev => [...prev, { id: uid(), name, menus: [] }]);
+        setNewName('');
+      };
+
+      const removeParticipant = (id) => {
+        // filter로 해당 id를 제외한 새 배열 생성
+        setParticipants(prev => prev.filter(p => p.id !== id));
+      };
+
+      const renameParticipant = (id, name) => {
+        setParticipants(prev => prev.map(p => (p.id === id ? { ...p, name } : p)));
+      };
+
+      // ----- 메뉴 관리 핸들러 (중첩 배열 갱신) -----
+      const addMenu = (pid, menu) => {
+        setParticipants(prev => prev.map(p =>
+          p.id === pid ? { ...p, menus: [...p.menus, menu] } : p
+        ));
+      };
+
+      const removeMenu = (pid, mid) => {
+        setParticipants(prev => prev.map(p =>
+          p.id === pid ? { ...p, menus: p.menus.filter(m => m.id !== mid) } : p
+        ));
+      };
+
+      // 특정 메뉴의 할인 정보(patch)만 부분 갱신한다.
+      // 중첩 배열 갱신: 참여자 map → 해당 메뉴 map → 스프레드(...)로 patch 병합
+      const changeMenuDiscount = (pid, mid, patch) => {
+        setParticipants(prev => prev.map(p =>
+          p.id === pid
+            ? { ...p, menus: p.menus.map(m => (m.id === mid ? { ...m, ...patch } : m)) }
+            : p
+        ));
+      };
+
+      // ----- 공통(일괄) 적용: 모든 참여자의 모든 메뉴에 동일 할인 설정 반영 -----
+      // 반복문(map 중첩)으로 전체 메뉴를 순회하며 같은 할인 방식/값을 덮어쓴다.
+      const applyDiscountToAll = () => {
+        const dv = Number(discountValue) || 0;
+        setParticipants(prev => prev.map(p => ({
+          ...p,
+          menus: p.menus.map(m => ({           // 각 참여자의 메뉴 배열 전체 순회
+            ...m,
+            discountType,                       // 상단에서 고른 정률/정액
+            discountValue: dv,                  // 상단에서 입력한 값
+          })),
+        })));
+      };
+
+      // ----- 할인 초기화: 전체 메뉴 할인을 0(없음)으로 되돌림 -----
+      const resetAllDiscounts = () => {
+        setParticipants(prev => prev.map(p => ({
+          ...p,
+          menus: p.menus.map(m => ({ ...m, discountValue: 0 })),
+        })));
+      };
+
+      // 메뉴별 모드에서 입력된 메뉴가 하나라도 있는지 (공통 적용 버튼 활성화 판단)
+      const hasAnyMenu = participants.some(p => p.menus.length > 0);
+
+      // ----- 정산 계산 (입력이 바뀔 때만 재계산) -----
+      const result = useMemo(() => calcSettlement({
+        participants,
+        discountType,
+        discountValue,
+        splitEvenly,
+        evenTotal,
+      }), [participants, discountType, discountValue, splitEvenly, evenTotal]);
+
+      // ----- 엣지 케이스 판별 (조건 분기) -----
+      const warnings = useMemo(() => {
+        const list = [];
+        if (participants.length === 0) {
+          list.push('참여 인원이 없습니다. 먼저 참여자를 추가해 주세요.');
+        }
+        if (!splitEvenly) {
+          // 메뉴를 하나도 입력 안 한 사람 찾기
+          const noMenuPeople = participants.filter(p => p.menus.length === 0).map(p => p.name || '이름없음');
+          if (participants.length > 0 && noMenuPeople.length === participants.length) {
+            list.push('아직 아무도 메뉴를 입력하지 않았습니다.');
+          } else if (noMenuPeople.length > 0) {
+            list.push(`메뉴 미입력: ${noMenuPeople.join(', ')} (부담액 0원으로 계산됩니다)`);
+          }
+        } else {
+          if (participants.length === 0) {
+            // 위에서 이미 처리됨
+          } else if (!(Number(evenTotal) > 0)) {
+            list.push('1/N 모드: 나눌 총액을 입력해 주세요.');
+          }
+        }
+        return list;
+      }, [participants, splitEvenly, evenTotal]);
+
+      const hasData = result.subtotal > 0 && participants.length > 0;
+
+      return (
+        <div className="min-h-screen max-w-3xl mx-auto px-4 py-6 sm:py-10">
+          {/* 헤더 */}
+          <header className="mb-6 text-center">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800">
+              🍽️ 더치페이 계산기
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">각자 먹은 만큼, 메뉴마다 할인을 따로 또는 한 번에</p>
+          </header>
+
+          {/* 모드 & 할인 설정 */}
+          <Card className="p-4 sm:p-5 mb-5">
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <Toggle checked={splitEvenly} onChange={setSplitEvenly} label="1/N 균등 분배 모드" />
+                {splitEvenly && (
+                  <Badge color="amber">메뉴 입력 없이 총액을 인원수로 분배</Badge>
+                )}
+              </div>
+
+              {/* 1/N 모드일 때 총액 입력 */}
+              {splitEvenly && (
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  label="나눌 총액 (원)"
+                  value={evenTotal}
+                  onChange={(e) => setEvenTotal(e.target.value)}
+                  placeholder="예: 100000"
+                />
+              )}
+
+              {/* 할인 설정 영역 (모드에 따라 동작이 달라짐) */}
+              <div className="border-t border-slate-100 pt-4">
+                <span className="block text-xs font-medium text-slate-500 mb-2">
+                  {splitEvenly ? '할인 적용 (총액 기준)' : '할인 설정 (전체 메뉴에 공통 적용)'}
+                </span>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="inline-flex rounded-lg bg-slate-100 p-1 self-start">
+                    <button
+                      onClick={() => setDiscountType('percent')}
+                      className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${discountType === 'percent' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}
+                    >
+                      정률(%)
+                    </button>
+                    <button
+                      onClick={() => setDiscountType('amount')}
+                      className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${discountType === 'amount' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}
+                    >
+                      정액(원)
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(e.target.value)}
+                    placeholder={discountType === 'percent' ? '예: 10 (%)' : '예: 5000 (원)'}
+                    aria-label="할인 값"
+                    className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                  />
+                </div>
+
+                {/* 조건 분기: 모드별 안내 / 공통 적용 버튼 */}
+                {splitEvenly ? (
+                  <p className="text-xs text-slate-400 mt-1.5">
+                    할인은 각자 부담액(총액÷인원) 비율에 따라 공평하게 분배되어 차감됩니다.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={!hasAnyMenu}
+                        onClick={applyDiscountToAll}
+                      >
+                        전체 메뉴에 공통 적용
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!hasAnyMenu}
+                        onClick={resetAllDiscounts}
+                      >
+                        할인 초기화
+                      </Button>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-2">
+                      위 값을 한 번에 전체 메뉴에 반영하거나, 아래 각 메뉴 카드에서 개별 할인을 따로 설정할 수 있어요.
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {/* 참여자 추가 */}
+          <div className="flex gap-2 mb-4">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addParticipant()}
+              placeholder="참여자 이름 입력 후 추가"
+              aria-label="새 참여자 이름"
+              className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            />
+            <Button onClick={addParticipant}>+ 인원 추가</Button>
+          </div>
+
+          {/* 참여자 목록 (배열 map 렌더링) */}
+          <div className="space-y-3 mb-6">
+            {participants.length === 0 ? (
+              <Card className="p-2">
+                <EmptyState icon="👥" title="참여자가 없습니다" desc="위에서 참여자를 추가해 주세요." />
+              </Card>
+            ) : (
+              participants.map((p, idx) => (
+                <ParticipantCard
+                  key={p.id}
+                  participant={p}
+                  index={idx}
+                  disabledMenu={splitEvenly}
+                  onRename={renameParticipant}
+                  onRemove={removeParticipant}
+                  onAddMenu={addMenu}
+                  onRemoveMenu={removeMenu}
+                  onMenuDiscountChange={changeMenuDiscount}
+                />
+              ))
+            )}
+          </div>
+
+          {/* 경고 / 안내 (엣지 케이스) */}
+          {warnings.length > 0 && (
+            <div className="mb-5 space-y-2">
+              {warnings.map((w, i) => (
+                <div key={i} className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-3 py-2">
+                  <span>⚠️</span>
+                  <span>{w}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 정산 결과 */}
+          <Card className="p-4 sm:p-5">
+            <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+              📊 정산 결과
+            </h2>
+
+            {!hasData ? (
+              <EmptyState
+                icon="🧮"
+                title="아직 계산할 금액이 없습니다"
+                desc={splitEvenly ? '총액과 인원을 입력하면 결과가 표시됩니다.' : '참여자의 메뉴를 입력하면 결과가 표시됩니다.'}
+              />
+            ) : (
+              <>
+                {/* 결과 표 (반응형: 가로 스크롤) */}
+                <div className="overflow-x-auto -mx-1">
+                  <table className="w-full text-sm min-w-[420px]">
+                    <thead>
+                      <tr className="text-left text-slate-400 border-b border-slate-200">
+                        <th className="py-2 px-1 font-medium">참여자</th>
+                        <th className="py-2 px-1 font-medium text-right">먹은 총액</th>
+                        <th className="py-2 px-1 font-medium text-right">할인</th>
+                        <th className="py-2 px-1 font-medium text-right">실제 낼 금액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.rows.map((r) => (
+                        <tr key={r.id} className="border-b border-slate-100 last:border-0">
+                          <td className="py-2.5 px-1">
+                            <div className="font-medium text-slate-700">{r.name || '이름없음'}</div>
+                            {!splitEvenly && (
+                              <div className="text-xs text-slate-400">{r.menuCount}개 메뉴</div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-1 text-right text-slate-600">{formatWon(r.base)}</td>
+                          <td className="py-2.5 px-1 text-right text-emerald-600">
+                            {r.discount > 0 ? '-' + formatWon(r.discount).slice(1) : '-'}
+                          </td>
+                          <td className="py-2.5 px-1 text-right font-bold text-indigo-700">{formatWon(r.payable)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* 요약 */}
+                <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-slate-50 rounded-xl p-3 text-center">
+                    <div className="text-xs text-slate-400 mb-1">할인 전 합계</div>
+                    <div className="text-lg font-bold text-slate-700">{formatWon(result.subtotal)}</div>
+                  </div>
+                  <div className="bg-emerald-50 rounded-xl p-3 text-center">
+                    <div className="text-xs text-emerald-500 mb-1">총 할인액</div>
+                    <div className="text-lg font-bold text-emerald-600">-{formatWon(result.totalDiscount).slice(1)}</div>
+                  </div>
+                  <div className="bg-indigo-600 rounded-xl p-3 text-center">
+                    <div className="text-xs text-indigo-200 mb-1">최종 결제액</div>
+                    <div className="text-lg font-bold text-white">{formatWon(result.finalTotal)}</div>
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-400 mt-3 text-center">
+                  {splitEvenly
+                    ? '반올림으로 인한 1원 단위 오차는 마지막 부담자가 흡수하여 합계가 정확히 맞습니다.'
+                    : '실제 낼 금액 = 각 메뉴의 (원가 - 메뉴별 할인) 합계입니다.'}
+                </p>
+              </>
+            )}
+          </Card>
+
+          <footer className="text-center text-xs text-slate-400 mt-8">
+            더치페이(N빵) 계산기 · 배열 · 반복문 · 조건 분기 학습용
+          </footer>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App & 렌더링
+    // ========================================
+
+    function App() {
+      return <DutchPayApp />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

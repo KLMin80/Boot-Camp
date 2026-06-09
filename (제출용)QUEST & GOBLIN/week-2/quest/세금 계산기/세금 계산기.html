@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>한국 세금 계산기</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind이 다루기 어려운 부분: 카드 진입 애니메이션 */
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .animate-card-in { animation: cardIn 0.25s ease-out both; }
+    /* 숫자 입력 화살표 제거 */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useMemo, useCallback, useEffect } = React;
+
+    // ========================================
+    // 📊 세율 데이터 상수 (2024~2025년 기준 / 참고용 추정치)
+    // ========================================
+
+    // 종합소득세 / 근로소득세 과세표준 누진세율 (소득세법 제55조)
+    // [상한, 세율, 누진공제]  상한이 Infinity면 최고구간
+    const INCOME_TAX_BRACKETS = [
+      { limit: 14_000_000,  rate: 0.06, deduction: 0 },
+      { limit: 50_000_000,  rate: 0.15, deduction: 1_260_000 },
+      { limit: 88_000_000,  rate: 0.24, deduction: 5_760_000 },
+      { limit: 150_000_000, rate: 0.35, deduction: 15_440_000 },
+      { limit: 300_000_000, rate: 0.38, deduction: 19_940_000 },
+      { limit: 500_000_000, rate: 0.40, deduction: 25_940_000 },
+      { limit: 1_000_000_000, rate: 0.42, deduction: 35_940_000 },
+      { limit: Infinity,    rate: 0.45, deduction: 65_940_000 },
+    ];
+
+    // 상속세 / 증여세 누진세율 (상속세 및 증여세법 제26조)
+    const INHERITANCE_GIFT_BRACKETS = [
+      { limit: 100_000_000,   rate: 0.10, deduction: 0 },
+      { limit: 500_000_000,   rate: 0.20, deduction: 10_000_000 },
+      { limit: 1_000_000_000, rate: 0.30, deduction: 60_000_000 },
+      { limit: 3_000_000_000, rate: 0.40, deduction: 160_000_000 },
+      { limit: Infinity,      rate: 0.50, deduction: 460_000_000 },
+    ];
+
+    // 양도소득세 기본세율 (주식·기타자산 외 일반 자산, 보유기간 2년 이상 가정)
+    const CAPITAL_GAINS_BRACKETS = INCOME_TAX_BRACKETS; // 일반 양도소득세 기본세율은 종합소득세율과 동일 구조
+
+    // 부가가치세율
+    const VAT_RATE = 0.10;
+
+    // 재산세 (주택분) 과세표준 누진세율 (지방세법, 표준세율 기준)
+    const PROPERTY_TAX_BRACKETS = [
+      { limit: 60_000_000,  rate: 0.001,  deduction: 0 },
+      { limit: 150_000_000, rate: 0.0015, deduction: 30_000 },
+      { limit: 300_000_000, rate: 0.0025, deduction: 180_000 },
+      { limit: Infinity,    rate: 0.004,  deduction: 630_000 },
+    ];
+
+    // 자동차세 (승용자동차 영업용 외 / 비영업용 기준, cc당 연세액)
+    const AUTO_TAX_TIERS = [
+      { ccLimit: 1000,     perCc: 80,  label: "1,000cc 이하" },
+      { ccLimit: 1600,     perCc: 140, label: "1,600cc 이하" },
+      { ccLimit: Infinity, perCc: 200, label: "1,600cc 초과" },
+    ];
+
+    // 4대 사회보험 (근로자 부담분, 2024년 기준 / 준조세)
+    const SOCIAL_INSURANCE = {
+      pension:    { rate: 0.045,    capMonthly: 6_170_000, label: "국민연금" },   // 근로자 4.5%, 기준소득월액 상한
+      health:     { rate: 0.03545,                         label: "건강보험" },   // 근로자 3.545% (요율 7.09%의 절반)
+      longTerm:   { rateOfHealth: 0.1295,                  label: "장기요양보험" }, // 건강보험료의 12.95%
+      employment: { rate: 0.009,                           label: "고용보험" },   // 근로자 0.9% (실업급여분)
+    };
+
+    // 금융소득세 (이자·배당 원천징수)
+    const FINANCIAL_INCOME_TAX_RATE = 0.14;       // 소득세 14%
+    const FINANCIAL_LOCAL_RATE      = 0.014;      // 지방소득세 1.4% (소득세의 10%)
+    const FINANCIAL_COMP_THRESHOLD  = 20_000_000; // 연 2천만원 초과 시 금융소득종합과세 대상
+
+    // ========================================
+    // 🛠 유틸 함수
+    // ========================================
+    const won = (n) => {
+      if (n === null || n === undefined || isNaN(n)) return "0원";
+      return Math.round(n).toLocaleString("ko-KR") + "원";
+    };
+
+    const pct = (r) => (r * 100).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "%";
+
+    // 누진공제 방식 세액 계산: 과세표준에 맞는 구간을 찾아 (표준 × 세율 − 누진공제)
+    const calcProgressive = (base, brackets) => {
+      if (!base || base <= 0) return { tax: 0, rate: 0, deduction: 0, bracket: null };
+      const b = brackets.find((x) => base <= x.limit) || brackets[brackets.length - 1];
+      const tax = Math.max(0, base * b.rate - b.deduction);
+      return { tax, rate: b.rate, deduction: b.deduction, bracket: b };
+    };
+
+    const toNum = (v) => {
+      const n = parseFloat(String(v).replace(/,/g, ""));
+      return isNaN(n) ? 0 : n;
+    };
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+    function Card({ children, className = "" }) {
+      return (
+        <div className={`bg-white rounded-2xl shadow-md border border-slate-200 p-5 sm:p-6 ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    function Field({ label, value, onChange, placeholder = "0", suffix = "원", type = "number", hint }) {
+      return (
+        <label className="block mb-4">
+          <span className="block text-sm font-medium text-slate-700 mb-1.5">{label}</span>
+          <div className="relative">
+            <input
+              type={type}
+              inputMode="decimal"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={placeholder}
+              className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 pr-14 text-right
+                         text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400
+                         transition"
+            />
+            {suffix && (
+              <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-sm text-slate-400 pointer-events-none">
+                {suffix}
+              </span>
+            )}
+          </div>
+          {hint && <span className="block text-xs text-slate-400 mt-1">{hint}</span>}
+        </label>
+      );
+    }
+
+    function ResultRow({ label, value, strong = false, accent = false }) {
+      return (
+        <div className={`flex items-center justify-between py-2 ${strong ? "border-t border-slate-200 mt-1 pt-3" : ""}`}>
+          <span className={`text-sm ${strong ? "font-semibold text-slate-800" : "text-slate-500"}`}>{label}</span>
+          <span className={`tabular-nums ${accent ? "text-indigo-600 font-bold text-lg" : strong ? "font-semibold text-slate-900" : "text-slate-700"}`}>
+            {value}
+          </span>
+        </div>
+      );
+    }
+
+    function Badge({ children, color = "indigo" }) {
+      const map = {
+        indigo: "bg-indigo-100 text-indigo-700",
+        emerald: "bg-emerald-100 text-emerald-700",
+        amber: "bg-amber-100 text-amber-700",
+        rose: "bg-rose-100 text-rose-700",
+        sky: "bg-sky-100 text-sky-700",
+        violet: "bg-violet-100 text-violet-700",
+        cyan: "bg-cyan-100 text-cyan-700",
+        teal: "bg-teal-100 text-teal-700",
+        slate: "bg-slate-100 text-slate-600",
+      };
+      return <span className={`inline-block text-xs font-semibold px-2.5 py-1 rounded-full ${map[color] || map.indigo}`}>{children}</span>;
+    }
+
+    function CalcCard({ title, color, children, onRemove }) {
+      return (
+        <Card className="animate-card-in">
+          <div className="flex items-start justify-between mb-4">
+            <Badge color={color}>{title}</Badge>
+            <button
+              onClick={onRemove}
+              aria-label={`${title} 닫기`}
+              className="text-slate-300 hover:text-rose-500 transition text-xl leading-none -mt-1"
+            >
+              ×
+            </button>
+          </div>
+          {children}
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 📄 개별 세금 계산기 컴포넌트
+    // ========================================
+
+    // 1) 종합소득세
+    function IncomeTaxCalc({ onRemove, onResult }) {
+      const [base, setBase] = useState("");
+      const r = useMemo(() => calcProgressive(toNum(base), INCOME_TAX_BRACKETS), [base]);
+      const local = r.tax * 0.1; // 지방소득세 10%
+      const total = r.tax + local;
+      useEffect(() => { onResult(total); }, [total]);
+      return (
+        <CalcCard title="종합소득세" color="indigo" onRemove={onRemove}>
+          <Field label="과세표준 (소득공제 후 금액)" value={base} onChange={setBase}
+                 hint="총소득에서 각종 소득공제를 차감한 금액" />
+          <div className="mt-2 bg-slate-50 rounded-xl p-4">
+            <ResultRow label="적용 세율" value={r.bracket ? pct(r.rate) : "-"} />
+            <ResultRow label="누진공제액" value={won(r.deduction)} />
+            <ResultRow label="산출세액" value={won(r.tax)} strong />
+            <ResultRow label="지방소득세 (10%)" value={won(local)} />
+            <ResultRow label="총 부담세액" value={won(r.tax + local)} strong accent />
+          </div>
+        </CalcCard>
+      );
+    }
+
+    // 2) 부가가치세
+    function VatCalc({ onRemove, onResult }) {
+      const [mode, setMode] = useState("supply"); // supply: 공급가액 입력 / total: 공급대가 입력
+      const [amount, setAmount] = useState("");
+      const a = toNum(amount);
+      const { supply, vat, total } = useMemo(() => {
+        if (mode === "supply") {
+          const vat = a * VAT_RATE;
+          return { supply: a, vat, total: a + vat };
+        } else {
+          const supply = a / (1 + VAT_RATE);
+          return { supply, vat: a - supply, total: a };
+        }
+      }, [a, mode]);
+      useEffect(() => { onResult(vat); }, [vat]);
+      return (
+        <CalcCard title="부가가치세" color="emerald" onRemove={onRemove}>
+          <div className="flex gap-2 mb-4">
+            {[["supply", "공급가액 입력"], ["total", "공급대가(부가세 포함) 입력"]].map(([m, lbl]) => (
+              <button key={m} onClick={() => setMode(m)}
+                className={`flex-1 text-xs sm:text-sm rounded-lg py-2 px-2 font-medium transition border
+                  ${mode === m ? "bg-emerald-500 text-white border-emerald-500" : "bg-white text-slate-600 border-slate-300 hover:border-emerald-400"}`}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <Field label={mode === "supply" ? "공급가액" : "공급대가 (부가세 포함)"} value={amount} onChange={setAmount} />
+          <div className="mt-2 bg-slate-50 rounded-xl p-4">
+            <ResultRow label="공급가액" value={won(supply)} />
+            <ResultRow label="부가세율" value={pct(VAT_RATE)} />
+            <ResultRow label="부가가치세" value={won(vat)} strong accent />
+            <ResultRow label="공급대가 (합계)" value={won(total)} strong />
+          </div>
+        </CalcCard>
+      );
+    }
+
+    // 3) 양도소득세
+    function CapitalGainsCalc({ onRemove, onResult }) {
+      const [price, setPrice] = useState("");   // 양도가액
+      const [cost, setCost] = useState("");      // 취득가액
+      const [expense, setExpense] = useState(""); // 필요경비
+      const BASIC_DEDUCTION = 2_500_000; // 양도소득 기본공제 연 250만원
+      const gain = Math.max(0, toNum(price) - toNum(cost) - toNum(expense));
+      const taxBase = Math.max(0, gain - BASIC_DEDUCTION);
+      const r = useMemo(() => calcProgressive(taxBase, CAPITAL_GAINS_BRACKETS), [taxBase]);
+      const local = r.tax * 0.1;
+      const total = r.tax + local;
+      useEffect(() => { onResult(total); }, [total]);
+      return (
+        <CalcCard title="양도소득세" color="sky" onRemove={onRemove}>
+          <Field label="양도가액 (매도금액)" value={price} onChange={setPrice} />
+          <Field label="취득가액 (매수금액)" value={cost} onChange={setCost} />
+          <Field label="필요경비 (취득세·중개수수료 등)" value={expense} onChange={setExpense} />
+          <div className="mt-2 bg-slate-50 rounded-xl p-4">
+            <ResultRow label="양도차익" value={won(gain)} />
+            <ResultRow label="기본공제" value={"- " + won(BASIC_DEDUCTION)} />
+            <ResultRow label="과세표준" value={won(taxBase)} />
+            <ResultRow label="적용 세율" value={r.bracket ? pct(r.rate) : "-"} />
+            <ResultRow label="누진공제액" value={won(r.deduction)} />
+            <ResultRow label="산출세액" value={won(r.tax)} strong />
+            <ResultRow label="지방소득세 (10%)" value={won(local)} />
+            <ResultRow label="총 부담세액" value={won(r.tax + local)} strong accent />
+          </div>
+          <p className="text-xs text-slate-400 mt-2">※ 보유기간 2년 이상 일반 자산 기본세율 가정. 1세대1주택 비과세·중과세·장기보유특별공제 미반영.</p>
+        </CalcCard>
+      );
+    }
+
+    // 4) 근로소득세 간이 추정
+    function SalaryTaxCalc({ onRemove, onResult }) {
+      const [salary, setSalary] = useState(""); // 연봉(총급여)
+      const gross = toNum(salary);
+
+      // 근로소득공제 (총급여 구간별)
+      const earnedIncomeDeduction = (g) => {
+        if (g <= 5_000_000) return g * 0.7;
+        if (g <= 15_000_000) return 3_500_000 + (g - 5_000_000) * 0.4;
+        if (g <= 45_000_000) return 7_500_000 + (g - 15_000_000) * 0.15;
+        if (g <= 100_000_000) return 12_000_000 + (g - 45_000_000) * 0.05;
+        return 14_750_000 + (g - 100_000_000) * 0.02;
+      };
+
+      const result = useMemo(() => {
+        if (gross <= 0) return null;
+        const eid = earnedIncomeDeduction(gross);
+        const personalDeduction = 1_500_000; // 본인 기본공제 1인 가정
+        const taxBase = Math.max(0, gross - eid - personalDeduction);
+        const r = calcProgressive(taxBase, INCOME_TAX_BRACKETS);
+        // 근로소득세액공제 간이 (산출세액 일부 공제 — 단순 추정)
+        const credit = Math.min(r.tax * 0.55, 660_000);
+        const determined = Math.max(0, r.tax - credit);
+        const local = determined * 0.1;
+        return { eid, taxBase, r, credit, determined, local };
+      }, [gross]);
+
+      const total = result ? result.determined + result.local : 0;
+      useEffect(() => { onResult(total); }, [total]);
+
+      return (
+        <CalcCard title="근로소득세 (간이)" color="violet" onRemove={onRemove}>
+          <Field label="연봉 (총급여액)" value={salary} onChange={setSalary} hint="비과세 제외 총급여 기준" />
+          {result ? (
+            <div className="mt-2 bg-slate-50 rounded-xl p-4">
+              <ResultRow label="근로소득공제" value={"- " + won(result.eid)} />
+              <ResultRow label="본인 기본공제" value={"- " + won(1_500_000)} />
+              <ResultRow label="과세표준" value={won(result.taxBase)} />
+              <ResultRow label="적용 세율" value={result.r.bracket ? pct(result.r.rate) : "-"} />
+              <ResultRow label="산출세액" value={won(result.r.tax)} strong />
+              <ResultRow label="근로소득세액공제(간이)" value={"- " + won(result.credit)} />
+              <ResultRow label="결정세액(연)" value={won(result.determined)} strong />
+              <ResultRow label="지방소득세 (10%)" value={won(result.local)} />
+              <ResultRow label="연 총세액" value={won(result.determined + result.local)} strong accent />
+              <ResultRow label="월 환산 (÷12)" value={won((result.determined + result.local) / 12)} />
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400 mt-2">연봉을 입력하면 결과가 표시됩니다.</p>
+          )}
+          <p className="text-xs text-slate-400 mt-2">※ 본인 1인 기본공제만 반영한 매우 단순화된 추정치. 부양가족·신용카드·연금 등 각종 공제 미반영.</p>
+        </CalcCard>
+      );
+    }
+
+    // 5) 상속세 / 증여세
+    function InheritanceGiftCalc({ onRemove, onResult }) {
+      const [type, setType] = useState("gift"); // gift / inheritance
+      const [asset, setAsset] = useState("");
+      const [debt, setDebt] = useState(""); // 채무·공과금 (상속) / 0 (증여)
+
+      // 공제: 증여는 관계별 공제(성인 자녀 5천만원 기본), 상속은 일괄공제 5억 가정
+      const deductionAmt = type === "gift" ? 50_000_000 : 500_000_000;
+      const net = Math.max(0, toNum(asset) - toNum(debt));
+      const taxBase = Math.max(0, net - deductionAmt);
+      const r = useMemo(() => calcProgressive(taxBase, INHERITANCE_GIFT_BRACKETS), [taxBase]);
+      useEffect(() => { onResult(r.tax); }, [r.tax]);
+
+      return (
+        <CalcCard title="상속세 / 증여세" color="amber" onRemove={onRemove}>
+          <div className="flex gap-2 mb-4">
+            {[["gift", "증여세"], ["inheritance", "상속세"]].map(([t, lbl]) => (
+              <button key={t} onClick={() => setType(t)}
+                className={`flex-1 text-sm rounded-lg py-2 font-medium transition border
+                  ${type === t ? "bg-amber-500 text-white border-amber-500" : "bg-white text-slate-600 border-slate-300 hover:border-amber-400"}`}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <Field label={type === "gift" ? "증여재산가액" : "상속재산가액"} value={asset} onChange={setAsset} />
+          <Field label={type === "gift" ? "채무 등 (있으면)" : "채무·공과금·장례비 등"} value={debt} onChange={setDebt} />
+          <div className="mt-2 bg-slate-50 rounded-xl p-4">
+            <ResultRow label="순 재산가액" value={won(net)} />
+            <ResultRow label={type === "gift" ? "증여재산공제(자녀 기본 가정)" : "일괄공제(가정)"} value={"- " + won(deductionAmt)} />
+            <ResultRow label="과세표준" value={won(taxBase)} />
+            <ResultRow label="적용 세율" value={r.bracket ? pct(r.rate) : "-"} />
+            <ResultRow label="누진공제액" value={won(r.deduction)} />
+            <ResultRow label="산출세액" value={won(r.tax)} strong accent />
+          </div>
+          <p className="text-xs text-slate-400 mt-2">
+            ※ 공제액은 {type === "gift" ? "성인 직계비속 기본공제 5천만원" : "일괄공제 5억원"} 단순 가정. 신고세액공제·세대생략할증 등 미반영.
+          </p>
+        </CalcCard>
+      );
+    }
+
+    // 6) 재산세 (주택분)
+    function PropertyTaxCalc({ onRemove, onResult }) {
+      const [value, setValue] = useState(""); // 공시가격
+      const FAIR_RATE = 0.60; // 공정시장가액비율 (주택 60% 가정)
+      const taxBase = toNum(value) * FAIR_RATE;
+      const r = useMemo(() => calcProgressive(taxBase, PROPERTY_TAX_BRACKETS), [taxBase]);
+      const urbanTax = taxBase * 0.0014; // 도시지역분 0.14% 가정
+      const eduTax = r.tax * 0.2;        // 지방교육세 20%
+      const total = r.tax + eduTax + urbanTax;
+      useEffect(() => { onResult(total); }, [total]);
+      return (
+        <CalcCard title="재산세 (주택)" color="rose" onRemove={onRemove}>
+          <Field label="주택 공시가격" value={value} onChange={setValue} hint="공정시장가액비율 60% 적용" />
+          <div className="mt-2 bg-slate-50 rounded-xl p-4">
+            <ResultRow label="과세표준 (공시가 × 60%)" value={won(taxBase)} />
+            <ResultRow label="적용 세율" value={r.bracket ? pct(r.rate) : "-"} />
+            <ResultRow label="누진공제액" value={won(r.deduction)} />
+            <ResultRow label="재산세 본세" value={won(r.tax)} strong />
+            <ResultRow label="지방교육세 (20%)" value={won(eduTax)} />
+            <ResultRow label="도시지역분 (0.14%)" value={won(urbanTax)} />
+            <ResultRow label="총 부담세액" value={won(r.tax + eduTax + urbanTax)} strong accent />
+          </div>
+          <p className="text-xs text-slate-400 mt-2">※ 표준세율 기준. 1주택 특례세율·세부담상한 미반영.</p>
+        </CalcCard>
+      );
+    }
+
+    // 7) 자동차세 (승용 비영업용)
+    function AutoTaxCalc({ onRemove, onResult }) {
+      const [cc, setCc] = useState("");
+      const ccNum = toNum(cc);
+      const tier = useMemo(() => AUTO_TAX_TIERS.find((t) => ccNum <= t.ccLimit), [ccNum]);
+      const baseTax = ccNum > 0 && tier ? ccNum * tier.perCc : 0;
+      const eduTax = baseTax * 0.3; // 지방교육세 30%
+      const total = baseTax + eduTax;
+      useEffect(() => { onResult(total); }, [total]);
+      return (
+        <CalcCard title="자동차세 (승용)" color="slate" onRemove={onRemove}>
+          <Field label="배기량" value={cc} onChange={setCc} suffix="cc" hint="비영업용 승용자동차 기준" />
+          <div className="mt-2 bg-slate-50 rounded-xl p-4">
+            <ResultRow label="구간" value={tier && ccNum > 0 ? tier.label : "-"} />
+            <ResultRow label="cc당 세액" value={tier && ccNum > 0 ? won(tier.perCc) : "-"} />
+            <ResultRow label="자동차세 (연)" value={won(baseTax)} strong />
+            <ResultRow label="지방교육세 (30%)" value={won(eduTax)} />
+            <ResultRow label="연 총세액" value={won(baseTax + eduTax)} strong accent />
+            <ResultRow label="반기 분납액 (÷2)" value={won((baseTax + eduTax) / 2)} />
+          </div>
+          <p className="text-xs text-slate-400 mt-2">※ 차령에 따른 경감(3년차부터 매년 5%, 최대 50%) 미반영.</p>
+        </CalcCard>
+      );
+    }
+
+    // 8) 4대 사회보험 (근로자 부담분) — 근로소득자 실수령액에 직접 영향
+    function SocialInsuranceCalc({ onRemove, onResult }) {
+      const [monthly, setMonthly] = useState(""); // 월 급여(보수월액)
+      const m = toNum(monthly);
+      const r = useMemo(() => {
+        if (m <= 0) return null;
+        const pensionBase = Math.min(m, SOCIAL_INSURANCE.pension.capMonthly);
+        const pension = pensionBase * SOCIAL_INSURANCE.pension.rate;
+        const health = m * SOCIAL_INSURANCE.health.rate;
+        const longTerm = health * SOCIAL_INSURANCE.longTerm.rateOfHealth;
+        const employment = m * SOCIAL_INSURANCE.employment.rate;
+        const totalMonthly = pension + health + longTerm + employment;
+        return { pension, health, longTerm, employment, totalMonthly, capped: m > SOCIAL_INSURANCE.pension.capMonthly };
+      }, [m]);
+      const annual = r ? r.totalMonthly * 12 : 0;
+      useEffect(() => { onResult(annual); }, [annual]);
+      return (
+        <CalcCard title="4대보험 (근로자분)" color="cyan" onRemove={onRemove}>
+          <Field label="월 급여 (보수월액)" value={monthly} onChange={setMonthly} hint="비과세 제외 월 과세소득 기준" />
+          {r ? (
+            <div className="mt-2 bg-slate-50 rounded-xl p-4">
+              <ResultRow label="국민연금 (4.5%)" value={won(r.pension)} />
+              <ResultRow label="건강보험 (3.545%)" value={won(r.health)} />
+              <ResultRow label="장기요양 (건보료의 12.95%)" value={won(r.longTerm)} />
+              <ResultRow label="고용보험 (0.9%)" value={won(r.employment)} />
+              <ResultRow label="월 공제 합계" value={won(r.totalMonthly)} strong accent />
+              <ResultRow label="연 환산 (×12)" value={won(annual)} strong />
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400 mt-2">월 급여를 입력하면 결과가 표시됩니다.</p>
+          )}
+          <p className="text-xs text-slate-400 mt-2">
+            ※ 근로자 부담분만 표시(회사도 동일 수준 부담). 국민연금은 기준소득월액 상한(617만원) 적용{r && r.capped ? " — 상한 적용됨" : ""}.
+          </p>
+        </CalcCard>
+      );
+    }
+
+    // 9) 금융소득세 (이자·배당 원천징수)
+    function FinancialIncomeTaxCalc({ onRemove, onResult }) {
+      const [income, setIncome] = useState(""); // 이자·배당 소득
+      const amt = toNum(income);
+      const incomeTax = amt * FINANCIAL_INCOME_TAX_RATE;
+      const localTax = amt * FINANCIAL_LOCAL_RATE;
+      const total = incomeTax + localTax;
+      const overThreshold = amt > FINANCIAL_COMP_THRESHOLD;
+      useEffect(() => { onResult(total); }, [total]);
+      return (
+        <CalcCard title="금융소득세 (이자·배당)" color="teal" onRemove={onRemove}>
+          <Field label="연간 이자·배당 소득" value={income} onChange={setIncome} hint="예적금 이자, 주식·펀드 배당 등" />
+          <div className="mt-2 bg-slate-50 rounded-xl p-4">
+            <ResultRow label="소득세 (14%)" value={won(incomeTax)} />
+            <ResultRow label="지방소득세 (1.4%)" value={won(localTax)} />
+            <ResultRow label="원천징수 합계 (15.4%)" value={won(total)} strong accent />
+          </div>
+          {overThreshold && (
+            <p className="text-xs text-rose-500 mt-2 font-medium">
+              ⚠️ 연 2천만원 초과 → 금융소득종합과세 대상. 다른 종합소득과 합산되어 누진세율로 추가 과세될 수 있습니다.
+            </p>
+          )}
+          <p className="text-xs text-slate-400 mt-2">※ 2천만원 이하 분리과세(15.4%) 기준. 비과세·세금우대 상품 미반영.</p>
+        </CalcCard>
+      );
+    }
+
+    // ========================================
+    // 🧩 세금 종류 메타 정의
+    // ========================================
+    const TAX_TYPES = [
+      { id: "salary",      label: "근로소득세", color: "violet",  Comp: SalaryTaxCalc },
+      { id: "social",      label: "4대보험",    color: "cyan",    Comp: SocialInsuranceCalc },
+      { id: "financial",   label: "금융소득세", color: "teal",    Comp: FinancialIncomeTaxCalc },
+      { id: "income",      label: "종합소득세", color: "indigo",  Comp: IncomeTaxCalc },
+      { id: "vat",         label: "부가가치세", color: "emerald", Comp: VatCalc },
+      { id: "capital",     label: "양도소득세", color: "sky",     Comp: CapitalGainsCalc },
+      { id: "inheritance", label: "상속·증여세", color: "amber",   Comp: InheritanceGiftCalc },
+      { id: "property",    label: "재산세",     color: "rose",    Comp: PropertyTaxCalc },
+      { id: "auto",        label: "자동차세",   color: "slate",   Comp: AutoTaxCalc },
+    ];
+
+    // Tailwind CDN(JIT)은 런타임 동적 클래스를 인식 못 하므로 색상 클래스를 정적 문자열로 매핑
+    const COLOR_RING = {
+      indigo: "peer-checked:bg-indigo-500 peer-checked:border-indigo-500",
+      emerald: "peer-checked:bg-emerald-500 peer-checked:border-emerald-500",
+      sky: "peer-checked:bg-sky-500 peer-checked:border-sky-500",
+      violet: "peer-checked:bg-violet-500 peer-checked:border-violet-500",
+      cyan: "peer-checked:bg-cyan-500 peer-checked:border-cyan-500",
+      teal: "peer-checked:bg-teal-500 peer-checked:border-teal-500",
+      amber: "peer-checked:bg-amber-500 peer-checked:border-amber-500",
+      rose: "peer-checked:bg-rose-500 peer-checked:border-rose-500",
+      slate: "peer-checked:bg-slate-600 peer-checked:border-slate-600",
+    };
+
+    // 선택 시 카드 배경 오버레이 색상 (정적 클래스)
+    const COLOR_BG = {
+      indigo: "bg-indigo-50",
+      emerald: "bg-emerald-50",
+      sky: "bg-sky-50",
+      violet: "bg-violet-50",
+      cyan: "bg-cyan-50",
+      teal: "bg-teal-50",
+      amber: "bg-amber-50",
+      rose: "bg-rose-50",
+      slate: "bg-slate-100",
+    };
+
+    // 요약표 막대 색상 (정적 클래스)
+    const COLOR_BAR = {
+      indigo: "bg-indigo-500", emerald: "bg-emerald-500", sky: "bg-sky-500",
+      violet: "bg-violet-500", cyan: "bg-cyan-500", teal: "bg-teal-500",
+      amber: "bg-amber-500", rose: "bg-rose-500", slate: "bg-slate-500",
+    };
+
+    // ========================================
+    // 🔘 세금 선택 체크박스
+    // ========================================
+    function TaxSelector({ selected, onToggle }) {
+      return (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {TAX_TYPES.map((t) => {
+            const checked = selected.includes(t.id);
+            return (
+              <label key={t.id}
+                className={`relative flex items-center gap-2.5 cursor-pointer rounded-xl border-2 px-3.5 py-3 transition select-none
+                  ${checked ? "border-transparent shadow-sm" : "border-slate-200 hover:border-slate-300 bg-white"}`}
+                style={checked ? {} : {}}>
+                <input type="checkbox" className="peer sr-only" checked={checked} onChange={() => onToggle(t.id)} />
+                <span className={`w-5 h-5 rounded-md border-2 border-slate-300 flex-shrink-0 flex items-center justify-center transition
+                  ${COLOR_RING[t.color]}`}>
+                  <svg className="w-3 h-3 text-white opacity-0 peer-checked:opacity-100" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-7.5 7.5a1 1 0 01-1.4 0L3.3 9.7a1 1 0 011.4-1.4l3.3 3.3 6.8-6.8a1 1 0 011.4 0z" clipRule="evenodd" />
+                  </svg>
+                </span>
+                <span className={`text-sm font-medium ${checked ? "text-slate-900" : "text-slate-600"}`}>{t.label}</span>
+                {/* 체크 시 배경 색상 오버레이 (정적 클래스 매핑) */}
+                <span className={`absolute inset-0 rounded-xl -z-10 opacity-0 peer-checked:opacity-100 transition ${COLOR_BG[t.color]}`}></span>
+              </label>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📊 세금 합계 요약집계표
+    // ========================================
+    function SummaryTable({ activeTaxes, results }) {
+      const rows = activeTaxes.map((t) => ({ ...t, amount: results[t.id] || 0 }));
+      const grandTotal = rows.reduce((s, r) => s + r.amount, 0);
+      const maxAmount = rows.reduce((m, r) => Math.max(m, r.amount), 0);
+
+      return (
+        <Card className="mt-6 border-2 border-indigo-200">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2">
+              <span>📊</span> 세금 합계 요약
+            </h2>
+            <span className="text-xs text-slate-400">{rows.length}개 항목 합산</span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-400 border-b border-slate-200">
+                  <th className="py-2 font-medium">세금 종류</th>
+                  <th className="py-2 font-medium text-right">부담세액</th>
+                  <th className="py-2 font-medium text-right w-16 hidden sm:table-cell">비중</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const ratio = grandTotal > 0 ? r.amount / grandTotal : 0;
+                  return (
+                    <tr key={r.id} className="border-b border-slate-100">
+                      <td className="py-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${COLOR_BAR[r.color]}`}></span>
+                          <span className="text-slate-700">{r.label}</span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right tabular-nums text-slate-900 font-medium">{won(r.amount)}</td>
+                      <td className="py-2.5 text-right tabular-nums text-slate-400 text-xs hidden sm:table-cell">
+                        {(ratio * 100).toFixed(0)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-slate-300">
+                  <td className="py-3 font-bold text-slate-800">총 합계</td>
+                  <td className="py-3 text-right tabular-nums text-indigo-600 font-bold text-lg">{won(grandTotal)}</td>
+                  <td className="hidden sm:table-cell"></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* 비중 막대 그래프 */}
+          {grandTotal > 0 && (
+            <div className="mt-4">
+              <div className="flex w-full h-3 rounded-full overflow-hidden bg-slate-100">
+                {rows.filter((r) => r.amount > 0).map((r) => (
+                  <div key={r.id} className={`${COLOR_BAR[r.color]} h-full`}
+                       style={{ width: `${(r.amount / grandTotal) * 100}%` }}
+                       title={`${r.label} ${won(r.amount)}`}></div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-slate-400 mt-4 leading-relaxed">
+            ※ 각 계산기의 <strong>총 부담세액</strong>을 단순 합산한 값입니다. 항목별로 과세 기준(연세액·1회성·원천징수 등)이
+            다르므로 합계는 전체 세부담 규모를 가늠하는 <strong>참고용</strong>으로만 활용하세요.
+            (4대보험·근로소득세는 연 환산 기준)
+          </p>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      const [selected, setSelected] = useState(["salary"]);
+      const [results, setResults] = useState({}); // { id: 총 부담세액 }
+
+      const toggle = useCallback((id) => {
+        setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+      }, []);
+
+      const remove = useCallback((id) => {
+        setSelected((prev) => prev.filter((x) => x !== id));
+      }, []);
+
+      const reportResult = useCallback((id, amount) => {
+        setResults((prev) => prev[id] === amount ? prev : { ...prev, [id]: amount });
+      }, []);
+
+      const activeTaxes = TAX_TYPES.filter((t) => selected.includes(t.id));
+
+      return (
+        <div className="min-h-screen">
+          {/* 헤더 */}
+          <header className="bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+              <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
+                <span>🧮</span> 한국 세금 계산기
+              </h1>
+              <p className="text-indigo-100 mt-2 text-sm sm:text-base">
+                계산하려는 세금을 여러 개 선택하면 각 계산기가 동시에 표시되고, 하단에 합계 요약표가 나타납니다. (2024~2025년 세율 기준)
+              </p>
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+            {/* 선택기 */}
+            <Card className="mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-base font-semibold text-slate-800">세금 종류 선택</h2>
+                <span className="text-xs text-slate-400">{selected.length}개 선택됨</span>
+              </div>
+              <TaxSelector selected={selected} onToggle={toggle} />
+            </Card>
+
+            {/* 계산기 카드 그리드 */}
+            {activeTaxes.length === 0 ? (
+              <div className="text-center py-16 text-slate-400">
+                <p className="text-4xl mb-3">📋</p>
+                <p>위에서 계산할 세금 종류를 선택해 주세요.</p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {activeTaxes.map((t) => (
+                    <t.Comp key={t.id} onRemove={() => remove(t.id)} onResult={(amt) => reportResult(t.id, amt)} />
+                  ))}
+                </div>
+
+                {/* 세금 합계 요약집계표 */}
+                <SummaryTable activeTaxes={activeTaxes} results={results} />
+              </>
+            )}
+
+            {/* Disclaimer */}
+            <div className="mt-10 bg-amber-50 border border-amber-200 rounded-xl p-4 sm:p-5">
+              <p className="text-sm text-amber-800 font-semibold mb-1">⚠️ 안내 (Disclaimer)</p>
+              <p className="text-xs sm:text-sm text-amber-700 leading-relaxed">
+                본 계산기의 세율 및 계산 결과는 2024~2025년 한국 세법을 단순화하여 적용한 <strong>참고용 추정치</strong>입니다.
+                실제 세액은 각종 공제·감면, 비과세 항목, 신고 방식, 개정된 세법, 개인별 상황에 따라 크게 달라질 수 있습니다.
+                정확한 세액 산정 및 신고는 반드시 <strong>국세청 홈택스</strong> 또는 <strong>세무 전문가(세무사·회계사)</strong>의
+                도움을 받으시기 바랍니다. 본 도구의 결과를 근거로 한 의사결정에 대해 어떠한 법적 책임도 지지 않습니다.
+              </p>
+            </div>
+
+            <footer className="text-center text-xs text-slate-400 mt-8 pb-4">
+              한국 세금 계산기 · 교육/참고용 단일 페이지 앱
+            </footer>
+          </main>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

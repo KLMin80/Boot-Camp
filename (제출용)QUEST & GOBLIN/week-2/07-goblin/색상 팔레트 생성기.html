@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>색상 팔레트 생성기</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translate(-50%, 12px); }
+      to   { opacity: 1; transform: translate(-50%, 0); }
+    }
+    .toast-anim { animation: fadeInUp 0.25s ease-out; }
+    @keyframes swatchPop {
+      0%   { transform: scale(1); }
+      50%  { transform: scale(1.06); }
+      100% { transform: scale(1); }
+    }
+    .swatch-pop { animation: swatchPop 0.3s ease; }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+    // ========================================
+    // 🎨 Color Math Utilities (no external libs)
+    // ========================================
+
+    // 입력 문자열을 정규화된 6자리 HEX(#rrggbb)로 변환. 유효하지 않으면 null 반환.
+    function normalizeHex(input) {
+      if (typeof input !== 'string') return null;
+      let s = input.trim().replace(/^#/, '').toLowerCase();
+      if (/^[0-9a-f]{3}$/.test(s)) {
+        s = s.split('').map((c) => c + c).join('');
+      }
+      if (/^[0-9a-f]{6}$/.test(s)) {
+        return '#' + s;
+      }
+      return null;
+    }
+
+    function hexToRgb(hex) {
+      const h = normalizeHex(hex);
+      if (!h) return null;
+      const num = parseInt(h.slice(1), 16);
+      return {
+        r: (num >> 16) & 255,
+        g: (num >> 8) & 255,
+        b: num & 255,
+      };
+    }
+
+    function rgbToHex(r, g, b) {
+      const toHex = (v) => {
+        const c = Math.round(Math.max(0, Math.min(255, v)));
+        return c.toString(16).padStart(2, '0');
+      };
+      return '#' + toHex(r) + toHex(g) + toHex(b);
+    }
+
+    // RGB(0-255) → HSL(h:0-360, s:0-100, l:0-100)
+    function rgbToHsl(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      let h = 0, s = 0;
+      const l = (max + min) / 2;
+      const d = max - min;
+      if (d !== 0) {
+        s = d / (1 - Math.abs(2 * l - 1));
+        switch (max) {
+          case r: h = ((g - b) / d) % 6; break;
+          case g: h = (b - r) / d + 2; break;
+          default: h = (r - g) / d + 4; break;
+        }
+        h *= 60;
+        if (h < 0) h += 360;
+      }
+      return { h, s: s * 100, l: l * 100 };
+    }
+
+    // HSL → RGB(0-255)
+    function hslToRgb(h, s, l) {
+      s /= 100; l /= 100;
+      const c = (1 - Math.abs(2 * l - 1)) * s;
+      const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+      const m = l - c / 2;
+      let r = 0, g = 0, b = 0;
+      if (h < 60) { r = c; g = x; b = 0; }
+      else if (h < 120) { r = x; g = c; b = 0; }
+      else if (h < 180) { r = 0; g = c; b = x; }
+      else if (h < 240) { r = 0; g = x; b = c; }
+      else if (h < 300) { r = x; g = 0; b = c; }
+      else { r = c; g = 0; b = x; }
+      return {
+        r: (r + m) * 255,
+        g: (g + m) * 255,
+        b: (b + m) * 255,
+      };
+    }
+
+    function hexToHsl(hex) {
+      const rgb = hexToRgb(hex);
+      if (!rgb) return null;
+      return rgbToHsl(rgb.r, rgb.g, rgb.b);
+    }
+
+    function hslToHex(h, s, l) {
+      const { r, g, b } = hslToRgb(h, s, l);
+      return rgbToHex(r, g, b);
+    }
+
+    // 상대 휘도 기반으로 검정/흰색 텍스트 결정
+    function getReadableTextColor(hex) {
+      const rgb = hexToRgb(hex);
+      if (!rgb) return '#000000';
+      const toLinear = (c) => {
+        c /= 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      };
+      const lum = 0.2126 * toLinear(rgb.r) + 0.7152 * toLinear(rgb.g) + 0.0722 * toLinear(rgb.b);
+      return lum > 0.5 ? '#111111' : '#ffffff';
+    }
+
+    // 베이스 색에서 밝은 5단계 + 베이스 + 어두운 5단계 = 총 11개 생성
+    function generatePalette(baseHex) {
+      const hsl = hexToHsl(baseHex);
+      if (!hsl) return [];
+      const { h, s, l } = hsl;
+      const STEPS = 5;
+
+      const lighter = [];
+      for (let i = STEPS; i >= 1; i--) {
+        const t = i / (STEPS + 1);          // STEPS..1 → 가장 밝은 것이 먼저
+        const newL = l + (100 - l) * t;     // l → 100(흰색) 방향으로 균등 증가
+        lighter.push({ hex: hslToHex(h, s, newL), role: 'light' });
+      }
+
+      const base = { hex: normalizeHex(baseHex), role: 'base' };
+
+      const darker = [];
+      for (let i = 1; i <= STEPS; i++) {
+        const t = i / (STEPS + 1);          // 1..STEPS → 점점 어둡게
+        const newL = l - l * t;             // l → 0(검정) 방향으로 균등 감소
+        darker.push({ hex: hslToHex(h, s, newL), role: 'dark' });
+      }
+
+      return [...lighter, base, ...darker];
+    }
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+
+    function Card({ children, className = '' }) {
+      return (
+        <div className={`bg-white rounded-2xl shadow-lg ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    function Toast({ message }) {
+      if (!message) return null;
+      return (
+        <div
+          role="status"
+          aria-live="polite"
+          className="toast-anim fixed bottom-8 left-1/2 z-50 -translate-x-1/2 rounded-full
+                     bg-slate-900 px-5 py-3 text-sm font-medium text-white shadow-xl"
+        >
+          {message}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 Feature Components
+    // ========================================
+
+    function ColorControls({ hexInput, setHexInput, color, onPick, isValid }) {
+      return (
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+          {/* 네이티브 컬러 피커 */}
+          <div className="flex flex-col gap-2">
+            <label htmlFor="color-picker" className="text-sm font-semibold text-slate-700">
+              색상 선택
+            </label>
+            <input
+              id="color-picker"
+              type="color"
+              value={color}
+              onChange={(e) => onPick(e.target.value)}
+              className="h-14 w-20 cursor-pointer rounded-xl border border-slate-300 bg-white p-1"
+              aria-label="색상 선택기"
+            />
+          </div>
+
+          {/* HEX 텍스트 입력 */}
+          <div className="flex flex-1 flex-col gap-2">
+            <label htmlFor="hex-input" className="text-sm font-semibold text-slate-700">
+              HEX 코드
+            </label>
+            <input
+              id="hex-input"
+              type="text"
+              value={hexInput}
+              onChange={(e) => setHexInput(e.target.value)}
+              placeholder="#3498db"
+              spellCheck={false}
+              autoCapitalize="off"
+              className={`w-full rounded-xl border px-4 py-3 font-mono text-lg outline-none transition
+                ${isValid
+                  ? 'border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200'
+                  : 'border-red-400 focus:border-red-500 focus:ring-2 focus:ring-red-200'}`}
+              aria-invalid={!isValid}
+              aria-describedby="hex-help"
+            />
+            <p
+              id="hex-help"
+              className={`text-xs ${isValid ? 'text-slate-400' : 'text-red-500'}`}
+            >
+              {isValid
+                ? '3자리 또는 6자리 HEX 코드를 입력하세요 (예: #fff, 3498db)'
+                : '올바른 HEX 코드가 아닙니다. 예: #3498db'}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    function Swatch({ item, onCopy, isCopied }) {
+      const textColor = getReadableTextColor(item.hex);
+      const isBase = item.role === 'base';
+      const label = { light: '밝게', base: '기준', dark: '어둡게' }[item.role];
+
+      return (
+        <button
+          type="button"
+          onClick={() => onCopy(item.hex)}
+          title={`${item.hex} 복사`}
+          className={`group relative flex h-24 flex-col items-center justify-center gap-1
+                      rounded-xl transition focus:outline-none focus:ring-4 focus:ring-indigo-300
+                      ${isCopied ? 'swatch-pop' : ''}
+                      ${isBase ? 'ring-4 ring-offset-2 ring-slate-900 z-10 shadow-lg' : 'hover:scale-105'}`}
+          style={{ backgroundColor: item.hex, color: textColor }}
+          aria-label={`${item.hex} ${label} 색상, 클릭하여 복사`}
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wide opacity-80">
+            {label}
+          </span>
+          <span className="font-mono text-sm font-bold">{item.hex}</span>
+          <span className="text-[10px] opacity-0 transition group-hover:opacity-80">
+            클릭하여 복사
+          </span>
+        </button>
+      );
+    }
+
+    function Palette({ palette, copiedHex, onCopy }) {
+      if (!palette.length) {
+        return (
+          <div className="flex h-40 items-center justify-center rounded-xl border-2 border-dashed border-slate-200 text-slate-400">
+            유효한 색상을 입력하면 팔레트가 생성됩니다.
+          </div>
+        );
+      }
+      return (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6 lg:grid-cols-11">
+          {palette.map((item, idx) => (
+            <Swatch
+              key={`${item.hex}-${idx}`}
+              item={item}
+              onCopy={onCopy}
+              isCopied={copiedHex === item.hex}
+            />
+          ))}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App Component
+    // ========================================
+
+    const PRESETS = ['#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#f1c40f', '#1abc9c'];
+
+    function App() {
+      const [hexInput, setHexInput] = useState('#3498db');
+      const [color, setColor] = useState('#3498db'); // 항상 유효한 6자리 HEX
+      const [toast, setToast] = useState('');
+      const [copiedHex, setCopiedHex] = useState(null);
+      const toastTimer = useRef(null);
+      const copyTimer = useRef(null);
+
+      const normalized = useMemo(() => normalizeHex(hexInput), [hexInput]);
+      const isValid = normalized !== null;
+
+      // 유효한 입력이면 컬러 피커 값과 동기화
+      useEffect(() => {
+        if (normalized) setColor(normalized);
+      }, [normalized]);
+
+      // 컬러 피커로 선택 → 텍스트 입력도 동기화
+      const handlePick = useCallback((value) => {
+        const n = normalizeHex(value);
+        if (n) {
+          setColor(n);
+          setHexInput(n);
+        }
+      }, []);
+
+      const palette = useMemo(() => generatePalette(color), [color]);
+
+      const showToast = useCallback((msg) => {
+        setToast(msg);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(''), 1500);
+      }, []);
+
+      const handleCopy = useCallback((hex) => {
+        const flash = () => {
+          setCopiedHex(hex);
+          showToast(`${hex} 복사됨!`);
+          if (copyTimer.current) clearTimeout(copyTimer.current);
+          copyTimer.current = setTimeout(() => setCopiedHex(null), 600);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(hex).then(flash).catch(flash);
+        } else {
+          // 폴백
+          const ta = document.createElement('textarea');
+          ta.value = hex;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          document.body.removeChild(ta);
+          flash();
+        }
+      }, [showToast]);
+
+      // 언마운트 시 타이머 정리
+      useEffect(() => () => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        if (copyTimer.current) clearTimeout(copyTimer.current);
+      }, []);
+
+      return (
+        <div className="min-h-screen px-4 py-10 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-6xl">
+            {/* 헤더 */}
+            <header className="mb-8 text-center">
+              <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">
+                🎨 색상 팔레트 생성기
+              </h1>
+              <p className="mt-3 text-slate-500">
+                기준 색상 하나로 밝고 어두운 단계별 팔레트를 자동 생성하고, 클릭 한 번으로 HEX 코드를 복사하세요.
+              </p>
+            </header>
+
+            {/* 입력 카드 */}
+            <Card className="mb-6 p-6">
+              <ColorControls
+                hexInput={hexInput}
+                setHexInput={setHexInput}
+                color={color}
+                onPick={handlePick}
+                isValid={isValid}
+              />
+
+              {/* 프리셋 */}
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-slate-600">추천 색상:</span>
+                {PRESETS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => handlePick(p)}
+                    className="h-8 w-8 rounded-full border border-slate-200 shadow-sm transition hover:scale-110 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    style={{ backgroundColor: p }}
+                    aria-label={`${p} 적용`}
+                    title={p}
+                  />
+                ))}
+              </div>
+            </Card>
+
+            {/* 팔레트 카드 */}
+            <Card className="p-6">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-slate-800">생성된 팔레트</h2>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500">
+                  밝게 5 · 기준 1 · 어둡게 5
+                </span>
+              </div>
+              <Palette palette={palette} copiedHex={copiedHex} onCopy={handleCopy} />
+            </Card>
+
+            <footer className="mt-10 text-center text-xs text-slate-400">
+              모든 색상 계산은 HSL 색공간에서 브라우저 내부적으로 처리됩니다. (외부 API 미사용)
+            </footer>
+          </div>
+
+          <Toast message={toast} />
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
