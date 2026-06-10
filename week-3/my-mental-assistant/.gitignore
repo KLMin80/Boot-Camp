@@ -1,0 +1,13 @@
+# ⚠️ server.js currently contains a hardcoded OpenAI API key fallback.
+# Do NOT commit it while the key is present. Move the key to the
+# OPENAI_API_KEY environment variable and rotate the key, then you can
+# safely un-ignore this file.
+server.js
+
+# Environment / secrets
+.env
+.env.*
+
+# Node
+node_modules/
+npm-debug.log*

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Greeting API Demo</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #f5f6fa;
+      color: #2f3542;
+    }
+    h1 { margin-bottom: 0.25rem; }
+    p.sub { margin-top: 0; color: #747d8c; }
+    button {
+      font-size: 1rem;
+      padding: 0.7rem 1.4rem;
+      border: none;
+      border-radius: 8px;
+      background: #5352ed;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    button:hover { background: #3742fa; }
+    button:disabled { background: #a4b0be; cursor: default; }
+    #result {
+      margin-top: 1.5rem;
+      min-height: 3rem;
+      padding: 1rem 1.5rem;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      text-align: center;
+      max-width: 90vw;
+    }
+    #result .greeting { font-size: 1.2rem; font-weight: 600; }
+    #result .time { font-size: 0.9rem; color: #747d8c; margin-top: 0.4rem; }
+    #result .error { color: #ff4757; }
+  </style>
+</head>
+<body>
+  <h1>Greeting API Demo</h1>
+  <p class="sub">버튼을 누르면 서버에서 인사말과 현재 시각을 받아옵니다.</p>
+  <button id="greetBtn" type="button">인사 받기</button>
+  <div id="result"></div>
+
+  <script src="client.js"></script>
+</body>
+</html>

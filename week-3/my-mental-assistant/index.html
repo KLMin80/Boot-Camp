@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>마음 상담사 · 심리 상담 채팅</title>
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React + ReactDOM + Babel via CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script>
+    // Tailwind 커스텀 테마 (차분한 파스텔 팔레트)
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            calm: {
+              50: '#f5f7fb',
+              100: '#eaf0f8',
+              200: '#d6e2f0',
+              300: '#b9cde6',
+              400: '#94aed6',
+              500: '#7691c7',
+            },
+            sage: {
+              100: '#e7f1ec',
+              200: '#cfe3d8',
+              400: '#86b8a0',
+              500: '#6aa589',
+            },
+            lav: {
+              100: '#efeafa',
+              200: '#e0d6f5',
+              400: '#b9a6e6',
+              500: '#a18bd9',
+            },
+          },
+          fontFamily: {
+            sans: ['"Pretendard"', '"Apple SD Gothic Neo"', '"Malgun Gothic"', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* Tailwind으로 표현하기 어려운 부분: 부드러운 배경 그라데이션 + 커스텀 애니메이션 */
+    html, body, #root { height: 100%; }
+    body {
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #eaf0f8 0%, transparent 55%),
+        radial-gradient(1000px 700px at 110% 0%, #efeafa 0%, transparent 50%),
+        linear-gradient(180deg, #f7f9fc 0%, #eef2f9 100%);
+    }
+
+    /* 타이핑 인디케이터 점 애니메이션 */
+    @keyframes bounceDot {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+      40% { transform: translateY(-5px); opacity: 1; }
+    }
+    .dot { animation: bounceDot 1.3s infinite ease-in-out both; }
+    .dot:nth-child(1) { animation-delay: -0.30s; }
+    .dot:nth-child(2) { animation-delay: -0.15s; }
+    .dot:nth-child(3) { animation-delay: 0s; }
+
+    /* 메시지 등장 애니메이션 */
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .msg-in { animation: msgIn 0.32s ease-out both; }
+
+    /* 부드러운 스크롤바 */
+    .scroll-area::-webkit-scrollbar { width: 8px; }
+    .scroll-area::-webkit-scrollbar-thumb { background: #cdd8ea; border-radius: 9999px; }
+    .scroll-area::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+
+    // 상담사 아바타 (이니셜/이모지 기반)
+    function Avatar({ className = "" }) {
+      return (
+        <div
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full
+            bg-gradient-to-br from-sage-400 to-calm-400 text-lg shadow-sm ${className}`}
+          aria-hidden="true"
+        >
+          🌿
+        </div>
+      );
+    }
+
+    // 상태 표시 점
+    function StatusDot() {
+      return (
+        <span className="relative flex h-2.5 w-2.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sage-400 opacity-60"></span>
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sage-500"></span>
+        </span>
+      );
+    }
+
+    // 빠른 답변 칩
+    function Chip({ label, onClick, disabled }) {
+      return (
+        <button
+          type="button"
+          onClick={onClick}
+          disabled={disabled}
+          className="whitespace-nowrap rounded-full border border-calm-200 bg-white/80 px-3.5 py-1.5
+            text-sm text-calm-500 shadow-sm transition
+            hover:bg-calm-50 hover:border-calm-300 active:scale-95
+            disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {label}
+        </button>
+      );
+    }
+
+    // 채팅 말풍선
+    function Bubble({ role, children }) {
+      const isUser = role === "user";
+      return (
+        <div className={`msg-in flex items-end gap-2.5 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+          {!isUser && <Avatar />}
+          <div
+            className={[
+              "max-w-[78%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm whitespace-pre-wrap break-words",
+              isUser
+                ? "rounded-br-md bg-gradient-to-br from-calm-400 to-calm-500 text-white"
+                : "rounded-bl-md bg-white text-slate-700 border border-calm-100",
+            ].join(" ")}
+          >
+            {children}
+          </div>
+        </div>
+      );
+    }
+
+    // 타이핑 인디케이터
+    function TypingIndicator() {
+      return (
+        <div className="msg-in flex items-end gap-2.5" aria-label="상담사가 입력 중입니다">
+          <Avatar />
+          <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md border border-calm-100 bg-white px-4 py-3 shadow-sm">
+            <span className="dot h-2 w-2 rounded-full bg-calm-300"></span>
+            <span className="dot h-2 w-2 rounded-full bg-calm-300"></span>
+            <span className="dot h-2 w-2 rounded-full bg-calm-300"></span>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧠 상담사 응답 로직
+    // ----------------------------------------
+    // 응답은 이제 백엔드(POST /api/chat)를 통해 OpenAI 에서 실시간으로 받아옵니다.
+    // 따뜻한 공감, 반영적 경청, 위기 신호(자살예방상담전화 109 / 정신건강상담전화
+    // 1577-0199) 안내 등은 서버의 시스템 프롬프트에서 처리합니다.
+    // 캔드(simulated) 응답 로직은 제거되었습니다. — server.js 참고
+    // ========================================
+    // 🧩 Layout / Sub Components
+    // ========================================
+
+    function Header() {
+      return (
+        <header className="flex items-center gap-3 border-b border-calm-100 bg-white/70 px-5 py-4 backdrop-blur">
+          <Avatar className="h-11 w-11 text-xl" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h1 className="truncate text-base font-semibold text-slate-800">마음 상담사</h1>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-sage-100 px-2 py-0.5 text-xs font-medium text-sage-500">
+                <StatusDot /> 상담 중
+              </span>
+            </div>
+            <p className="truncate text-xs text-slate-400">
+              당신의 이야기를 편안하게 들어드려요 · 비밀이 보장돼요
+            </p>
+          </div>
+          <span className="hidden text-2xl sm:inline" aria-hidden="true">💬</span>
+        </header>
+      );
+    }
+
+    // 헤더 아래 얇은 안내 배너
+    function DisclaimerBar() {
+      return (
+        <div className="border-b border-lav-100 bg-lav-100/60 px-5 py-2 text-center text-[11px] leading-snug text-slate-500">
+          본 서비스는 전문적인 의료·심리 치료를 대체하지 않습니다. 위급할 땐{" "}
+          <span className="font-semibold text-lav-500">자살예방상담전화 109</span> 로 연락해 주세요.
+        </div>
+      );
+    }
+
+    function QuickReplies({ items, onPick, disabled }) {
+      return (
+        <div className="flex gap-2 overflow-x-auto px-4 pb-2 pt-1 scroll-area">
+          {items.map((q) => (
+            <Chip key={q} label={q} onClick={() => onPick(q)} disabled={disabled} />
+          ))}
+        </div>
+      );
+    }
+
+    function Composer({ value, onChange, onSend, disabled }) {
+      const handleKeyDown = (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          onSend();
+        }
+      };
+      return (
+        <div className="flex items-end gap-2 border-t border-calm-100 bg-white/80 px-4 py-3 backdrop-blur">
+          <textarea
+            rows={1}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="지금 마음을 편하게 적어보세요…"
+            aria-label="메시지 입력"
+            className="max-h-32 flex-1 resize-none rounded-2xl border border-calm-200 bg-calm-50 px-4 py-2.5
+              text-[15px] text-slate-700 placeholder-slate-400 shadow-inner outline-none transition
+              focus:border-calm-400 focus:bg-white focus:ring-2 focus:ring-calm-200"
+          />
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={disabled || !value.trim()}
+            aria-label="메시지 보내기"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full
+              bg-gradient-to-br from-calm-400 to-calm-500 text-white shadow-md transition
+              hover:brightness-105 active:scale-95
+              disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
+              <path d="M3.4 20.6 21 12 3.4 3.4 3.4 10l11 2-11 2z" />
+            </svg>
+          </button>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 Chat Page (메인 화면 · 비즈니스 로직)
+    // ========================================
+
+    const QUICK_REPLIES = ["요즘 너무 지쳐요", "불안해요", "잠이 안 와요", "괜히 우울해요", "마음이 외로워요"];
+
+    let MSG_ID = 1;
+    const nextId = () => MSG_ID++;
+
+    function ChatPage() {
+      const [messages, setMessages] = useState([
+        {
+          id: nextId(),
+          role: "assistant",
+          text:
+            "안녕하세요, 저는 마음 상담사예요. 🌿\n오늘 하루는 어떠셨나요? 어떤 이야기든 편하게 들려주세요. 제가 곁에서 함께 들을게요.",
+        },
+      ]);
+      const [input, setInput] = useState("");
+      const [typing, setTyping] = useState(false);
+
+      const scrollRef = useRef(null);
+
+      // 새 메시지/타이핑 시 자동 스크롤
+      useEffect(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      }, [messages, typing]);
+
+      const sendMessage = useCallback(
+        async (raw) => {
+          const text = (raw ?? "").trim();
+          if (!text || typing) return;
+
+          // 사용자 메시지 추가 (다음 messages 스냅샷을 만들어 백엔드로 전송)
+          const userMsg = { id: nextId(), role: "user", text };
+          let history = [];
+          setMessages((prev) => {
+            const next = [...prev, userMsg];
+            // 백엔드(OpenAI)로 보낼 대화 기록을 {role, content} 형식으로 변환
+            history = next.map((m) => ({ role: m.role, content: m.text }));
+            return next;
+          });
+          setInput("");
+          setTyping(true);
+
+          // 실제 AI 응답을 백엔드 /api/chat 에서 받아온다.
+          // 네트워크/서버 오류 시에는 부드러운 폴백 메시지를 보여준다.
+          try {
+            const res = await fetch("/api/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ messages: history }),
+            });
+            const data = await res.json().catch(() => null);
+
+            const reply =
+              res.ok && data && data.success && data.data && data.data.reply
+                ? data.data.reply
+                : (data && data.message) ||
+                  "잠시 연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.";
+
+            setMessages((prev) => [
+              ...prev,
+              { id: nextId(), role: "assistant", text: reply },
+            ]);
+          } catch (err) {
+            // 네트워크 자체가 실패한 경우 (서버 꺼짐 등)
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: nextId(),
+                role: "assistant",
+                text: "잠시 연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.",
+              },
+            ]);
+          } finally {
+            setTyping(false);
+          }
+        },
+        [typing]
+      );
+
+      return (
+        <div className="flex h-full w-full items-center justify-center p-0 sm:p-4">
+          {/* 중앙 카드 */}
+          <div className="flex h-full w-full max-w-lg flex-col overflow-hidden bg-white/60
+            shadow-xl ring-1 ring-calm-100 backdrop-blur-sm sm:h-[88vh] sm:rounded-3xl">
+
+            <Header />
+            <DisclaimerBar />
+
+            {/* 메시지 리스트 */}
+            <div
+              ref={scrollRef}
+              className="scroll-area flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-5"
+            >
+              {messages.map((m) => (
+                <Bubble key={m.id} role={m.role}>
+                  {m.text}
+                </Bubble>
+              ))}
+              {typing && <TypingIndicator />}
+            </div>
+
+            {/* 빠른 답변 칩 */}
+            <QuickReplies items={QUICK_REPLIES} onPick={sendMessage} disabled={typing} />
+
+            {/* 입력창 */}
+            <Composer
+              value={input}
+              onChange={setInput}
+              onSend={() => sendMessage(input)}
+              disabled={typing}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      return <ChatPage />;
+    }
+
+    // ========================================
+    // Render
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
