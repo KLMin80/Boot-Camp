@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Midjourney · AI 이미지 생성</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!--
+    ============================================================================
+    ℹ️ 이미지 생성 백엔드: AI Horde (https://aihorde.net) — 무료 · 가입 불필요
+    기본 키는 누구나 쓰는 "익명 공개 키(0000000000)"라 노출돼도 안전합니다.
+    다만 익명 키는 우선순위가 낮아 느릴 수 있어요. aihorde.net 에서 무료 계정을
+    만들면 개인 키로 더 빠르게 쓸 수 있습니다(설정에서 입력, localStorage 에만 저장).
+    ⚠️ 개인 키를 넣었다면 이 파일을 공개 저장소에 커밋/배포하지 마세요.
+    ============================================================================
+  -->
+
+  <style>
+    /* Tailwind 로 표현하기 어려운 부분만 커스텀 CSS 사용 */
+
+    /* 카드/이미지 등장 애니메이션 */
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(12px) scale(0.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .card-in { animation: cardIn 0.35s ease-out; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+
+    /* 로딩 시머(skeleton) */
+    @keyframes shimmer {
+      0%   { background-position: -468px 0; }
+      100% { background-position: 468px 0; }
+    }
+    .shimmer {
+      background: linear-gradient(
+        90deg,
+        rgba(148, 163, 184, 0.10) 25%,
+        rgba(148, 163, 184, 0.25) 50%,
+        rgba(148, 163, 184, 0.10) 75%
+      );
+      background-size: 936px 100%;
+      animation: shimmer 1.4s linear infinite;
+    }
+
+    /* 생성 버튼 펄스 글로우 */
+    @keyframes glowPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.45); }
+      50%      { box-shadow: 0 0 0 8px rgba(168, 85, 247, 0); }
+    }
+    .glow-pulse { animation: glowPulse 1.6s ease-in-out infinite; }
+
+    /* 로딩 점 바운스 */
+    @keyframes dotBounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+      40%           { transform: translateY(-4px); opacity: 1; }
+    }
+    .dot { animation: dotBounce 1.2s infinite ease-in-out; }
+    .dot:nth-child(2) { animation-delay: 0.15s; }
+    .dot:nth-child(3) { animation-delay: 0.3s; }
+
+    /* 커스텀 스크롤바 */
+    .nice-scroll::-webkit-scrollbar { width: 8px; }
+    .nice-scroll::-webkit-scrollbar-track { background: transparent; }
+    .nice-scroll::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.5);
+      border-radius: 9999px;
+    }
+    .nice-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(100, 116, 139, 0.7);
+    }
+  </style>
+</head>
+<body class="bg-slate-950">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================================================
+    // React Hooks 추출
+    // ========================================================================
+    const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+    // ========================================================================
+    // 상수 / 설정
+    // ========================================================================
+
+    // AI Horde 익명 공개 키(0000000000): 가입 없이 누구나 사용, 노출돼도 안전(우선순위 낮음).
+    // 설정에서 개인 키(aihorde.net 무료 가입)를 넣으면 더 빠르게 처리됩니다.
+    const ANON_API_KEY = "0000000000";
+    const DEFAULT_API_KEY = ANON_API_KEY;
+
+    const HORDE_API = "https://stablehorde.net/api/v2"; // async(제출) / check(폴링) / status(결과)
+    const CLIENT_AGENT = "MyMidjourney:1.0:bootcamp";   // AI Horde 권장 식별 헤더
+    const MODEL_LABEL = "AI Horde · Stable Diffusion";
+
+    // 생성 파라미터(고정값)
+    const GEN_STEPS = 25;
+    const GEN_CFG = 7.0;
+    const GEN_SAMPLER = "k_euler_a";
+
+    // 폴링 설정
+    const POLL_INTERVAL_MS = 3500; // check 호출 주기
+    const POLL_MAX_TRIES = 80;     // 약 4~5분 상한
+
+    const LS_GALLERY = "myMidjourney.gallery";
+    const LS_APIKEY = "myMidjourney.apiKey";
+    const LS_SETTINGS = "myMidjourney.settings";
+
+    const MAX_GALLERY = 30; // localStorage 보호용 보관 상한
+
+    // 스타일 프리셋 (개발자가 미리 정의) — 사용자 프롬프트 뒤에 styleModifier 부착
+    const STYLE_PRESETS = [
+      {
+        id: "ghibli",
+        name: "몽환 지브리풍",
+        emoji: "🌸",
+        styleModifier:
+          "dreamy Studio Ghibli style anime, soft pastel colors, warm cinematic lighting, hand-painted, whimsical, highly detailed",
+      },
+      {
+        id: "cinematic",
+        name: "시네마틱 판타지",
+        emoji: "🎬",
+        styleModifier:
+          "epic cinematic fantasy concept art, dramatic volumetric lighting, ultra detailed, artstation trending",
+      },
+      {
+        id: "watercolor",
+        name: "수채화 동화",
+        emoji: "🎨",
+        styleModifier:
+          "delicate watercolor storybook illustration, soft color washes, gentle, children's book art",
+      },
+      {
+        id: "cyberpunk",
+        name: "네온 사이버펑크",
+        emoji: "🌃",
+        styleModifier:
+          "cyberpunk neon-lit scene, vibrant neon glow, futuristic, blade runner mood, rain, cinematic",
+      },
+      {
+        id: "impressionist",
+        name: "인상주의 유화",
+        emoji: "🖼️",
+        styleModifier:
+          "impressionist oil painting, visible brush strokes, soft natural light, Monet-like, textured canvas",
+      },
+    ];
+
+    // 화면 비율 → 실제 픽셀 크기(가로×세로, 64의 배수) 매핑
+    const RATIO_OPTIONS = [
+      { id: "square_hd", label: "정사각", emoji: "⬜", hint: "1:1", width: 512, height: 512 },
+      { id: "portrait_4_3", label: "세로", emoji: "📱", hint: "3:4", width: 576, height: 768 },
+      { id: "landscape_4_3", label: "가로", emoji: "🖥️", hint: "4:3", width: 768, height: 576 },
+    ];
+
+    const COUNT_OPTIONS = [1, 2, 3, 4];
+
+    // ========================================================================
+    // 유틸: localStorage 안전 입출력
+    // ========================================================================
+    function loadLS(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw == null) return fallback;
+        return JSON.parse(raw);
+      } catch (e) {
+        return fallback;
+      }
+    }
+    function saveLS(key, value) {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch (e) {
+        /* 용량 초과 등은 무시 */
+      }
+    }
+
+    // ========================================================================
+    // 유틸: 프롬프트 조립 / 헬퍼
+    // ========================================================================
+
+    // 사용자 주제 + 선택 스타일 → 최종 영문 프롬프트
+    function buildFinalPrompt(subject, style) {
+      const base = (subject || "").trim();
+      if (!style) return base;
+      if (!base) return style.styleModifier; // 주제가 비어도 스타일만으로 미리보기
+      return `${base}, ${style.styleModifier}`;
+    }
+
+    function findStyle(id) {
+      return STYLE_PRESETS.find((s) => s.id === id) || STYLE_PRESETS[0];
+    }
+    function ratioLabel(id) {
+      const r = RATIO_OPTIONS.find((o) => o.id === id);
+      return r ? `${r.label}(${r.hint})` : id;
+    }
+    function ratioDims(id) {
+      const r = RATIO_OPTIONS.find((o) => o.id === id) || RATIO_OPTIONS[0];
+      return { width: r.width, height: r.height };
+    }
+    // 폴링 대기용 sleep (Promise 기반)
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function timeAgo(ts) {
+      const diff = Date.now() - ts;
+      const s = Math.floor(diff / 1000);
+      if (s < 60) return "방금 전";
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}분 전`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}시간 전`;
+      const d = Math.floor(h / 24);
+      return `${d}일 전`;
+    }
+
+    // ========================================================================
+    // 🎨 디자인 시스템 컴포넌트 (순수 표현용, 비즈니스 로직 없음)
+    // ========================================================================
+
+    // variant → 완전한 Tailwind 클래스 문자열 정적 매핑 (CDN JIT 대응)
+    const BTN_VARIANTS = {
+      primary:
+        "bg-gradient-to-r from-fuchsia-600 to-violet-600 hover:from-fuchsia-500 hover:to-violet-500 text-white shadow-lg shadow-violet-900/30",
+      secondary: "bg-slate-700 hover:bg-slate-600 text-slate-100",
+      danger: "bg-rose-600 hover:bg-rose-500 text-white shadow-sm",
+      ghost: "bg-transparent hover:bg-slate-800 text-slate-300",
+      outline:
+        "bg-transparent ring-1 ring-slate-600 hover:ring-slate-400 hover:bg-slate-800 text-slate-200",
+    };
+    const BTN_SIZES = {
+      sm: "px-3 py-1.5 text-xs",
+      md: "px-4 py-2 text-sm",
+      lg: "px-5 py-2.5 text-base",
+    };
+
+    function Button({
+      variant = "primary",
+      size = "md",
+      disabled,
+      onClick,
+      type = "button",
+      className = "",
+      children,
+    }) {
+      const v = BTN_VARIANTS[variant] || BTN_VARIANTS.primary;
+      const s = BTN_SIZES[size] || BTN_SIZES.md;
+      return (
+        <button
+          type={type}
+          onClick={onClick}
+          disabled={disabled}
+          className={`inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/60 focus:ring-offset-1 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed ${v} ${s} ${className}`}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    function Input({ label, type = "text", value, onChange, placeholder, className = "", ...rest }) {
+      return (
+        <label className={`block ${className}`}>
+          {label && (
+            <span className="mb-1 block text-xs font-semibold text-slate-400">{label}</span>
+          )}
+          <input
+            type={type}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 shadow-sm transition focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+            {...rest}
+          />
+        </label>
+      );
+    }
+
+    // 라벨 + 이모지 한 줄 칩 (스타일/비율 선택 공용)
+    function ChipPicker({ label, options, value, onChange, columns = "flex" }) {
+      return (
+        <div>
+          {label && (
+            <span className="mb-2 block text-xs font-semibold text-slate-400">{label}</span>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {options.map((opt) => {
+              const active = value === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => onChange(opt.id)}
+                  aria-pressed={active}
+                  className={
+                    "group flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all " +
+                    (active
+                      ? "bg-gradient-to-r from-fuchsia-600 to-violet-600 text-white shadow-md shadow-violet-900/30 ring-1 ring-fuchsia-400/50"
+                      : "bg-slate-800 text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 hover:text-white")
+                  }
+                >
+                  <span className="text-sm">{opt.emoji}</span>
+                  <span>{opt.label}</span>
+                  {opt.hint && (
+                    <span className={active ? "text-fuchsia-100/80" : "text-slate-500"}>
+                      {opt.hint}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // 숫자 세그먼트 선택 (생성 장수)
+    function CountPicker({ label, options, value, onChange }) {
+      return (
+        <div>
+          {label && (
+            <span className="mb-2 block text-xs font-semibold text-slate-400">{label}</span>
+          )}
+          <div className="inline-flex rounded-xl bg-slate-800 p-1 ring-1 ring-slate-700">
+            {options.map((n) => {
+              const active = value === n;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => onChange(n)}
+                  aria-pressed={active}
+                  className={
+                    "min-w-[40px] rounded-lg px-3 py-1.5 text-sm font-bold transition-all " +
+                    (active
+                      ? "bg-gradient-to-r from-fuchsia-600 to-violet-600 text-white shadow"
+                      : "text-slate-400 hover:text-white")
+                  }
+                >
+                  {n}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // 작은 배지
+    function Badge({ children, className = "" }) {
+      return (
+        <span
+          className={`inline-flex items-center gap-1 rounded-full bg-slate-800 px-2.5 py-1 text-[11px] font-semibold text-slate-300 ring-1 ring-slate-700 ${className}`}
+        >
+          {children}
+        </span>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 설정 패널 (API 키 덮어쓰기 + 보안 경고)
+    // ========================================================================
+    function SettingsModal({ isOpen, apiKey, setApiKey, onClose, onClearGallery, galleryCount }) {
+      const [keyDraft, setKeyDraft] = useState(apiKey);
+      const [showKey, setShowKey] = useState(false);
+      const [savedFlash, setSavedFlash] = useState(false);
+
+      useEffect(() => {
+        if (isOpen) {
+          setKeyDraft(apiKey);
+          setShowKey(false);
+          setSavedFlash(false);
+        }
+      }, [isOpen, apiKey]);
+
+      if (!isOpen) return null;
+
+      const handleSave = () => {
+        setApiKey(keyDraft.trim());
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      };
+
+      const usingDefault = !keyDraft.trim();
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            onClick={onClose}
+          />
+          <div className="card-in relative z-10 w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
+            {/* 헤더 */}
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+              <h2 className="flex items-center gap-2 text-base font-bold text-slate-100">
+                <span>⚙️</span> 설정
+              </h2>
+              <button
+                onClick={onClose}
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+                aria-label="설정 닫기"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 본문 */}
+            <div className="space-y-5 px-5 py-5">
+              <div>
+                <span className="mb-1 block text-xs font-semibold text-slate-400">
+                  AI Horde API 키
+                </span>
+                <div className="relative">
+                  <input
+                    type={showKey ? "text" : "password"}
+                    value={keyDraft}
+                    onChange={(e) => setKeyDraft(e.target.value)}
+                    placeholder="비워두면 익명 키(0000000000) 사용"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 pr-16 text-sm text-slate-100 placeholder-slate-500 shadow-sm focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((s) => !s)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-xs font-medium text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                  >
+                    {showKey ? "숨김" : "보기"}
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                  현재 {usingDefault ? "익명 공개 키" : "개인 키"}를 사용 중이에요. 요청은{" "}
+                  <code className="rounded bg-slate-800 px-1 text-fuchsia-300">apikey</code>{" "}
+                  헤더로 전송됩니다. 익명 키는 무료지만 느릴 수 있어요 —{" "}
+                  <a
+                    href="https://aihorde.net/register"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-fuchsia-300 underline"
+                  >
+                    aihorde.net
+                  </a>{" "}
+                  에서 무료 키를 받으면 더 빨라집니다.
+                </p>
+                <p className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300 ring-1 ring-amber-500/20">
+                  ⚠️ 개인 키를 입력했다면 브라우저에 노출되니 공개 저장소 커밋/배포는 피하세요. (익명
+                  키는 공개 키라 안전)
+                </p>
+              </div>
+
+              <hr className="border-slate-700" />
+
+              <div>
+                <span className="mb-1 block text-xs font-semibold text-slate-400">갤러리 관리</span>
+                <p className="mb-2 text-[11px] text-slate-500">
+                  현재 {galleryCount}개의 결과가 저장돼 있어요. 생성 이미지는 시간이 지나면 만료될 수
+                  있습니다.
+                </p>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={onClearGallery}
+                  disabled={galleryCount === 0}
+                  className="w-full"
+                >
+                  🗑️ 갤러리 전체 비우기
+                </Button>
+              </div>
+            </div>
+
+            {/* 하단 */}
+            <div className="border-t border-slate-700 px-5 py-4">
+              <Button onClick={handleSave} className="w-full">
+                {savedFlash ? "✓ 저장됨" : "API 키 저장"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 헤더
+    // ========================================================================
+    function Header({ onOpenSettings }) {
+      return (
+        <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-950/80 backdrop-blur">
+          <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
+            <div className="flex h-10 w-10 flex-none items-center justify-center rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-600 text-xl shadow-lg shadow-violet-900/40">
+              🎨
+            </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-lg font-extrabold tracking-tight text-white">
+                My Midjourney
+              </h1>
+              <p className="truncate text-xs text-slate-400">
+                스타일을 고르고 한 문장이면 AI가 그림을 그려드려요
+              </p>
+            </div>
+            <Badge className="hidden sm:inline-flex">⚡ {MODEL_LABEL}</Badge>
+            <button
+              onClick={onOpenSettings}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 ring-1 ring-slate-700 transition hover:bg-slate-700 hover:text-white"
+            >
+              ⚙️ <span className="hidden sm:inline">설정</span>
+            </button>
+          </div>
+        </header>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 생성 폼 (스타일/비율/장수 선택 + 프롬프트 입력 + 미리보기)
+    // ========================================================================
+    function GeneratorForm({
+      subject,
+      setSubject,
+      styleId,
+      setStyleId,
+      ratioId,
+      setRatioId,
+      count,
+      setCount,
+      loading,
+      onGenerate,
+    }) {
+      const textareaRef = useRef(null);
+      const style = findStyle(styleId);
+      const finalPrompt = buildFinalPrompt(subject, style);
+      const dims = ratioDims(ratioId);
+
+      // 스타일 칩 옵션 (이모지 라벨)
+      const styleOptions = STYLE_PRESETS.map((s) => ({
+        id: s.id,
+        emoji: s.emoji,
+        label: s.name,
+      }));
+
+      const onKeyDown = (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          onGenerate();
+        }
+      };
+
+      const canGenerate = subject.trim().length > 0 && !loading;
+
+      return (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-xl sm:p-6">
+          {/* 스타일 선택 */}
+          <ChipPicker
+            label="🖌️ 화풍 / 분위기 (스타일 프리셋)"
+            options={styleOptions}
+            value={styleId}
+            onChange={setStyleId}
+          />
+
+          {/* 비율 + 장수 */}
+          <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+            <ChipPicker
+              label="🖼️ 이미지 비율"
+              options={RATIO_OPTIONS}
+              value={ratioId}
+              onChange={setRatioId}
+            />
+            <CountPicker label="🔢 생성 장수" options={COUNT_OPTIONS} value={count} onChange={setCount} />
+          </div>
+
+          {/* 프롬프트 입력 */}
+          <div className="mt-5">
+            <span className="mb-2 block text-xs font-semibold text-slate-400">
+              ✍️ 무엇을 그릴까요? (주제 · 소재)
+            </span>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+              <textarea
+                ref={textareaRef}
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                onKeyDown={onKeyDown}
+                rows={2}
+                placeholder="예: 별이 쏟아지는 밤하늘 아래 호숫가에 앉은 작은 고양이  (Enter 생성 · Shift+Enter 줄바꿈)"
+                className="nice-scroll min-h-[64px] flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm leading-relaxed text-slate-100 placeholder-slate-500 shadow-sm transition focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+              />
+              <Button
+                onClick={onGenerate}
+                disabled={!canGenerate}
+                size="lg"
+                className={`flex-none sm:w-40 ${canGenerate ? "glow-pulse" : ""}`}
+              >
+                {loading ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="dot h-1.5 w-1.5 rounded-full bg-white"></span>
+                    <span className="dot h-1.5 w-1.5 rounded-full bg-white"></span>
+                    <span className="dot h-1.5 w-1.5 rounded-full bg-white"></span>
+                    <span className="ml-1">생성중</span>
+                  </span>
+                ) : (
+                  <span>✨ 이미지 생성</span>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* 최종 프롬프트 미리보기 */}
+          <details className="mt-4 rounded-xl bg-slate-800/60 p-3 text-xs ring-1 ring-slate-700">
+            <summary className="cursor-pointer select-none font-semibold text-slate-300">
+              🔍 AI Horde에 전송될 최종 프롬프트 미리보기
+            </summary>
+            <div className="mt-2 space-y-2">
+              <div>
+                <span className="text-[11px] font-semibold text-slate-500">적용 스타일</span>
+                <div className="mt-0.5 text-[11px] text-fuchsia-300">
+                  {style.emoji} {style.name}
+                </div>
+              </div>
+              <div>
+                <span className="text-[11px] font-semibold text-slate-500">최종 prompt</span>
+                <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-slate-300">
+{finalPrompt || "(주제를 입력하면 여기에 표시돼요)"}
+                </pre>
+              </div>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <Badge>크기: {dims.width}×{dims.height}</Badge>
+                <Badge>장수: {count}</Badge>
+                <Badge>steps: {GEN_STEPS}</Badge>
+                <Badge>sampler: {GEN_SAMPLER}</Badge>
+              </div>
+            </div>
+          </details>
+        </section>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 로딩 스켈레톤 (생성 중 placeholder)
+    // ========================================================================
+    function LoadingSkeleton({ count, ratioId }) {
+      const aspect =
+        ratioId === "portrait_4_3"
+          ? "aspect-[3/4]"
+          : ratioId === "landscape_4_3"
+          ? "aspect-[4/3]"
+          : "aspect-square";
+      const items = Array.from({ length: count });
+      return (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {items.map((_, i) => (
+            <div
+              key={i}
+              className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900"
+            >
+              <div className={`shimmer w-full ${aspect}`} />
+              <div className="space-y-2 p-4">
+                <div className="shimmer h-3 w-3/4 rounded" />
+                <div className="shimmer h-3 w-1/2 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 이미지 카드 (다운로드 / 다시쓰기 / 만료 fallback)
+    // ========================================================================
+    function ImageCard({ item, onReuse }) {
+      const [broken, setBroken] = useState(false);
+      const [downloading, setDownloading] = useState(false);
+      const style = STYLE_PRESETS.find((s) => s.id === item.styleId);
+
+      const aspect =
+        item.ratioId === "portrait_4_3"
+          ? "aspect-[3/4]"
+          : item.ratioId === "landscape_4_3"
+          ? "aspect-[4/3]"
+          : "aspect-square";
+
+      // 다운로드: blob → objectURL, 실패 시 새 탭 폴백
+      const handleDownload = useCallback(async () => {
+        setDownloading(true);
+        try {
+          const res = await fetch(item.url);
+          if (!res.ok) throw new Error("fetch failed");
+          const blob = await res.blob();
+          const objUrl = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = objUrl;
+          a.download = `my-midjourney-${item.id}.webp`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+        } catch (e) {
+          // CORS/만료 등으로 실패하면 새 탭으로 열기
+          window.open(item.url, "_blank", "noopener,noreferrer");
+        } finally {
+          setDownloading(false);
+        }
+      }, [item.url, item.id]);
+
+      return (
+        <div className="card-in group overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-lg transition hover:border-slate-600">
+          {/* 이미지 */}
+          <div className={`relative w-full ${aspect} bg-slate-800`}>
+            {broken ? (
+              <div className="flex h-full w-full flex-col items-center justify-center px-4 text-center">
+                <div className="text-3xl">🖼️</div>
+                <p className="mt-2 text-xs text-slate-400">이미지가 만료됐어요</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  AI Horde 이미지 링크는 약 30분 후 사라져요
+                </p>
+              </div>
+            ) : (
+              <img
+                src={item.url}
+                alt={item.subject || "생성된 이미지"}
+                loading="lazy"
+                onError={() => setBroken(true)}
+                className="h-full w-full object-cover"
+              />
+            )}
+            {/* 안전필터 경고 배지 */}
+            {item.nsfwFiltered && !broken && (
+              <div className="absolute left-2 top-2 rounded-lg bg-amber-500/90 px-2 py-1 text-[10px] font-bold text-amber-950 shadow">
+                ⚠️ 안전필터 적용
+              </div>
+            )}
+          </div>
+
+          {/* 메타 */}
+          <div className="space-y-2.5 p-4">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {style && (
+                <Badge className="!bg-violet-500/15 !text-violet-300 !ring-violet-500/20">
+                  {style.emoji} {style.name}
+                </Badge>
+              )}
+              <Badge>{ratioLabel(item.ratioId)}</Badge>
+              {typeof item.seed === "number" && <Badge>seed: {item.seed}</Badge>}
+            </div>
+
+            <p
+              className="text-sm leading-relaxed text-slate-200 line-clamp-2"
+              title={item.subject}
+            >
+              {item.subject || <span className="text-slate-500">제목 없음</span>}
+            </p>
+
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-[11px] text-slate-500">{timeAgo(item.createdAt)}</span>
+              <div className="flex gap-1.5">
+                <Button variant="outline" size="sm" onClick={() => onReuse(item)}>
+                  ↺ 다시쓰기
+                </Button>
+                <Button variant="secondary" size="sm" onClick={handleDownload} disabled={downloading}>
+                  {downloading ? "받는중…" : "⬇ 저장"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 갤러리 (결과 그리드 + 빈 상태 + 에러)
+    // ========================================================================
+    function Gallery({ gallery, loading, loadingCount, loadingRatio, loadingStatus, error, onReuse, onCancel }) {
+      const isEmpty = gallery.length === 0;
+
+      return (
+        <section className="mt-6">
+          {/* 에러 배너 */}
+          {error && (
+            <div className="fade-in mb-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+              <div className="flex items-start gap-2">
+                <span className="text-base">😢</span>
+                <div className="whitespace-pre-wrap leading-relaxed">{error}</div>
+              </div>
+            </div>
+          )}
+
+          {/* 헤더 줄 */}
+          {(!isEmpty || loading) && (
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-300">
+                🗂️ 생성 갤러리
+                {gallery.length > 0 && (
+                  <span className="ml-1.5 text-xs font-normal text-slate-500">
+                    ({gallery.length})
+                  </span>
+                )}
+              </h2>
+              <span className="text-[11px] text-slate-500">최근 {MAX_GALLERY}개까지 보관</span>
+            </div>
+          )}
+
+          {/* 로딩 상태 바 + 스켈레톤 */}
+          {loading && (
+            <div className="mb-4">
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2.5">
+                <div className="flex items-center gap-2 text-sm text-violet-200">
+                  <span className="flex gap-1">
+                    <span className="dot h-1.5 w-1.5 rounded-full bg-violet-300"></span>
+                    <span className="dot h-1.5 w-1.5 rounded-full bg-violet-300"></span>
+                    <span className="dot h-1.5 w-1.5 rounded-full bg-violet-300"></span>
+                  </span>
+                  <span className="leading-relaxed">
+                    {loadingStatus || "AI Horde 작업을 준비하고 있어요…"}
+                  </span>
+                </div>
+                <Button variant="ghost" size="sm" onClick={onCancel} className="flex-none">
+                  ✕ 취소
+                </Button>
+              </div>
+              <LoadingSkeleton count={loadingCount} ratioId={loadingRatio} />
+            </div>
+          )}
+
+          {/* 빈 상태 */}
+          {isEmpty && !loading ? (
+            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-16 text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-fuchsia-500/20 to-violet-600/20 text-3xl ring-1 ring-violet-500/20">
+                🪄
+              </div>
+              <h3 className="text-base font-bold text-slate-200">아직 만든 그림이 없어요</h3>
+              <p className="mt-1.5 max-w-sm text-sm text-slate-500">
+                위에서 마음에 드는 <span className="font-medium text-slate-400">스타일</span>을 고르고
+                <br className="hidden sm:block" /> 프롬프트를 입력해 첫 이미지를 만들어 보세요.
+              </p>
+            </div>
+          ) : (
+            !isEmpty && (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {gallery.map((item) => (
+                  <ImageCard key={item.id} item={item} onReuse={onReuse} />
+                ))}
+              </div>
+            )
+          )}
+        </section>
+      );
+    }
+
+    // ========================================================================
+    // 🚀 App (루트 컴포넌트)
+    // ========================================================================
+    function App() {
+      // 폼 상태
+      const savedSettings = loadLS(LS_SETTINGS, {});
+      const [subject, setSubject] = useState("");
+      const [styleId, setStyleId] = useState(savedSettings.styleId || STYLE_PRESETS[0].id);
+      const [ratioId, setRatioId] = useState(savedSettings.ratioId || RATIO_OPTIONS[0].id);
+      const [count, setCount] = useState(savedSettings.count || 1);
+
+      // 데이터 상태
+      const [apiKey, setApiKey] = useState(() => loadLS(LS_APIKEY, ""));
+      const [gallery, setGallery] = useState(() => loadLS(LS_GALLERY, []));
+
+      // UI 상태
+      const [loading, setLoading] = useState(false);
+      const [loadingStatus, setLoadingStatus] = useState("");
+      const [error, setError] = useState("");
+      const [settingsOpen, setSettingsOpen] = useState(false);
+      // 로딩 스켈레톤이 "요청 시점" 비율/장수를 쓰도록 스냅샷 보관
+      const [loadingMeta, setLoadingMeta] = useState({ count: 1, ratioId: "square_hd" });
+      // 생성 취소 플래그 + 진행 중 작업 id (폴링 루프에서 참조)
+      const cancelRef = useRef(false);
+      const activeJobRef = useRef(null);
+
+      const effectiveKey = (apiKey && apiKey.trim()) || DEFAULT_API_KEY;
+
+      // 영속화
+      useEffect(() => { saveLS(LS_APIKEY, apiKey); }, [apiKey]);
+      useEffect(() => { saveLS(LS_GALLERY, gallery); }, [gallery]);
+      useEffect(() => {
+        saveLS(LS_SETTINGS, { styleId, ratioId, count });
+      }, [styleId, ratioId, count]);
+
+      // AI Horde generation → 표준 카드 항목으로 변환
+      const makeItem = useCallback((gen, idx, ctx) => {
+        const seedNum = parseInt(gen?.seed, 10);
+        return {
+          id: `${ctx.stamp}-${idx}`,
+          url: gen?.img,
+          subject: ctx.subject,
+          finalPrompt: ctx.finalPrompt,
+          styleId: ctx.styleId,
+          ratioId: ctx.ratioId,
+          seed: Number.isFinite(seedNum) ? seedNum : undefined,
+          model: gen?.model,
+          nsfwFiltered: gen?.censored === true,
+          createdAt: ctx.stamp,
+        };
+      }, []);
+
+      // ----- 핵심: AI Horde 비동기 이미지 생성 (제출 → check 폴링 → status 수신) -----
+      const handleGenerate = useCallback(async () => {
+        const text = subject.trim();
+        if (!text || loading) return;
+
+        setError("");
+        setLoading(true);
+        setLoadingMeta({ count, ratioId });
+        setLoadingStatus("AI Horde에 작업을 보내는 중…");
+        cancelRef.current = false;
+        activeJobRef.current = null;
+
+        const style = findStyle(styleId);
+        const finalPrompt = buildFinalPrompt(text, style);
+        const dims = ratioDims(ratioId);
+
+        try {
+          // 1) 작업 제출 — fal 의 Authorization 과 달리 AI Horde 는 apikey 헤더 사용
+          const submitRes = await fetch(`${HORDE_API}/generate/async`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: effectiveKey,
+              "Client-Agent": CLIENT_AGENT,
+            },
+            body: JSON.stringify({
+              prompt: finalPrompt,
+              params: {
+                width: dims.width,
+                height: dims.height,
+                steps: GEN_STEPS,
+                cfg_scale: GEN_CFG,
+                sampler_name: GEN_SAMPLER,
+                n: count,
+              },
+              nsfw: false,
+              censor_nsfw: true,
+              r2: true,
+              trusted_workers: false,
+              slow_workers: true,
+            }),
+          });
+
+          if (!submitRes.ok) {
+            let msg = "";
+            try {
+              const j = await submitRes.json();
+              msg = j?.message || (j?.errors ? JSON.stringify(j.errors) : "");
+            } catch (e) {
+              /* 본문 파싱 실패는 무시 */
+            }
+            let friendly;
+            if (submitRes.status === 401) {
+              friendly = "🔑 API 키가 올바르지 않아요. ⚙️ 설정에서 키를 확인하거나 비워서 익명 키를 쓰세요.";
+            } else if (submitRes.status === 403) {
+              friendly = "🚫 요청이 거부됐어요. 잠시 후 다시 시도해 주세요.";
+            } else if (submitRes.status === 429) {
+              friendly = "⏳ 요청이 너무 잦아요(분당 제한). 잠시 후 다시 시도해 주세요.";
+            } else if (submitRes.status >= 500) {
+              friendly = "🛠️ AI Horde 서버가 점검 중이거나 일시적 문제예요. 잠시 후 다시 시도해 주세요.";
+            } else {
+              friendly = `요청에 실패했어요 (코드 ${submitRes.status}).`;
+            }
+            if (msg) friendly += `\n(상세: ${msg})`;
+            setError(friendly);
+            return;
+          }
+
+          const submit = await submitRes.json();
+          const jobId = submit?.id;
+          if (!jobId) {
+            setError("작업 ID를 받지 못했어요. 잠시 후 다시 시도해 주세요.");
+            return;
+          }
+          activeJobRef.current = jobId;
+
+          // 2) 완료까지 check 폴링 (GET — 커스텀 헤더 없이 호출해 프리플라이트 최소화)
+          let done = false;
+          for (let i = 0; i < POLL_MAX_TRIES; i++) {
+            if (cancelRef.current) return;
+            await sleep(POLL_INTERVAL_MS);
+            if (cancelRef.current) return;
+
+            let chk;
+            try {
+              const chkRes = await fetch(`${HORDE_API}/generate/check/${jobId}`);
+              chk = await chkRes.json();
+            } catch (e) {
+              continue; // 일시적 네트워크 오류는 다음 폴링에서 재시도
+            }
+
+            if (chk?.faulted) {
+              setError("😵 생성에 실패했어요(worker fault). 다시 시도해 주세요.");
+              return;
+            }
+            if (chk?.is_possible === false && i >= 1) {
+              setError("⚠️ 지금 이 설정을 처리할 작업자가 없어요. 크기를 줄이거나 잠시 후 다시 시도해 주세요.");
+              return;
+            }
+            if (chk?.done) {
+              done = true;
+              break;
+            }
+
+            // 진행 상황 표시(대기열 위치 · 예상 시간)
+            const qp = chk?.queue_position;
+            const wait = chk?.wait_time;
+            const parts = [];
+            if (typeof qp === "number" && qp > 0) parts.push(`대기열 ${qp}번째`);
+            if (typeof wait === "number" && wait > 0) parts.push(`예상 ${wait}초`);
+            setLoadingStatus(
+              (parts.length ? parts.join(" · ") : "이미지를 그리는 중") +
+                ` … (${i + 1}/${POLL_MAX_TRIES})`
+            );
+          }
+
+          if (cancelRef.current) return;
+          if (!done) {
+            setError(
+              "⌛ 시간이 너무 오래 걸려요. 익명 키는 혼잡할 수 있어요. 잠시 후 다시 시도하거나 개인 키를 사용해 보세요."
+            );
+            return;
+          }
+
+          // 3) 결과 수신
+          setLoadingStatus("이미지를 불러오는 중…");
+          const statusRes = await fetch(`${HORDE_API}/generate/status/${jobId}`);
+          const statusData = await statusRes.json();
+          if (cancelRef.current) return;
+
+          const gens = Array.isArray(statusData?.generations) ? statusData.generations : [];
+          const okGens = gens.filter((g) => g && g.img);
+
+          if (okGens.length === 0) {
+            setError("이미지를 받지 못했어요(작업자 오류 또는 안전필터). 다시 시도해 주세요.");
+            return;
+          }
+
+          const stamp = Date.now();
+          const ctx = { stamp, subject: text, finalPrompt, styleId, ratioId };
+          const newItems = okGens.map((g, idx) => makeItem(g, idx, ctx));
+
+          // 최신이 맨 앞 + 상한 유지
+          setGallery((prev) => [...newItems, ...prev].slice(0, MAX_GALLERY));
+
+          // 안전필터로 가려진 게 있으면 안내
+          if (gens.some((g) => g?.censored)) {
+            setError("ℹ️ 일부 이미지가 안전필터에 의해 가려졌어요(검은 화면일 수 있어요).");
+          }
+        } catch (err) {
+          if (!cancelRef.current) {
+            setError("🌐 네트워크 오류예요. 인터넷 연결을 확인하고 다시 시도해 주세요.");
+          }
+        } finally {
+          if (!cancelRef.current) {
+            setLoading(false);
+            setLoadingStatus("");
+          }
+          activeJobRef.current = null;
+        }
+      }, [subject, loading, styleId, ratioId, count, effectiveKey, makeItem]);
+
+      // 생성 취소 (폴링 중단 + best-effort 서버측 취소)
+      const handleCancel = useCallback(() => {
+        cancelRef.current = true;
+        const jobId = activeJobRef.current;
+        if (jobId) {
+          fetch(`${HORDE_API}/generate/status/${jobId}`, {
+            method: "DELETE",
+            headers: { apikey: effectiveKey, "Client-Agent": CLIENT_AGENT },
+          }).catch(() => {});
+        }
+        activeJobRef.current = null;
+        setLoading(false);
+        setLoadingStatus("");
+        setError("🛑 생성을 취소했어요.");
+      }, [effectiveKey]);
+
+      // 카드 → 입력창 복원
+      const handleReuse = useCallback((item) => {
+        setSubject(item.subject || "");
+        if (item.styleId) setStyleId(item.styleId);
+        if (item.ratioId) setRatioId(item.ratioId);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }, []);
+
+      const handleClearGallery = useCallback(() => {
+        if (gallery.length === 0) return;
+        const ok = window.confirm("저장된 갤러리를 모두 비울까요? 되돌릴 수 없어요.");
+        if (!ok) return;
+        setGallery([]);
+        setSettingsOpen(false);
+      }, [gallery.length]);
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100">
+          <Header onOpenSettings={() => setSettingsOpen(true)} />
+
+          <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+            <GeneratorForm
+              subject={subject}
+              setSubject={setSubject}
+              styleId={styleId}
+              setStyleId={setStyleId}
+              ratioId={ratioId}
+              setRatioId={setRatioId}
+              count={count}
+              setCount={setCount}
+              loading={loading}
+              onGenerate={handleGenerate}
+            />
+
+            <Gallery
+              gallery={gallery}
+              loading={loading}
+              loadingCount={loadingMeta.count}
+              loadingRatio={loadingMeta.ratioId}
+              loadingStatus={loadingStatus}
+              error={error}
+              onReuse={handleReuse}
+              onCancel={handleCancel}
+            />
+          </main>
+
+          <footer className="mx-auto max-w-6xl px-4 pb-10 pt-4 text-center sm:px-6">
+            <p className="text-[11px] leading-relaxed text-slate-600">
+              모델: {MODEL_LABEL} · 생성 이미지 링크는 시간이 지나면 만료될 수 있어요.
+              <br />
+              AI 생성 결과물입니다. 학습용 데모이며 키는 로컬에만 저장됩니다.
+            </p>
+          </footer>
+
+          <SettingsModal
+            isOpen={settingsOpen}
+            apiKey={apiKey}
+            setApiKey={setApiKey}
+            onClose={() => setSettingsOpen(false)}
+            onClearGallery={handleClearGallery}
+            galleryCount={gallery.length}
+          />
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // 렌더링
+    // ========================================================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

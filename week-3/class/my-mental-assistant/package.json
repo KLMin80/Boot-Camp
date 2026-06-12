@@ -1,0 +1,13 @@
+{
+  "name": "my-mental-assistant",
+  "version": "1.0.0",
+  "description": "마음 상담사 — Express 기반 심리 상담 채팅 (OpenAI 연동)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

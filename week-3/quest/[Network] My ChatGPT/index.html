@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>나만의 채팅 AI</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!--
+    ============================================================================
+    ⚠️ 보안 경고 (반드시 읽어주세요)
+    아래 DEFAULT_API_KEY 는 브라우저 코드에 그대로 노출됩니다.
+    이 파일을 GitHub 등 공개 저장소에 커밋하거나 웹에 배포하면 키가 유출됩니다.
+    오직 "로컬 학습용"으로만 사용하고, 실제 서비스에서는 백엔드 프록시를 두세요.
+    유출이 의심되면 OpenAI 대시보드에서 즉시 키를 폐기(rotate)하세요.
+    ============================================================================
+  -->
+
+  <style>
+    /* Tailwind 로 표현하기 어려운 부분만 커스텀 CSS 사용 */
+
+    /* 타이핑 인디케이터(...) 점 애니메이션 */
+    @keyframes typingBounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+      40% { transform: translateY(-4px); opacity: 1; }
+    }
+    .typing-dot {
+      animation: typingBounce 1.2s infinite ease-in-out;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.15s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+    /* 메시지 등장 애니메이션 */
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .msg-in { animation: msgIn 0.25s ease-out; }
+
+    /* 커스텀 스크롤바 */
+    .chat-scroll::-webkit-scrollbar { width: 8px; }
+    .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+    .chat-scroll::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.5);
+      border-radius: 9999px;
+    }
+    .chat-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(100, 116, 139, 0.7);
+    }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================================================
+    // React Hooks 추출
+    // ========================================================================
+    const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+    // ========================================================================
+    // 상수 / 설정
+    // ========================================================================
+
+    // 🔑 API 키는 코드에 하드코딩하지 마세요. 앱 실행 후 설정 패널에서 입력하면 됩니다(localStorage 저장).
+    const DEFAULT_API_KEY = "";
+
+    const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+    const MODEL = "gpt-4o-mini";
+
+    const LS_PROFILE = "myChatAI.profile";
+    const LS_HISTORY = "myChatAI.history";
+    const LS_APIKEY = "myChatAI.apiKey";
+
+    // 프리셋 칩 목록
+    const PERSONALITY_PRESETS = ["친절한", "츤데레", "시니컬", "열정적", "차분한", "유머러스한"];
+    const TONE_PRESETS = ["존댓말", "반말", "이모지 많이", "간결하게", "사극 말투", "다정하게"];
+    const EXPERTISE_PRESETS = ["프로그래밍", "요리", "심리상담", "역사", "운동", "여행"];
+
+    const DEFAULT_PROFILE = {
+      name: "마이루",
+      personality: "친절한",
+      tone: "존댓말",
+      expertise: "프로그래밍",
+      persona: "", // 한 줄 커스텀 페르소나 설명
+    };
+
+    // 🎭 개성 있는 캐릭터 프리셋 — 고르면 프로필 전체가 한 번에 채워짐
+    const PERSONA_PRESETS = [
+      {
+        id: "tsundere-cat", emoji: "🐱",
+        title: "츤데레 고양이 집사",
+        desc: "퉁명스럽지만 챙겨주는 집사",
+        profile: {
+          name: "냐옹집사",
+          personality: "츤데레",
+          tone: "반말 (가끔 '~냐')",
+          expertise: "생활 잡학",
+          persona: "겉으론 퉁명스럽게 툴툴대지만 속으론 사용자를 살뜰히 챙긴다. 가끔 '...딱히 널 위해서가 아니다냐.' 같은 츤데레 한마디를 덧붙인다.",
+        },
+      },
+      {
+        id: "joseon-scholar", emoji: "📜",
+        title: "조선시대 선비",
+        desc: "점잖은 사극 말투의 학자",
+        profile: {
+          name: "김선비",
+          personality: "점잖고 진중함",
+          tone: "사극 말투 (~하오, ~이옵니다)",
+          expertise: "유학·역사·고전",
+          persona: "매사를 옛 성현의 가르침에 빗대어 풀이하고 가끔 한시나 고사를 인용한다. 현대 용어도 선비답게 점잖게 설명한다.",
+        },
+      },
+      {
+        id: "space-explorer", emoji: "🚀",
+        title: "우주 탐험가",
+        desc: "호기심 넘치는 은하 개척자",
+        profile: {
+          name: "노바",
+          personality: "모험심·호기심 가득",
+          tone: "활기차게, 우주 비유 즐겨 씀",
+          expertise: "천문·우주과학",
+          persona: "모든 질문을 미지의 행성을 탐사하듯 신나게 접근한다. '자, 이번 미션은...' 같은 식으로 말하며 우주적 비유를 자주 쓴다.",
+        },
+      },
+      {
+        id: "warm-counselor", emoji: "🌿",
+        title: "다정한 심리상담사",
+        desc: "공감하며 들어주는 조언자",
+        profile: {
+          name: "마음지기",
+          personality: "공감적이고 따뜻함",
+          tone: "존댓말, 부드럽고 차분하게",
+          expertise: "심리상담·정서지원",
+          persona: "성급한 해결책보다 감정을 먼저 충분히 들어주고 공감한다. 질문을 통해 스스로 답을 찾도록 돕는다.",
+        },
+      },
+      {
+        id: "hot-trainer", emoji: "💪",
+        title: "열혈 헬스 트레이너",
+        desc: "텐션 높게 동기부여하는 코치",
+        profile: {
+          name: "근육코치",
+          personality: "열정적이고 에너지 넘침",
+          tone: "반말, 텐션 높게",
+          expertise: "운동·헬스·영양",
+          persona: "끊임없이 응원하며 동기를 불어넣는다. 핑계는 단호히 잘라내되 항상 격려로 마무리하고 '가보자고!'를 외친다.",
+        },
+      },
+      {
+        id: "detective", emoji: "🔍",
+        title: "명탐정",
+        desc: "논리로 추리하는 냉철한 탐정",
+        profile: {
+          name: "셜",
+          personality: "논리적이고 예리함",
+          tone: "간결하고 단정적으로",
+          expertise: "추리·논리적 문제해결",
+          persona: "질문을 단서로 보고 논리적으로 분해해 결론을 이끈다. '흥미롭군. 단서는 세 가지다...' 처럼 추리 과정을 드러낸다.",
+        },
+      },
+    ];
+
+    // 현재 draft 프로필과 정확히 일치하는 프리셋 id (없으면 null) → 카드 활성표시용
+    function activePersonaId(draft) {
+      const f = PERSONA_PRESETS.find((p) =>
+        p.profile.name === draft.name &&
+        p.profile.personality === draft.personality &&
+        p.profile.tone === draft.tone &&
+        p.profile.expertise === draft.expertise &&
+        p.profile.persona === draft.persona
+      );
+      return f ? f.id : null;
+    }
+
+    // ========================================================================
+    // 유틸: localStorage 안전 입출력
+    // ========================================================================
+    function loadLS(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw == null) return fallback;
+        return JSON.parse(raw);
+      } catch (e) {
+        return fallback;
+      }
+    }
+    function saveLS(key, value) {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch (e) {
+        /* 용량 초과 등은 무시 */
+      }
+    }
+
+    // ========================================================================
+    // 유틸: 프로필 → 한국어 시스템 프롬프트 조립
+    // ========================================================================
+    function buildSystemPrompt(profile) {
+      const name = (profile.name || "AI").trim();
+      const personality = (profile.personality || "친절한").trim();
+      const tone = (profile.tone || "존댓말").trim();
+      const expertise = (profile.expertise || "일반 상식").trim();
+      const persona = (profile.persona || "").trim();
+
+      let prompt =
+        `너는 "${name}"이라는 이름의 AI 어시스턴트야.\n` +
+        `- 성격: ${personality}\n` +
+        `- 말투: ${tone} 스타일로 일관되게 대답해.\n` +
+        `- 전문분야: ${expertise}. 이 분야의 질문에는 특히 깊이 있고 정확하게 답해.\n`;
+
+      if (persona) {
+        prompt += `- 추가 설정: ${persona}\n`;
+      }
+
+      prompt +=
+        `\n항상 위 성격과 말투를 유지하면서 한국어로 자연스럽게 대화해. ` +
+        `사용자가 자신을 소개하면 이름을 기억하고, 캐릭터를 끝까지 일관되게 연기해. ` +
+        `모르는 것은 솔직하게 모른다고 말해.`;
+
+      return prompt;
+    }
+
+    // 헤더에 보여줄 페르소나 한 줄 요약
+    function personaSummary(p) {
+      return `${p.personality} · ${p.tone} · ${p.expertise} 전문`;
+    }
+
+    // ========================================================================
+    // 🎨 디자인 시스템 컴포넌트 (순수 표현용, 비즈니스 로직 없음)
+    // ========================================================================
+
+    // variant → 완전한 Tailwind 클래스 문자열 정적 매핑 (CDN JIT 대응)
+    const BTN_VARIANTS = {
+      primary: "bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm",
+      secondary: "bg-slate-200 hover:bg-slate-300 text-slate-800",
+      danger: "bg-rose-500 hover:bg-rose-600 text-white shadow-sm",
+      ghost: "bg-transparent hover:bg-slate-100 text-slate-600",
+    };
+    const BTN_SIZES = {
+      sm: "px-3 py-1.5 text-sm",
+      md: "px-4 py-2 text-sm",
+      lg: "px-5 py-2.5 text-base",
+    };
+
+    function Button({ variant = "primary", size = "md", disabled, onClick, type = "button", className = "", children }) {
+      const v = BTN_VARIANTS[variant] || BTN_VARIANTS.primary;
+      const s = BTN_SIZES[size] || BTN_SIZES.md;
+      return (
+        <button
+          type={type}
+          onClick={onClick}
+          disabled={disabled}
+          className={`inline-flex items-center justify-center gap-1.5 rounded-xl font-medium transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed ${v} ${s} ${className}`}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    function Input({ label, type = "text", value, onChange, placeholder, className = "", ...rest }) {
+      return (
+        <label className={`block ${className}`}>
+          {label && <span className="mb-1 block text-xs font-semibold text-slate-600">{label}</span>}
+          <input
+            type={type}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 shadow-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            {...rest}
+          />
+        </label>
+      );
+    }
+
+    // 프리셋 선택 칩 그룹 + 직접입력 동기화
+    function ChipPicker({ label, presets, value, onChange }) {
+      const isPreset = presets.includes(value);
+      return (
+        <div>
+          <span className="mb-1.5 block text-xs font-semibold text-slate-600">{label}</span>
+          <div className="flex flex-wrap gap-1.5">
+            {presets.map((p) => {
+              const active = value === p;
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => onChange(p)}
+                  className={
+                    "rounded-full px-3 py-1 text-xs font-medium transition-colors " +
+                    (active
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : "bg-white text-slate-600 ring-1 ring-slate-300 hover:bg-indigo-50 hover:text-indigo-600")
+                  }
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+          <input
+            type="text"
+            value={isPreset ? "" : value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="직접 입력 (위 항목 외)"
+            className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700 placeholder-slate-400 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-200"
+          />
+        </div>
+      );
+    }
+
+    function Avatar({ kind, name }) {
+      if (kind === "user") {
+        return (
+          <div className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-indigo-500 text-sm font-bold text-white shadow">
+            나
+          </div>
+        );
+      }
+      const initial = (name || "AI").trim().charAt(0) || "A";
+      return (
+        <div className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-sm font-bold text-white shadow">
+          {initial}
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 메시지 버블
+    // ========================================================================
+    function MessageBubble({ role, content, aiName, isError }) {
+      const isUser = role === "user";
+
+      if (isUser) {
+        return (
+          <div className="msg-in flex items-end justify-end gap-2">
+            <div className="max-w-[78%] rounded-2xl rounded-br-md bg-indigo-600 px-4 py-2.5 text-sm leading-relaxed text-white shadow-sm whitespace-pre-wrap break-words">
+              {content}
+            </div>
+            <Avatar kind="user" />
+          </div>
+        );
+      }
+
+      // assistant
+      const bubbleColor = isError
+        ? "bg-rose-50 text-rose-700 ring-1 ring-rose-200"
+        : "bg-white text-slate-800 ring-1 ring-slate-200";
+
+      return (
+        <div className="msg-in flex items-end justify-start gap-2">
+          <Avatar kind="ai" name={aiName} />
+          <div className="max-w-[78%]">
+            <div className="mb-0.5 ml-1 text-[11px] font-semibold text-slate-400">{aiName}</div>
+            <div className={`rounded-2xl rounded-bl-md px-4 py-2.5 text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words ${bubbleColor}`}>
+              {content}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 타이핑 인디케이터 버블
+    function TypingBubble({ aiName }) {
+      return (
+        <div className="msg-in flex items-end justify-start gap-2">
+          <Avatar kind="ai" name={aiName} />
+          <div>
+            <div className="mb-0.5 ml-1 text-[11px] font-semibold text-slate-400">{aiName}</div>
+            <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200">
+              <span className="typing-dot h-2 w-2 rounded-full bg-slate-400"></span>
+              <span className="typing-dot h-2 w-2 rounded-full bg-slate-400"></span>
+              <span className="typing-dot h-2 w-2 rounded-full bg-slate-400"></span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // 🧩 프로필 & 설정 패널
+    // ========================================================================
+    function ProfilePanel({
+      profile, setProfile,
+      apiKey, setApiKey,
+      onClose, onResetChat,
+    }) {
+      // 로컬 편집 상태 (저장 버튼으로 반영)
+      const [draft, setDraft] = useState(profile);
+      const [keyDraft, setKeyDraft] = useState(apiKey);
+      const [showKey, setShowKey] = useState(false);
+      const [savedFlash, setSavedFlash] = useState(false);
+      const [tab, setTab] = useState("character"); // "character" | "detail"
+
+      // 외부 profile 변경 시 동기화
+      useEffect(() => { setDraft(profile); }, [profile]);
+      useEffect(() => { setKeyDraft(apiKey); }, [apiKey]);
+
+      const update = (field) => (val) => setDraft((d) => ({ ...d, [field]: val }));
+      const activeId = activePersonaId(draft); // draft와 일치하는 캐릭터 프리셋
+
+      const handleSave = () => {
+        setProfile(draft);
+        setApiKey(keyDraft);
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      };
+
+      return (
+        <aside className="flex h-full w-full flex-col bg-white">
+          {/* 패널 헤더 */}
+          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <h2 className="flex items-center gap-2 text-base font-bold text-slate-800">
+              <span>⚙️</span> 프로필 &amp; 설정
+            </h2>
+            <button
+              onClick={onClose}
+              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 lg:hidden"
+              aria-label="패널 닫기"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* 패널 본문 (스크롤) */}
+          <div className="chat-scroll flex-1 space-y-5 overflow-y-auto px-5 py-5">
+            {/* 🔖 탭 바: 캐릭터 프리셋 / 직접 설정 */}
+            <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+              {[
+                { id: "character", label: "🎭 캐릭터" },
+                { id: "detail", label: "🛠️ 직접 설정" },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTab(t.id)}
+                  className={
+                    "flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors " +
+                    (tab === t.id
+                      ? "bg-white text-indigo-600 shadow-sm"
+                      : "text-slate-500 hover:text-slate-700")
+                  }
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {tab === "character" ? (
+              /* 🎭 개성 있는 캐릭터 프리셋 */
+              <div>
+                <p className="mb-3 text-xs leading-relaxed text-slate-500">
+                  캐릭터를 고르면 이름·성격·말투·전문분야가 한 번에 채워져요.
+                  고른 뒤 아래 <b className="text-slate-700">저장</b>을 누르면 적용됩니다.
+                  ‘🛠️ 직접 설정’ 탭에서 더 다듬을 수도 있어요.
+                </p>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {PERSONA_PRESETS.map((p) => {
+                    const active = activeId === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setDraft((d) => ({ ...d, ...p.profile }))}
+                        className={
+                          "relative flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition " +
+                          (active
+                            ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200"
+                            : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40")
+                        }
+                      >
+                        {active && (
+                          <span className="absolute right-2 top-2 text-sm font-bold text-indigo-600">✓</span>
+                        )}
+                        <span className="text-2xl leading-none">{p.emoji}</span>
+                        <span className="text-sm font-bold leading-tight text-slate-800">{p.title}</span>
+                        <span className="text-[11px] leading-snug text-slate-500">{p.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              /* 🛠️ 직접 설정 */
+              <div className="space-y-5">
+                <Input
+                  label="AI 이름"
+                  value={draft.name}
+                  onChange={(e) => update("name")(e.target.value)}
+                  placeholder="예: 마이루"
+                />
+
+                <ChipPicker
+                  label="성격"
+                  presets={PERSONALITY_PRESETS}
+                  value={draft.personality}
+                  onChange={update("personality")}
+                />
+
+                <ChipPicker
+                  label="말투"
+                  presets={TONE_PRESETS}
+                  value={draft.tone}
+                  onChange={update("tone")}
+                />
+
+                <ChipPicker
+                  label="전문분야"
+                  presets={EXPERTISE_PRESETS}
+                  value={draft.expertise}
+                  onChange={update("expertise")}
+                />
+
+                <div>
+                  <span className="mb-1 block text-xs font-semibold text-slate-600">한 줄 페르소나 (선택)</span>
+                  <textarea
+                    value={draft.persona}
+                    onChange={(e) => update("persona")(e.target.value)}
+                    placeholder="예: 항상 비유를 들어 쉽게 설명하고, 가끔 응원의 한마디를 덧붙인다."
+                    rows={2}
+                    className="w-full resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 시스템 프롬프트 미리보기 (탭 공통) */}
+            <details className="rounded-xl bg-slate-50 p-3 text-xs ring-1 ring-slate-200">
+              <summary className="cursor-pointer select-none font-semibold text-slate-600">
+                🔍 생성될 시스템 프롬프트 미리보기
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-slate-500">
+                {buildSystemPrompt(draft)}
+              </pre>
+            </details>
+
+            <hr className="border-slate-200" />
+
+            {/* API 키 설정 */}
+            <div>
+              <span className="mb-1 block text-xs font-semibold text-slate-600">OpenAI API 키</span>
+              <div className="relative">
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={keyDraft}
+                  onChange={(e) => setKeyDraft(e.target.value)}
+                  placeholder="sk-... (비워두면 기본 키 사용)"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 pr-16 text-sm text-slate-800 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey((s) => !s)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100"
+                >
+                  {showKey ? "숨김" : "보기"}
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-amber-600">
+                ⚠️ 이 키는 브라우저에 노출됩니다. 공개 저장소 커밋/배포 금지, 로컬 학습용으로만 사용하세요.
+              </p>
+            </div>
+          </div>
+
+          {/* 패널 하단 액션 */}
+          <div className="space-y-2 border-t border-slate-200 px-5 py-4">
+            <Button onClick={handleSave} className="w-full">
+              {savedFlash ? "✓ 저장됨" : "프로필 & 키 저장"}
+            </Button>
+            <Button variant="danger" onClick={onResetChat} className="w-full">
+              🗑️ 대화 초기화 / 새 대화
+            </Button>
+          </div>
+        </aside>
+      );
+    }
+
+    // ========================================================================
+    // 📄 채팅 메인 영역
+    // ========================================================================
+    function ChatArea({ profile, apiKey, messages, setMessages, onOpenPanel }) {
+      const [input, setInput] = useState("");
+      const [loading, setLoading] = useState(false);
+      const scrollRef = useRef(null);
+      const textareaRef = useRef(null);
+
+      const aiName = profile.name || "AI";
+      const effectiveKey = (apiKey && apiKey.trim()) || DEFAULT_API_KEY;
+
+      // 새 메시지/로딩 시 자동 스크롤
+      useEffect(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }, [messages, loading]);
+
+      // textarea 높이 자동 조절
+      const autoResize = useCallback(() => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        ta.style.height = "auto";
+        ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+      }, []);
+
+      useEffect(() => { autoResize(); }, [input, autoResize]);
+
+      // OpenAI 호출
+      const sendMessage = useCallback(async () => {
+        const text = input.trim();
+        if (!text || loading) return;
+
+        const userMsg = { role: "user", content: text };
+        // 함수형 업데이트로 최신 history 확보
+        let nextHistory;
+        setMessages((prev) => {
+          nextHistory = [...prev, userMsg];
+          return nextHistory;
+        });
+        setInput("");
+        setLoading(true);
+
+        const systemPrompt = buildSystemPrompt(profile);
+
+        // OpenAI messages: 시스템 프롬프트 항상 첫번째 + 대화 history
+        const payloadMessages = [
+          { role: "system", content: systemPrompt },
+          ...nextHistory.map((m) => ({ role: m.role, content: m.content })),
+        ];
+
+        try {
+          const res = await fetch(OPENAI_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${effectiveKey}`,
+            },
+            body: JSON.stringify({
+              model: MODEL,
+              messages: payloadMessages,
+              temperature: 0.8,
+            }),
+          });
+
+          if (!res.ok) {
+            let detail = "";
+            try {
+              const errJson = await res.json();
+              detail = errJson?.error?.message || "";
+            } catch (e) { /* ignore */ }
+
+            let friendly;
+            if (res.status === 401) {
+              friendly = "⚠️ API 키가 올바르지 않아요. ⚙️ 설정에서 키를 확인해 주세요.";
+            } else if (res.status === 429) {
+              friendly = "⚠️ 요청이 너무 많거나 사용 한도를 초과했어요. 잠시 후 다시 시도해 주세요.";
+            } else if (res.status >= 500) {
+              friendly = "⚠️ OpenAI 서버에 일시적인 문제가 있어요. 잠시 후 다시 시도해 주세요.";
+            } else {
+              friendly = `⚠️ 요청에 실패했어요 (코드 ${res.status}).`;
+            }
+            if (detail) friendly += `\n(상세: ${detail})`;
+
+            setMessages((prev) => [...prev, { role: "assistant", content: friendly, isError: true }]);
+            return;
+          }
+
+          const data = await res.json();
+          const reply = data?.choices?.[0]?.message?.content?.trim();
+
+          if (!reply) {
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", content: "⚠️ 답변을 받지 못했어요. 다시 시도해 주세요.", isError: true },
+            ]);
+            return;
+          }
+
+          setMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+        } catch (err) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: "⚠️ 네트워크 오류가 발생했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.",
+              isError: true,
+            },
+          ]);
+        } finally {
+          setLoading(false);
+          // 입력창 포커스 복귀
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }
+      }, [input, loading, profile, effectiveKey, setMessages]);
+
+      // 키 입력: Enter 전송, Shift+Enter 줄바꿈
+      const onKeyDown = (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      };
+
+      const isEmpty = messages.length === 0;
+
+      return (
+        <section className="flex h-full min-w-0 flex-1 flex-col bg-slate-50">
+          {/* 채팅 헤더 */}
+          <header className="flex flex-none items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6">
+            <button
+              onClick={onOpenPanel}
+              className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 lg:hidden"
+              aria-label="설정 열기"
+            >
+              ☰
+            </button>
+            <Avatar kind="ai" name={aiName} />
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-base font-bold text-slate-800">{aiName}</h1>
+              <p className="truncate text-xs text-slate-400">{personaSummary(profile)}</p>
+            </div>
+            <button
+              onClick={onOpenPanel}
+              className="hidden items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-200 lg:inline-flex"
+            >
+              ⚙️ 설정
+            </button>
+          </header>
+
+          {/* 메시지 영역 */}
+          <div ref={scrollRef} className="chat-scroll flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+            {isEmpty && !loading ? (
+              <div className="flex h-full flex-col items-center justify-center text-center">
+                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 text-3xl shadow-lg">
+                  💬
+                </div>
+                <h3 className="text-lg font-bold text-slate-700">{aiName}와 대화를 시작해 보세요</h3>
+                <p className="mt-1 max-w-sm text-sm text-slate-400">
+                  현재 <span className="font-medium text-slate-500">{personaSummary(profile)}</span> 설정이에요.<br />
+                  왼쪽 ⚙️ 설정에서 성격·말투·전문분야를 바꿀 수 있어요.
+                </p>
+              </div>
+            ) : (
+              <div className="mx-auto flex max-w-3xl flex-col gap-4">
+                {messages.map((m, i) => (
+                  <MessageBubble
+                    key={i}
+                    role={m.role}
+                    content={m.content}
+                    aiName={aiName}
+                    isError={m.isError}
+                  />
+                ))}
+                {loading && <TypingBubble aiName={aiName} />}
+              </div>
+            )}
+          </div>
+
+          {/* 입력 영역 */}
+          <div className="flex-none border-t border-slate-200 bg-white px-4 py-3 sm:px-6">
+            <div className="mx-auto flex max-w-3xl items-end gap-2">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={onKeyDown}
+                rows={1}
+                placeholder={`${aiName}에게 메시지 보내기...  (Enter 전송 · Shift+Enter 줄바꿈)`}
+                className="chat-scroll max-h-40 flex-1 resize-none rounded-2xl border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 shadow-sm transition focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+              <Button
+                onClick={sendMessage}
+                disabled={loading || !input.trim()}
+                size="lg"
+                className="h-[44px] flex-none rounded-2xl"
+              >
+                {loading ? "전송중" : "전송"}
+              </Button>
+            </div>
+            <p className="mx-auto mt-1.5 max-w-3xl text-center text-[11px] text-slate-400">
+              모델: {MODEL} · AI는 실수할 수 있어요. 중요한 정보는 꼭 확인하세요.
+            </p>
+          </div>
+        </section>
+      );
+    }
+
+    // ========================================================================
+    // 🚀 App (루트 컴포넌트)
+    // ========================================================================
+    function App() {
+      const [profile, setProfile] = useState(() => ({
+        ...DEFAULT_PROFILE,
+        ...loadLS(LS_PROFILE, {}),
+      }));
+      const [apiKey, setApiKey] = useState(() => loadLS(LS_APIKEY, ""));
+      const [messages, setMessages] = useState(() => loadLS(LS_HISTORY, []));
+      const [panelOpen, setPanelOpen] = useState(false); // 모바일 오버레이용
+
+      // 영속화
+      useEffect(() => { saveLS(LS_PROFILE, profile); }, [profile]);
+      useEffect(() => { saveLS(LS_APIKEY, apiKey); }, [apiKey]);
+      useEffect(() => { saveLS(LS_HISTORY, messages); }, [messages]);
+
+      const resetChat = useCallback(() => {
+        if (messages.length > 0) {
+          const ok = window.confirm("대화 내용을 모두 지우고 새로 시작할까요?");
+          if (!ok) return;
+        }
+        setMessages([]);
+        setPanelOpen(false);
+      }, [messages.length]);
+
+      return (
+        <div className="flex h-screen w-screen overflow-hidden bg-slate-100">
+          {/* 데스크톱 사이드 패널 (lg 이상 고정 표시) */}
+          <div className="hidden w-80 flex-none border-r border-slate-200 lg:block xl:w-96">
+            <ProfilePanel
+              profile={profile}
+              setProfile={setProfile}
+              apiKey={apiKey}
+              setApiKey={setApiKey}
+              onClose={() => setPanelOpen(false)}
+              onResetChat={resetChat}
+            />
+          </div>
+
+          {/* 모바일 오버레이 패널 */}
+          {panelOpen && (
+            <div className="fixed inset-0 z-40 flex lg:hidden">
+              <div
+                className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+                onClick={() => setPanelOpen(false)}
+              />
+              <div className="relative z-50 flex w-[88%] max-w-sm flex-none shadow-2xl">
+                <ProfilePanel
+                  profile={profile}
+                  setProfile={setProfile}
+                  apiKey={apiKey}
+                  setApiKey={setApiKey}
+                  onClose={() => setPanelOpen(false)}
+                  onResetChat={resetChat}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 채팅 메인 */}
+          <ChatArea
+            profile={profile}
+            apiKey={apiKey}
+            messages={messages}
+            setMessages={setMessages}
+            onOpenPanel={() => setPanelOpen(true)}
+          />
+        </div>
+      );
+    }
+
+    // ========================================================================
+    // 렌더링
+    // ========================================================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
