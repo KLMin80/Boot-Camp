@@ -1,0 +1,18 @@
+{
+  "name": "about-me-qa-agent",
+  "version": "1.0.0",
+  "description": "About Me Q&A 백엔드 — 사용자 질문을 about-me-qa-bot 에이전트(Claude Agent SDK)에 전달해 답변을 돌려주는 Express 서버",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env --watch server.js"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.177",
+    "express": "^4.21.2"
+  }
+}

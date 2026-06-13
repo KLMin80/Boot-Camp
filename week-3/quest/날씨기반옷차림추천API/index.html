@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🌤️ 기온별 옷차림 추천</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @keyframes floatUp { 0% { opacity:0; transform: translateY(10px); } 100% { opacity:1; transform: translateY(0); } }
+    @keyframes pop { 0% { transform: scale(0.9); } 60% { transform: scale(1.05); } 100% { transform: scale(1); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .anim-float { animation: floatUp 0.45s cubic-bezier(0.22,1,0.36,1) both; }
+    .anim-pop { animation: pop 0.4s cubic-bezier(0.22,1,0.36,1); }
+    .spin { animation: spin 0.8s linear infinite; }
+    html { scroll-behavior: smooth; }
+    ::selection { background: rgba(59,130,246,0.25); }
+    /* 배경 그라데이션 전환을 부드럽게 */
+    #bg { transition: background 0.6s ease; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    // ========================================
+    // ⚙️ 설정 — 우리 서버만 호출 (상대경로). OpenWeather 직접 호출 ❌
+    // ========================================
+    const API = ""; // 같은 출처(서버가 이 페이지를 서빙) → "/recommend", "/outfit-table"
+
+    // 서버의 매핑표 id ↔ 화면 색상 테마. (server.js OUTFIT_TABLE 의 id 와 1:1)
+    const TIER_THEME = {
+      hot:        { bg: "from-rose-200 via-orange-200 to-amber-200",  chip: "bg-rose-500",   ring: "ring-rose-400",   soft: "bg-rose-50 border-rose-200",   text: "text-rose-700" },
+      summer:     { bg: "from-orange-200 via-amber-200 to-yellow-200", chip: "bg-orange-500", ring: "ring-orange-400", soft: "bg-orange-50 border-orange-200", text: "text-orange-700" },
+      earlySummer:{ bg: "from-amber-100 via-lime-200 to-green-200",    chip: "bg-lime-600",   ring: "ring-lime-400",   soft: "bg-lime-50 border-lime-200",     text: "text-lime-700" },
+      mild:       { bg: "from-lime-100 via-emerald-200 to-teal-200",   chip: "bg-emerald-500",ring: "ring-emerald-400",soft: "bg-emerald-50 border-emerald-200",text: "text-emerald-700" },
+      cool:       { bg: "from-teal-100 via-cyan-200 to-sky-200",       chip: "bg-teal-500",   ring: "ring-teal-400",   soft: "bg-teal-50 border-teal-200",     text: "text-teal-700" },
+      chilly:     { bg: "from-cyan-100 via-sky-200 to-blue-200",       chip: "bg-sky-500",    ring: "ring-sky-400",    soft: "bg-sky-50 border-sky-200",       text: "text-sky-700" },
+      cold:       { bg: "from-sky-100 via-blue-200 to-indigo-200",     chip: "bg-blue-600",   ring: "ring-blue-400",   soft: "bg-blue-50 border-blue-200",     text: "text-blue-700" },
+      freezing:   { bg: "from-blue-100 via-indigo-200 to-violet-200",  chip: "bg-indigo-600", ring: "ring-indigo-400", soft: "bg-indigo-50 border-indigo-200", text: "text-indigo-700" },
+    };
+    const DEFAULT_BG = "from-slate-100 via-sky-100 to-blue-100";
+    const themeOf = (id) => TIER_THEME[id] || { bg: DEFAULT_BG, chip: "bg-slate-500", ring: "ring-slate-300", soft: "bg-slate-50 border-slate-200", text: "text-slate-700" };
+
+    const iconUrl = (code, big) => `https://openweathermap.org/img/wn/${code || "01d"}@${big ? "4x" : "2x"}.png`;
+
+    const rangeText = (min, max) => {
+      if (min == null) return `${max}℃ 미만`;
+      if (max == null) return `${min}℃ 이상`;
+      return `${min} ~ ${max}℃`;
+    };
+
+    const formatTime = (iso) => {
+      try { return new Date(iso).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" }); }
+      catch { return ""; }
+    };
+
+    // ========================================
+    // 🎨 디자인 시스템 (순수 표현용 컴포넌트)
+    // ========================================
+    function Button({ children, onClick, variant = "primary", disabled, className = "", type = "button" }) {
+      const base = "inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed";
+      const styles = {
+        primary: "bg-slate-900 text-white hover:bg-slate-700 px-5 py-2.5",
+        ghost: "bg-white/70 text-slate-700 hover:bg-white border border-slate-200 px-4 py-2.5 backdrop-blur",
+      };
+      return (
+        <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${styles[variant]} ${className}`}>
+          {children}
+        </button>
+      );
+    }
+
+    function Badge({ children, className = "" }) {
+      return <span className={`inline-block rounded-full px-3 py-1 text-sm font-medium ${className}`}>{children}</span>;
+    }
+
+    function Spinner({ className = "h-5 w-5" }) {
+      return (
+        <svg className={`spin ${className}`} viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-20" />
+          <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      );
+    }
+
+    function Card({ children, className = "" }) {
+      return <div className={`rounded-3xl bg-white/80 shadow-xl shadow-slate-900/5 backdrop-blur ${className}`}>{children}</div>;
+    }
+
+    // ========================================
+    // 🔎 검색 바 — 도시 입력 + 내 위치
+    // ========================================
+    function SearchBar({ onSearchCity, onUseLocation, loading }) {
+      const [city, setCity] = useState("");
+      const submit = (e) => { e.preventDefault(); if (city.trim()) onSearchCity(city.trim()); };
+      return (
+        <form onSubmit={submit} className="flex flex-col sm:flex-row gap-2">
+          <input
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+            placeholder="도시 이름 (예: Seoul, Busan, 서울)"
+            aria-label="도시 이름"
+            className="flex-1 rounded-xl border border-slate-200 bg-white/80 px-4 py-2.5 outline-none backdrop-blur placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+          />
+          <div className="flex gap-2">
+            <Button type="submit" disabled={loading || !city.trim()} className="flex-1 sm:flex-none">
+              {loading ? <Spinner /> : "🔍"} 검색
+            </Button>
+            <Button type="button" variant="ghost" onClick={onUseLocation} disabled={loading} className="flex-1 sm:flex-none">
+              📍 내 위치
+            </Button>
+          </div>
+        </form>
+      );
+    }
+
+    // ========================================
+    // 🌡️ 현재 날씨 + 추천 카드
+    // ========================================
+    function ResultCard({ data }) {
+      const { location, weather, recommendation: rec, measuredAt } = data;
+      const theme = themeOf(rec.id);
+      return (
+        <Card className="anim-float overflow-hidden">
+          {/* 상단: 위치 + 날씨 */}
+          <div className="flex items-center justify-between gap-4 p-6 pb-2">
+            <div>
+              <div className="flex items-center gap-2 text-slate-500">
+                <span aria-hidden>📍</span>
+                <span className="font-medium">{location.name}{location.country ? `, ${location.country}` : ""}</span>
+              </div>
+              <div className="mt-1 flex items-end gap-2">
+                <span className="text-6xl font-extrabold tracking-tight text-slate-900">{Math.round(weather.temp)}°</span>
+                <span className="mb-2 text-slate-500">체감 {Math.round(weather.feelsLike)}°</span>
+              </div>
+              <p className="mt-1 text-slate-600">{weather.description || "—"}</p>
+            </div>
+            <img src={iconUrl(weather.icon, true)} alt={weather.description} width="120" height="120" className="anim-pop -my-4 drop-shadow" />
+          </div>
+
+          {/* 보조 지표 */}
+          <div className="flex flex-wrap gap-x-5 gap-y-1 px-6 pb-4 text-sm text-slate-500">
+            <span>최고 {Math.round(weather.tempMax)}° / 최저 {Math.round(weather.tempMin)}°</span>
+            {weather.humidity != null && <span>💧 습도 {weather.humidity}%</span>}
+            {weather.windSpeed != null && <span>💨 바람 {weather.windSpeed} m/s</span>}
+            {measuredAt && <span>⏱️ {formatTime(measuredAt)} 기준</span>}
+          </div>
+
+          {/* 추천: 핵심 옷차림 문구 (주인공) */}
+          <div className={`bg-gradient-to-br ${theme.bg} p-6`}>
+            <div className="flex flex-col items-center text-center">
+              <span className="text-6xl anim-pop" aria-hidden>{rec.emoji}</span>
+              {/* ⭐ 가공된 핵심 문구 — "패딩 필수", "반팔 OK" 등 */}
+              <div className="mt-2 rounded-2xl bg-white/90 px-7 py-3 shadow-lg ring-1 ring-black/5 backdrop-blur">
+                <span className="text-3xl font-black tracking-tight text-slate-900 sm:text-4xl">{rec.phrase}</span>
+              </div>
+              <p className="mt-3 font-medium text-slate-700">{rec.headline}</p>
+              <Badge className="mt-2 bg-white/60 text-slate-600">{rec.label} · {rangeText(rec.min, rec.max)}</Badge>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              {rec.items.map((it) => (
+                <Badge key={it} className="bg-white/80 text-slate-800 shadow-sm">{it}</Badge>
+              ))}
+            </div>
+
+            {rec.extras && rec.extras.length > 0 && (
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                {rec.extras.map((ex) => (
+                  <Badge key={ex} className="bg-slate-900/80 text-white">{ex}</Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 📋 매핑표 (서버의 /outfit-table 그대로 표시, 현재 구간 강조)
+    // ========================================
+    function MappingTable({ table, activeId }) {
+      if (!table || table.length === 0) return null;
+      return (
+        <Card className="anim-float p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-lg font-bold text-slate-800">🗂️ 기온 구간 → 옷차림 표</h3>
+            <span className="text-xs text-slate-400">서버 매핑표 기준</span>
+          </div>
+          <div className="space-y-2">
+            {table.map((r) => {
+              const t = themeOf(r.id);
+              const active = r.id === activeId;
+              return (
+                <div
+                  key={r.id}
+                  className={`flex items-center gap-3 rounded-2xl border p-3 transition ${active ? `${t.soft} ring-2 ${t.ring}` : "border-slate-100 bg-white/50"}`}
+                >
+                  <span className="text-2xl" aria-hidden>{r.emoji}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className={`font-extrabold ${t.text}`}>{r.phrase}</span>
+                      <span className="text-xs text-slate-400">{r.label} · {rangeText(r.min, r.max)}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {r.items.map((it) => (
+                        <span key={it} className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{it}</span>
+                      ))}
+                    </div>
+                  </div>
+                  {active && <span className={`shrink-0 self-start rounded-full ${t.chip} px-2.5 py-1 text-xs font-bold text-white`}>지금</span>}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // ⚠️ 상태 표시 (에러 / 로딩 / 비어있음)
+    // ========================================
+    function Notice({ icon, title, desc, tone = "slate" }) {
+      const tones = { slate: "bg-white/70 text-slate-600", red: "bg-red-50 text-red-700 border border-red-200" };
+      return (
+        <div className={`anim-float rounded-3xl p-8 text-center backdrop-blur ${tones[tone]}`}>
+          <div className="text-4xl">{icon}</div>
+          <p className="mt-2 font-semibold">{title}</p>
+          {desc && <p className="mt-1 text-sm opacity-80">{desc}</p>}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      const [data, setData] = useState(null);
+      const [table, setTable] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const didInit = useRef(false);
+
+      // 우리 서버의 /recommend 호출 (도시명 또는 좌표)
+      const recommend = useCallback(async (query) => {
+        setLoading(true); setError(null);
+        try {
+          const qs = new URLSearchParams(query).toString();
+          const res = await fetch(`${API}/recommend?${qs}`);
+          const json = await res.json();
+          if (!res.ok || !json.success) throw new Error(json.message || "추천을 가져오지 못했습니다.");
+          setData(json);
+        } catch (e) {
+          setError(e.message || "알 수 없는 오류가 발생했습니다.");
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      const onSearchCity = (city) => recommend({ city });
+
+      const onUseLocation = () => {
+        if (!navigator.geolocation) { setError("이 브라우저는 위치 기능을 지원하지 않습니다."); return; }
+        setLoading(true); setError(null);
+        navigator.geolocation.getCurrentPosition(
+          (pos) => recommend({ lat: pos.coords.latitude.toFixed(4), lon: pos.coords.longitude.toFixed(4) }),
+          () => { setLoading(false); setError("위치 권한이 거부되었어요. 도시 이름으로 검색해 주세요."); },
+          { timeout: 8000 }
+        );
+      };
+
+      // 최초: 매핑표 불러오고 서울 날씨로 시작
+      useEffect(() => {
+        if (didInit.current) return;
+        didInit.current = true;
+        fetch(`${API}/outfit-table`).then((r) => r.json()).then((j) => j.success && setTable(j.table)).catch(() => {});
+        recommend({ city: "Seoul" });
+      }, [recommend]);
+
+      const bg = data ? themeOf(data.recommendation.id).bg : DEFAULT_BG;
+
+      return (
+        <div id="bg" className={`min-h-screen bg-gradient-to-br ${bg}`}>
+          <div className="mx-auto max-w-2xl px-4 py-8 sm:py-12">
+            {/* 헤더 */}
+            <header className="mb-6 text-center">
+              <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">🌤️ 기온별 옷차림 추천</h1>
+              <p className="mt-2 text-slate-600">현재 기온에 딱 맞는 옷차림을 알려드려요</p>
+            </header>
+
+            {/* 검색 */}
+            <div className="mb-6">
+              <SearchBar onSearchCity={onSearchCity} onUseLocation={onUseLocation} loading={loading} />
+            </div>
+
+            {/* 본문 */}
+            <main className="space-y-6">
+              {loading && !data && <Notice icon={<Spinner className="mx-auto h-8 w-8 text-slate-400" />} title="날씨를 불러오는 중…" />}
+              {error && <Notice icon="😵" title="문제가 생겼어요" desc={error} tone="red" />}
+              {data && <ResultCard data={data} />}
+              <MappingTable table={table} activeId={data?.recommendation?.id} />
+            </main>
+
+            {/* 푸터 */}
+            <footer className="mt-8 text-center text-xs text-slate-400">
+              프런트는 우리 서버 <code className="rounded bg-slate-200/60 px-1">/recommend</code> 만 호출 ·
+              OpenWeather 키는 서버 <code className="rounded bg-slate-200/60 px-1">.env</code> 에 안전 보관
+            </footer>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

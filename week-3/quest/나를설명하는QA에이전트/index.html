@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About Me Q&A 챗봇</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .msg-in { animation: fadeInUp .25s ease both; }
+    @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+    .dot { animation: blink 1.2s infinite both; }
+    .dot:nth-child(2) { animation-delay: .2s; }
+    .dot:nth-child(3) { animation-delay: .4s; }
+    .chat-scroll::-webkit-scrollbar { width: 8px; }
+    .chat-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-slate-100 via-indigo-50 to-slate-100 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ========================================
+    // 📡 API
+    //   질문을 서버(/api/ask)로 보내면, 서버가 about-me.md + about-me-qa-bot.md(에이전트
+    //   시스템 프롬프트)를 함께 Claude에 전달하고 그 답변을 돌려준다.
+    //   모르는 정보는 에이전트 규칙에 따라 "몰라요"로 응답된다.
+    // ========================================
+    const API_BASE_URL = "/api";
+
+    async function askServer(question) {
+      let res;
+      try {
+        res = await fetch(`${API_BASE_URL}/ask`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        });
+      } catch (e) {
+        throw new Error("서버에 연결하지 못했어요. 서버가 실행 중인지 확인해 주세요. (npm start)");
+      }
+      let data = {};
+      try { data = await res.json(); } catch (e) { /* JSON 파싱 실패는 아래에서 처리 */ }
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || `요청 처리 중 오류가 발생했어요 (${res.status}).`);
+      }
+      return data.answer || "몰라요";
+    }
+
+    // 추천 질문 칩 (웰컴 메시지 + "몰라요" 응답 시 노출)
+    const SUGGESTIONS = [
+      "무슨 일 하세요?",
+      "어디 살아요?",
+      "가족이 어떻게 되나요?",
+      "요즘 관심사는?",
+      "취미가 뭐예요?",
+      "학력이 어떻게 되나요?",
+    ];
+
+    // 메시지 ID 카운터
+    let MSG_ID = 0;
+    const nextId = () => ++MSG_ID;
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+    function Avatar({ children, className = "" }) {
+      return (
+        <div
+          className={
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg shadow-sm " +
+            className
+          }
+          aria-hidden="true"
+        >
+          {children}
+        </div>
+      );
+    }
+
+    function Chip({ label, onClick, disabled }) {
+      return (
+        <button
+          type="button"
+          onClick={onClick}
+          disabled={disabled}
+          className="rounded-full border border-indigo-200 bg-white px-3 py-1.5 text-sm text-indigo-700 shadow-sm transition hover:bg-indigo-50 hover:border-indigo-300 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+        >
+          {label}
+        </button>
+      );
+    }
+
+    function TypingDots() {
+      return (
+        <div className="flex items-center gap-1 px-1 py-1" aria-label="답변 작성 중">
+          <span className="dot h-2 w-2 rounded-full bg-slate-400"></span>
+          <span className="dot h-2 w-2 rounded-full bg-slate-400"></span>
+          <span className="dot h-2 w-2 rounded-full bg-slate-400"></span>
+        </div>
+      );
+    }
+
+    // **굵게** 인라인 파싱
+    function renderInline(text) {
+      const parts = text.split("**");
+      return parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <strong key={i} className="font-semibold text-slate-900">{p}</strong>
+        ) : (
+          <span key={i}>{p}</span>
+        )
+      );
+    }
+
+    // 줄바꿈 + "- " 불릿을 구조화 렌더 (인물의 개조식 선호 반영)
+    function RichText({ text }) {
+      const lines = text.split("\n");
+      return (
+        <div className="space-y-1">
+          {lines.map((line, i) => {
+            const t = line.trim();
+            if (t === "") return <div key={i} className="h-1" />;
+            if (t.startsWith("- ")) {
+              return (
+                <div key={i} className="flex gap-2">
+                  <span className="select-none text-indigo-400">•</span>
+                  <span className="flex-1">{renderInline(t.slice(2))}</span>
+                </div>
+              );
+            }
+            return <p key={i}>{renderInline(t)}</p>;
+          })}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 Layout / Chat Components
+    // ========================================
+    function Header() {
+      return (
+        <header className="flex items-center gap-3 border-b border-slate-100 bg-white/80 px-4 py-3 backdrop-blur">
+          <Avatar className="bg-gradient-to-br from-indigo-500 to-violet-500 text-white">🧑‍💼</Avatar>
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-bold text-slate-800">About Me Q&A</h1>
+            <p className="truncate text-xs text-slate-500">
+              <span className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-400 align-middle"></span>
+              이 사람에 대해 무엇이든 물어보세요
+            </p>
+          </div>
+        </header>
+      );
+    }
+
+    function MessageBubble({ role, text, suggest, onSuggest, disabled }) {
+      const isUser = role === "user";
+      return (
+        <div className={"msg-in flex gap-2.5 " + (isUser ? "flex-row-reverse" : "")}>
+          {!isUser && (
+            <Avatar className="bg-gradient-to-br from-indigo-500 to-violet-500 text-white">🧑‍💼</Avatar>
+          )}
+          <div className={"flex max-w-[78%] flex-col gap-2 " + (isUser ? "items-end" : "items-start")}>
+            <div
+              className={
+                "rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm " +
+                (isUser
+                  ? "rounded-tr-sm bg-indigo-600 text-white"
+                  : "rounded-tl-sm border border-slate-100 bg-white text-slate-700")
+              }
+            >
+              {isUser ? <span className="whitespace-pre-wrap">{text}</span> : <RichText text={text} />}
+            </div>
+
+            {!isUser && suggest && (
+              <div className="flex flex-wrap gap-2 pt-0.5">
+                {SUGGESTIONS.map((s) => (
+                  <Chip key={s} label={s} onClick={() => onSuggest(s)} disabled={disabled} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function InputBar({ value, onChange, onSubmit, disabled }) {
+      return (
+        <form
+          onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
+          className="flex items-center gap-2 border-t border-slate-100 bg-white/80 px-3 py-3 backdrop-blur"
+        >
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="예) 무슨 일 하세요?"
+            aria-label="질문 입력"
+            className="flex-1 rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+          />
+          <button
+            type="submit"
+            disabled={disabled || !value.trim()}
+            aria-label="질문 보내기"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white shadow-sm transition hover:bg-indigo-700 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
+              <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z" />
+            </svg>
+          </button>
+        </form>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      const [messages, setMessages] = useState([
+        {
+          id: nextId(),
+          role: "bot",
+          text:
+            "안녕하세요! 👋 저는 이 분에 대해 무엇이든 답해드리는 **About Me Q&A 봇**이에요.\nabout-me.md 자료를 바탕으로 답하고, 모르는 정보는 솔직하게 **몰라요**라고 말씀드려요. 아래 버튼을 눌러보거나 직접 질문해 보세요!",
+          suggest: true,
+        },
+      ]);
+      const [input, setInput] = useState("");
+      const [typing, setTyping] = useState(false);
+      const bottomRef = useRef(null);
+
+      useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      }, [messages, typing]);
+
+      const send = useCallback((raw) => {
+        const text = (raw ?? "").trim();
+        if (!text || typing) return;
+
+        setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
+        setInput("");
+        setTyping(true);
+
+        askServer(text)
+          .then((answer) => {
+            // 모르는 정보(몰라요)일 때는 추천 질문 칩을 다시 보여준다.
+            const suggest = /몰라요/.test(answer);
+            setMessages((prev) => [...prev, { id: nextId(), role: "bot", text: answer, suggest }]);
+          })
+          .catch((err) => {
+            setMessages((prev) => [
+              ...prev,
+              { id: nextId(), role: "bot", text: `⚠️ ${err.message}`, suggest: false },
+            ]);
+          })
+          .finally(() => setTyping(false));
+      }, [typing]);
+
+      return (
+        <div className="mx-auto flex h-[100dvh] w-full flex-col bg-slate-50 sm:my-6 sm:h-[88vh] sm:max-w-lg sm:overflow-hidden sm:rounded-3xl sm:shadow-xl sm:ring-1 sm:ring-slate-200">
+          <Header />
+
+          <main
+            className="chat-scroll flex-1 space-y-4 overflow-y-auto px-4 py-5"
+            role="log"
+            aria-live="polite"
+            aria-label="대화 내용"
+          >
+            {messages.map((m) => (
+              <MessageBubble
+                key={m.id}
+                role={m.role}
+                text={m.text}
+                suggest={m.suggest}
+                onSuggest={send}
+                disabled={typing}
+              />
+            ))}
+
+            {typing && (
+              <div className="msg-in flex gap-2.5">
+                <Avatar className="bg-gradient-to-br from-indigo-500 to-violet-500 text-white">🧑‍💼</Avatar>
+                <div className="rounded-2xl rounded-tl-sm border border-slate-100 bg-white px-3 py-2 shadow-sm">
+                  <TypingDots />
+                </div>
+              </div>
+            )}
+
+            <div ref={bottomRef} />
+          </main>
+
+          <InputBar value={input} onChange={setInput} onSubmit={() => send(input)} disabled={typing} />
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

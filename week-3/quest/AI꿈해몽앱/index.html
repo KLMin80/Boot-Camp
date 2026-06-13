@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🔮 AI 꿈해몽 · 몽몽도사</title>
+
+  <!-- Tailwind (Play CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            serif: ['"Gowun Batang"', 'serif'],
+            sans: ['"Gowun Dodum"', 'system-ui', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Korean fonts: 신비로운 serif(제목) + 깔끔한 sans(본문) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&display=swap"
+    rel="stylesheet"
+  />
+
+  <!-- 카드 이미지 캡처/공유용 -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    html, body { margin: 0; }
+    body {
+      font-family: '"Gowun Dodum"', system-ui, sans-serif;
+      background: radial-gradient(125% 125% at 50% 0%, #2e1065 0%, #1e1b4b 45%, #0b0a1f 100%);
+      min-height: 100vh;
+      color: #fff;
+    }
+    /* 반짝이는 별밤 배경 */
+    .starfield {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        radial-gradient(1.5px 1.5px at 12% 22%, rgba(255,255,255,.9), transparent),
+        radial-gradient(1px 1px at 28% 64%, rgba(255,255,255,.6), transparent),
+        radial-gradient(1.6px 1.6px at 44% 14%, rgba(255,255,255,.85), transparent),
+        radial-gradient(1px 1px at 62% 48%, rgba(255,255,255,.55), transparent),
+        radial-gradient(1.4px 1.4px at 76% 26%, rgba(255,255,255,.8), transparent),
+        radial-gradient(1px 1px at 88% 70%, rgba(255,255,255,.6), transparent),
+        radial-gradient(1.2px 1.2px at 18% 84%, rgba(255,255,255,.7), transparent),
+        radial-gradient(1px 1px at 54% 88%, rgba(255,255,255,.5), transparent);
+      background-repeat: no-repeat;
+      animation: twinkle 4.5s ease-in-out infinite;
+    }
+    @keyframes twinkle { 0%,100% { opacity:.45 } 50% { opacity:1 } }
+    @keyframes float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-10px) } }
+    @keyframes fadeUp { from { opacity:0; transform: translateY(16px) } to { opacity:1; transform: translateY(0) } }
+    @keyframes glowPulse { 0%,100% { filter: drop-shadow(0 0 14px rgba(251,191,36,.35)) } 50% { filter: drop-shadow(0 0 28px rgba(251,191,36,.6)) } }
+    .anim-float { animation: float 4s ease-in-out infinite; }
+    .anim-fadeup { animation: fadeUp .6s cubic-bezier(.22,1,.36,1) both; }
+    .anim-glow { animation: glowPulse 3s ease-in-out infinite; }
+    /* textarea 포커스 시 신비로운 보랏빛 링 */
+    .dream-textarea:focus { outline: none; border-color: rgba(196,181,253,.8); box-shadow: 0 0 0 3px rgba(139,92,246,.25); }
+    ::selection { background: rgba(251,191,36,.35); }
+  </style>
+</head>
+<body>
+  <div class="starfield"></div>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+    // ========================================
+    // ⚙️ 설정 & 유틸
+    // ========================================
+    const API_BASE_URL = '/api'; // 상대경로 — localhost 하드코딩 금지
+    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+    // 꿈 예시 (클릭 시 입력창 채움)
+    const EXAMPLES = [
+      '이가 우수수 빠지는 꿈',
+      '하늘을 훨훨 나는 꿈',
+      '큰 뱀이 나를 휘감는 꿈',
+      '길에서 돈을 줍는 꿈',
+      '맑은 물이 가득 차오르는 꿈',
+      '누군가에게 쫓기는 꿈',
+    ];
+
+    // 길흉별 표현/색상 메타
+    const VERDICT_META = {
+      good:    { emoji: '🍀', tagline: '길한 기운이 흐르는 꿈', ribbonBg: 'linear-gradient(135deg,#fcd34d,#f59e0b)', ribbonText: '#4a2700' },
+      bad:     { emoji: '🌙', tagline: '조심하면 비껴가는 꿈',   ribbonBg: 'linear-gradient(135deg,#a5b4fc,#6d28d9)', ribbonText: '#ffffff' },
+      neutral: { emoji: '⚖️', tagline: '길흉이 교차하는 꿈',     ribbonBg: 'linear-gradient(135deg,#f0abfc,#9333ea)', ribbonText: '#ffffff' },
+    };
+    const metaOf = (t) => VERDICT_META[t] || VERDICT_META.neutral;
+
+    // ========================================
+    // 🎨 디자인 시스템 (순수 표현 컴포넌트)
+    // ========================================
+    function Button({ children, variant = 'primary', size = 'md', className = '', ...props }) {
+      const base =
+        'inline-flex items-center justify-center gap-2 font-semibold rounded-2xl transition-all duration-200 ' +
+        'focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent disabled:opacity-50 disabled:cursor-not-allowed active:scale-[.98]';
+      const sizes = { sm: 'px-3 py-2 text-sm', md: 'px-5 py-3 text-base', lg: 'px-6 py-4 text-lg' };
+      const variants = {
+        primary:
+          'text-indigo-950 shadow-lg shadow-amber-500/20 focus:ring-amber-300 ' +
+          'bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-400 hover:from-amber-200 hover:to-amber-300',
+        ghost:
+          'text-white/90 border border-white/20 bg-white/5 hover:bg-white/10 focus:ring-white/30 backdrop-blur',
+        violet:
+          'text-white shadow-lg shadow-violet-700/30 focus:ring-violet-300 ' +
+          'bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-400 hover:to-fuchsia-400',
+      };
+      return (
+        <button className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} {...props}>
+          {children}
+        </button>
+      );
+    }
+
+    function Spinner({ className = '' }) {
+      return (
+        <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" width="20" height="20" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+          <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      );
+    }
+
+    function Toast({ message }) {
+      if (!message) return null;
+      return (
+        <div className="fixed left-1/2 bottom-6 -translate-x-1/2 z-50 anim-fadeup" role="status">
+          <div className="px-4 py-2.5 rounded-2xl bg-black/70 border border-white/15 text-white text-sm shadow-xl backdrop-blur">
+            {message}
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🔮 행운지수 게이지 (SVG 링 + 중앙 숫자)
+    // ========================================
+    function LuckGauge({ score }) {
+      const size = 132, stroke = 12, cx = size / 2, cy = size / 2;
+      const r = (size - stroke) / 2;
+      const c = 2 * Math.PI * r;
+      const pct = clamp(score, 0, 100);
+
+      // 마운트 후 0 → 점수로 차오르는 애니메이션
+      const [shown, setShown] = useState(0);
+      useEffect(() => {
+        const id = requestAnimationFrame(() => setShown(pct));
+        return () => cancelAnimationFrame(id);
+      }, [pct]);
+      const offset = c - (shown / 100) * c;
+
+      const band = pct >= 75 ? 'gold' : pct >= 50 ? 'violet' : 'rose';
+      const grad = { gold: ['#fde68a', '#f59e0b'], violet: ['#c4b5fd', '#8b5cf6'], rose: ['#fecdd3', '#fb7185'] }[band];
+      const gid = 'lg-' + band;
+
+      return (
+        <div className="relative anim-glow" style={{ width: size, height: size }}>
+          <svg width={size} height={size}>
+            <defs>
+              <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor={grad[0]} />
+                <stop offset="100%" stopColor={grad[1]} />
+              </linearGradient>
+            </defs>
+            <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={stroke} />
+            <circle
+              cx={cx} cy={cy} r={r} fill="none"
+              stroke={`url(#${gid})`} strokeWidth={stroke} strokeLinecap="round"
+              strokeDasharray={c} strokeDashoffset={offset}
+              transform={`rotate(-90 ${cx} ${cy})`}
+              style={{ transition: 'stroke-dashoffset 1.1s cubic-bezier(.22,1,.36,1)' }}
+            />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <span className="font-serif text-4xl font-bold text-white leading-none">{pct}</span>
+            <span className="text-[11px] tracking-widest text-white/55 mt-1">／ 100</span>
+          </div>
+        </div>
+      );
+    }
+
+    // 결과 카드 안의 번호 섹션
+    function Section({ index, icon, title, children }) {
+      return (
+        <div
+          className="rounded-2xl p-4 sm:p-5"
+          style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)' }}
+        >
+          <div className="flex items-center gap-2.5 mb-2">
+            <span
+              className="flex items-center justify-center w-7 h-7 rounded-full text-sm font-bold shrink-0"
+              style={{ background: 'linear-gradient(135deg,#fde68a,#f59e0b)', color: '#3b1d00' }}
+            >
+              {index}
+            </span>
+            <h3 className="font-serif text-base sm:text-lg font-bold tracking-wide" style={{ color: '#fde9b8' }}>
+              {icon} {title}
+            </h3>
+          </div>
+          <div className="text-[15px] leading-relaxed text-white/90 pl-9">{children}</div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🪄 결과 카드 (이 노드를 그대로 이미지로 캡처해 공유)
+    // ========================================
+    function ResultCard({ result, demo, cardRef }) {
+      const meta = metaOf(result.verdictType);
+      const dateStr = new Date().toLocaleDateString('ko-KR', {
+        year: 'numeric', month: 'long', day: 'numeric', weekday: 'short',
+      });
+
+      return (
+        <div
+          ref={cardRef}
+          className="relative overflow-hidden rounded-[28px] p-6 sm:p-8 anim-fadeup"
+          style={{
+            background: 'linear-gradient(160deg,#1e1b4b 0%,#4c1d95 55%,#831843 100%)',
+            boxShadow: '0 30px 80px -20px rgba(76,29,149,.6), inset 0 1px 0 rgba(255,255,255,.08)',
+          }}
+        >
+          {/* 장식용 별/달 */}
+          <div className="absolute top-4 right-5 text-2xl opacity-70 select-none" aria-hidden="true">✨</div>
+          <div className="absolute bottom-5 left-5 text-xl opacity-50 select-none" aria-hidden="true">⭐</div>
+          <div
+            className="absolute -top-16 -left-16 w-48 h-48 rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(251,191,36,.22), transparent 70%)' }}
+            aria-hidden="true"
+          />
+
+          {/* 브랜드 + 날짜 */}
+          <div className="relative flex items-center justify-between mb-5">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🔮</span>
+              <div className="leading-tight">
+                <div className="font-serif text-lg font-bold text-white">AI 꿈해몽</div>
+                <div className="text-[11px] tracking-[0.2em] text-amber-200/70">몽몽도사의 풀이</div>
+              </div>
+            </div>
+            <span className="text-[11px] text-white/50">{dateStr}</span>
+          </div>
+
+          {/* 히어로: 행운지수 + 길흉 */}
+          <div className="relative flex flex-col sm:flex-row items-center gap-5 mb-6">
+            <LuckGauge score={result.luckScore} />
+            <div className="text-center sm:text-left">
+              <div className="text-xs tracking-[0.25em] text-amber-200/70 mb-2">오늘의 행운지수</div>
+              <span
+                className="inline-flex items-center gap-2 px-5 py-2 rounded-full font-serif font-bold text-lg shadow-md"
+                style={{ background: meta.ribbonBg, color: meta.ribbonText }}
+              >
+                {meta.emoji} {result.verdict}
+              </span>
+              <p className="mt-2.5 text-sm text-white/70">{meta.tagline}</p>
+            </div>
+          </div>
+
+          {/* 본문: 반드시 1)요약 2)키워드 3)길흉 4)조언 순서 */}
+          <div className="relative space-y-3">
+            <Section index="1" icon="📝" title="한줄요약">
+              <p className="font-serif text-[17px] text-white">{result.summary}</p>
+            </Section>
+
+            <Section index="2" icon="🔑" title="상징 키워드">
+              <div className="flex flex-wrap gap-2">
+                {result.keywords.map((k, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
+                    style={{ background: 'rgba(251,191,36,0.14)', border: '1px solid rgba(251,191,36,0.4)', color: '#fde68a' }}
+                  >
+                    #{k}
+                  </span>
+                ))}
+              </div>
+            </Section>
+
+            <Section index="3" icon="⚖️" title="길몽 · 흉몽">
+              <div className="flex items-start gap-2.5">
+                <span
+                  className="inline-flex items-center shrink-0 px-2.5 py-0.5 rounded-lg text-sm font-bold"
+                  style={{ background: meta.ribbonBg, color: meta.ribbonText }}
+                >
+                  {result.verdict}
+                </span>
+                <span className="text-white/85">{result.verdictReason}</span>
+              </div>
+            </Section>
+
+            <Section index="4" icon="🌟" title="오늘의 조언">
+              <p className="text-white">{result.advice}</p>
+            </Section>
+          </div>
+
+          {/* 푸터 */}
+          <div
+            className="relative mt-6 pt-4 flex items-center justify-between"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}
+          >
+            <span className="text-[11px] text-white/45">🔮 AI 꿈해몽 · 몽몽도사</span>
+            <span className="text-[11px] text-amber-200/60">#오늘의꿈 #해몽 #행운지수</span>
+          </div>
+
+          {demo && (
+            <div className="relative mt-3 text-center text-[11px] text-amber-200/60">
+              ※ 데모 모드 결과 — 서버에 OPENAI_API_KEY 설정 시 AI가 직접 해몽해요
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 메인 앱
+    // ========================================
+    function DreamApp() {
+      const [dream, setDream] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [busy, setBusy] = useState(false); // 캡처/공유 중
+      const [error, setError] = useState(null);
+      const [result, setResult] = useState(null);
+      const [demo, setDemo] = useState(false);
+      const [toastMsg, setToastMsg] = useState('');
+
+      const cardRef = useRef(null);
+      const toastTimer = useRef(null);
+
+      const toast = useCallback((m) => {
+        setToastMsg(m);
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToastMsg(''), 2600);
+      }, []);
+
+      // --- 해몽 요청 ---
+      async function handleSubmit() {
+        const text = dream.trim();
+        if (text.length < 4) {
+          setError('꿈 내용을 조금만 더 자세히 적어주세요. (최소 4자)');
+          return;
+        }
+        setLoading(true);
+        setError(null);
+        try {
+          const res = await fetch(`${API_BASE_URL}/interpret`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dream: text }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.success) throw new Error(data.message || '해몽에 실패했어요.');
+          setResult(data.result);
+          setDemo(!!data.demo);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        } catch (e) {
+          setError(e.message || '네트워크 오류가 발생했어요.');
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function handleReset() {
+        setResult(null);
+        setError(null);
+        setDream('');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+
+      function handleKeyDown(e) {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          handleSubmit();
+        }
+      }
+
+      // --- 카드 → 캔버스 캡처 ---
+      async function captureCard() {
+        const node = cardRef.current;
+        if (!node || !window.html2canvas) return null;
+        if (document.fonts && document.fonts.ready) {
+          try { await document.fonts.ready; } catch (_) {}
+        }
+        return window.html2canvas(node, {
+          backgroundColor: '#1e1b4b',
+          scale: 2,
+          useCORS: true,
+          logging: false,
+        });
+      }
+      const canvasToBlob = (canvas) =>
+        new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+
+      // --- 이미지 저장 ---
+      async function handleSave() {
+        if (busy) return;
+        try {
+          setBusy(true);
+          const canvas = await captureCard();
+          if (!canvas) throw new Error('이 브라우저에서는 캡처를 지원하지 않아요.');
+          const blob = await canvasToBlob(canvas);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `꿈해몽_행운지수${result.luckScore}점.png`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          toast('이미지를 저장했어요! 📸');
+        } catch (e) {
+          toast(e.message || '저장에 실패했어요.');
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      // --- 공유 (Web Share API → 폴백: 저장) ---
+      async function handleShare() {
+        if (busy) return;
+        try {
+          setBusy(true);
+          const canvas = await captureCard();
+          if (!canvas) throw new Error('이 브라우저에서는 캡처를 지원하지 않아요.');
+          const blob = await canvasToBlob(canvas);
+          const file = new File([blob], `꿈해몽_${result.luckScore}점.png`, { type: 'image/png' });
+          const shareData = {
+            files: [file],
+            title: 'AI 꿈해몽 결과',
+            text: `오늘의 행운지수 ${result.luckScore}점! 🔮 "${result.summary}"`,
+          };
+          if (navigator.canShare && navigator.canShare(shareData)) {
+            await navigator.share(shareData);
+          } else {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = file.name;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            toast('공유가 지원되지 않아 이미지로 저장했어요 📸');
+          }
+        } catch (e) {
+          if (e && e.name !== 'AbortError') toast('공유에 실패했어요.');
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      return (
+        <div className="relative min-h-screen px-4 py-8 sm:py-12">
+          <div className="mx-auto w-full max-w-md">
+            {/* 헤더 */}
+            <header className="text-center mb-8">
+              <div className="text-6xl anim-float inline-block" aria-hidden="true">🔮</div>
+              <h1 className="font-serif text-3xl sm:text-4xl font-bold mt-3 tracking-tight">
+                AI 꿈해몽
+              </h1>
+              <p className="mt-2 text-white/70 text-sm leading-relaxed">
+                신비로운 도사 <span className="text-amber-200 font-semibold">몽몽도사</span>가
+                <br className="sm:hidden" /> 당신의 꿈을 풀이해 드려요 ✨
+              </p>
+            </header>
+
+            {!result ? (
+              // ===== 입력 화면 =====
+              <section className="anim-fadeup">
+                <div
+                  className="rounded-3xl p-5 sm:p-6"
+                  style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)' }}
+                >
+                  <label htmlFor="dream" className="block font-serif text-lg text-amber-100 mb-3">
+                    🌙 어떤 꿈을 꾸셨나요?
+                  </label>
+                  <textarea
+                    id="dream"
+                    value={dream}
+                    onChange={(e) => setDream(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    maxLength={1500}
+                    rows={5}
+                    placeholder="예) 맑은 강물 위를 가볍게 날아다니다가, 물속에서 커다란 잉어가 튀어올랐어요…"
+                    className="dream-textarea w-full resize-none rounded-2xl bg-black/25 border border-white/15 p-4 text-[15px] text-white placeholder-white/35 leading-relaxed transition"
+                  />
+                  <div className="flex items-center justify-between mt-2 mb-4">
+                    <span className="text-[11px] text-white/40">Ctrl/⌘ + Enter 로 해몽</span>
+                    <span className="text-[11px] text-white/40">{dream.length} / 1500</span>
+                  </div>
+
+                  {/* 예시 칩 */}
+                  <div className="mb-5">
+                    <div className="text-[11px] text-white/40 mb-2">이런 꿈은 어때요?</div>
+                    <div className="flex flex-wrap gap-2">
+                      {EXAMPLES.map((ex, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setDream(ex)}
+                          className="px-3 py-1.5 rounded-full text-xs text-white/80 bg-white/5 border border-white/15 hover:bg-white/10 hover:border-amber-300/40 transition"
+                        >
+                          {ex}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {error && (
+                    <div className="mb-4 rounded-xl px-4 py-3 text-sm text-rose-100 bg-rose-500/15 border border-rose-400/30">
+                      {error}
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleSubmit}
+                    disabled={loading}
+                    size="lg"
+                    className="w-full anim-glow"
+                  >
+                    {loading ? (
+                      <>
+                        <Spinner /> 별들이 당신의 꿈을 읽는 중…
+                      </>
+                    ) : (
+                      <>🔮 꿈 해몽하기</>
+                    )}
+                  </Button>
+                </div>
+
+                <p className="text-center text-[11px] text-white/35 mt-5 leading-relaxed">
+                  재미로 보는 AI 해몽이에요. 결과는 부적처럼 가볍게 즐겨주세요 🌟
+                </p>
+              </section>
+            ) : (
+              // ===== 결과 화면 =====
+              <section>
+                <ResultCard result={result} demo={demo} cardRef={cardRef} />
+
+                {/* 액션 버튼 (캡처 영역 바깥) */}
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <Button onClick={handleShare} disabled={busy} variant="violet">
+                    {busy ? <Spinner /> : '📤'} 공유하기
+                  </Button>
+                  <Button onClick={handleSave} disabled={busy} variant="primary">
+                    {busy ? <Spinner /> : '📸'} 이미지 저장
+                  </Button>
+                </div>
+                <Button onClick={handleReset} variant="ghost" className="w-full mt-3">
+                  🌙 새로운 꿈 해몽하기
+                </Button>
+              </section>
+            )}
+          </div>
+
+          <Toast message={toastMsg} />
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 렌더링
+    // ========================================
+    ReactDOM.createRoot(document.getElementById('root')).render(<DreamApp />);
+  </script>
+</body>
+</html>

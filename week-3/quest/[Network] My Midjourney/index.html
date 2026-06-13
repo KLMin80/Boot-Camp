@@ -12,10 +12,16 @@
 
   <!--
     ============================================================================
-    ℹ️ 이미지 생성 백엔드: AI Horde (https://aihorde.net) — 무료 · 가입 불필요
+    🎨 My Midjourney — 완전 서버리스(백엔드 없음) AI 이미지 생성기
+    Powered by AI Horde (Stable Diffusion) · 무료 · 서버 불필요.
+
+    브라우저에서 https://stablehorde.net/api/v2 를 직접 호출합니다(CORS 완전 개방).
+    별도 서버/빌드 없이 이 파일을 그대로 열거나 Live Server 로 열면 동작합니다.
+
     기본 키는 누구나 쓰는 "익명 공개 키(0000000000)"라 노출돼도 안전합니다.
-    다만 익명 키는 우선순위가 낮아 느릴 수 있어요. aihorde.net 에서 무료 계정을
-    만들면 개인 키로 더 빠르게 쓸 수 있습니다(설정에서 입력, localStorage 에만 저장).
+    다만 익명 키는 우선순위가 낮아 느릴 수 있어요. https://aihorde.net/register 에서
+    무료 키(결제 없음)를 받으면 ⚙️ 설정에 입력해 더 빠르게 쓸 수 있습니다
+    (입력 키는 localStorage 에만 저장).
     ⚠️ 개인 키를 넣었다면 이 파일을 공개 저장소에 커밋/배포하지 마세요.
     ============================================================================
   -->
@@ -99,7 +105,7 @@
     const DEFAULT_API_KEY = ANON_API_KEY;
 
     const HORDE_API = "https://stablehorde.net/api/v2"; // async(제출) / check(폴링) / status(결과)
-    const CLIENT_AGENT = "MyMidjourney:1.0:bootcamp";   // AI Horde 권장 식별 헤더
+    const CLIENT_AGENT = "MyMidjourney:1.0:github-jeilmin"; // AI Horde 권장 식별 헤더
     const MODEL_LABEL = "AI Horde · Stable Diffusion";
 
     // 생성 파라미터(고정값)
@@ -108,8 +114,8 @@
     const GEN_SAMPLER = "k_euler_a";
 
     // 폴링 설정
-    const POLL_INTERVAL_MS = 3500; // check 호출 주기
-    const POLL_MAX_TRIES = 80;     // 약 4~5분 상한
+    const POLL_INTERVAL_MS = 2500;  // check 호출 주기(약 2.5초 — AI Horde 권장)
+    const POLL_MAX_TRIES = 110;     // 2.5초 × 110 ≈ 4.5분 상한
 
     const LS_GALLERY = "myMidjourney.gallery";
     const LS_APIKEY = "myMidjourney.apiKey";
@@ -1128,9 +1134,9 @@
 
           <footer className="mx-auto max-w-6xl px-4 pb-10 pt-4 text-center sm:px-6">
             <p className="text-[11px] leading-relaxed text-slate-600">
-              모델: {MODEL_LABEL} · 생성 이미지 링크는 시간이 지나면 만료될 수 있어요.
+              Powered by {MODEL_LABEL} · 무료 · 서버 불필요(브라우저에서 직접 호출) · 생성 이미지 링크는 약 30분 후 만료될 수 있어요.
               <br />
-              AI 생성 결과물입니다. 학습용 데모이며 키는 로컬에만 저장됩니다.
+              AI 생성 결과물입니다. 학습용 데모이며 키는 로컬(localStorage)에만 저장됩니다.
             </p>
           </footer>
 
@@ -1151,5 +1157,16 @@
     // ========================================================================
     ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   </script>
+
+  <!--
+    ============================================================================
+    ▶ 실행 방법 (로컬 서버 불필요)
+      · 이 index.html 파일을 브라우저로 바로 열기 (더블클릭)
+      · 또는 VS Code "Live Server" 확장으로 열기
+      · 또는 터미널에서  npx serve .  후 안내된 주소 접속
+    백엔드·빌드 도구·API 키 등록 없이 즉시 동작합니다.
+    라우터 없음(단일 화면). 이미지는 AI Horde 워커가 무료로 생성합니다.
+    ============================================================================
+  -->
 </body>
 </html>

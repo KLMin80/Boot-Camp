@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 별명 생성기 ✨</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind 유틸리티로 표현하기 어려운 부분만 커스텀 */
+    @keyframes floatUp {
+      0%   { opacity: 0; transform: translateY(8px) scale(0.96); }
+      100% { opacity: 1; transform: translateY(0)   scale(1); }
+    }
+    @keyframes toastIn {
+      0%   { opacity: 0; transform: translate(-50%, 12px); }
+      100% { opacity: 1; transform: translate(-50%, 0); }
+    }
+    @keyframes shimmer {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+    @keyframes pop {
+      0%   { transform: scale(0.85); }
+      60%  { transform: scale(1.08); }
+      100% { transform: scale(1); }
+    }
+    .anim-float { animation: floatUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    .anim-toast { animation: toastIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    .anim-pop   { animation: pop 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+    .title-shimmer {
+      background-size: 200% auto;
+      animation: shimmer 6s ease-in-out infinite;
+    }
+    /* 부드러운 스크롤 및 선택 색상 */
+    ::selection { background: rgba(168, 85, 247, 0.25); }
+    html { scroll-behavior: smooth; }
+  </style>
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+    // ========================================
+    // 🎲 데이터 / 단어 은행 (Word Banks)
+    // ========================================
+    // 스타일별로 큐레이션한 단어 모음. 사용자의 입력(이름/성격/취미/키워드)과
+    // 조합하여 다양하고 그럴듯한 별명을 생성한다.
+
+    // 공용 형용사 (성격 키워드가 비어있을 때 폴백으로 사용)
+    const FALLBACK_ADJ = ["반짝이는", "용감한", "느긋한", "엉뚱한", "다정한", "신비한", "재빠른", "포근한", "장난스런", "빛나는"];
+
+    // 성격 칩 → 분위기에 맞는 형용사 확장 매핑
+    const PERSONA_ADJ = {
+      "활발한": ["통통튀는", "에너지넘치는", "발랄한", "씩씩한", "활기찬"],
+      "차분한": ["고요한", "차분한", "잔잔한", "단정한", "여유로운"],
+      "엉뚱한": ["엉뚱한", "4차원", "기발한", "엉큼한", "예측불가"],
+      "진지한": ["진중한", "묵직한", "올곧은", "신중한", "단단한"],
+      "다정한": ["다정한", "따뜻한", "포근한", "상냥한", "마음씨고운"],
+    };
+
+    const PERSONA_CHIPS = ["활발한", "차분한", "엉뚱한", "진지한", "다정한"];
+
+    // 스타일 정의
+    const STYLES = [
+      {
+        id: "animal",
+        label: "귀여운 동물",
+        emoji: "🐰",
+        desc: "말랑말랑 포근한 동물 별명",
+        nouns: ["토끼", "햄찌", "고양이", "강아지", "수달", "다람쥐", "곰돌이", "펭귄", "여우", "판다", "병아리", "물범", "알파카", "고슴도치", "라쿤"],
+        suffixes: ["", "", "이", "찡", "양", "님"],
+        adjectives: ["폭신한", "말랑한", "동글한", "보들보들", "쪼꼬미", "포동포동", "꼬물꼬물"],
+      },
+      {
+        id: "game",
+        label: "게임 캐릭터",
+        emoji: "🎮",
+        desc: "필드를 누비는 캐릭터 느낌",
+        nouns: ["나이트", "메이지", "어쌔신", "버서커", "레인저", "팔라딘", "소서러", "헌터", "워로드", "드루이드", "건슬링거", "발키리"],
+        suffixes: ["", "", "_99", "TV", "Pro", "★", "X"],
+        adjectives: ["광폭의", "전설의", "각성한", "무자비한", "최강", "그림자", "강철의", "불멸의"],
+      },
+      {
+        id: "fantasy",
+        label: "신비/판타지",
+        emoji: "🔮",
+        desc: "몽환적이고 신비로운 분위기",
+        nouns: ["달의 마법사", "별빛 정령", "심연의 용", "안개의 현자", "새벽의 기사", "황혼의 여신", "이슬의 요정", "서리의 늑대", "여명의 학자", "은하의 방랑자"],
+        suffixes: ["", "", "", " 경", " 님"],
+        adjectives: ["잊혀진", "고대의", "빛바랜", "영원한", "속삭이는", "잠들지 않는", "별을 삼킨"],
+      },
+      {
+        id: "mz",
+        label: "MZ / 밈",
+        emoji: "😎",
+        desc: "요즘 감성 가득한 밈 스타일",
+        nouns: ["인싸", "갓생러", "TMI요정", "킹받는존재", "도파민중독", "텐션장인", "밈수집가", "관종", "힙스터", "분위기메이커", "찐", "고수"],
+        suffixes: ["", "", "ㅋ", "님", "각", "甲"],
+        adjectives: ["럭키비키", "킹받는", "갓벽한", "찐", "역대급", "JMT", "핵인싸"],
+      },
+      {
+        id: "elegant",
+        label: "우아/고급",
+        emoji: "👑",
+        desc: "기품 있고 우아한 호칭",
+        nouns: ["백작", "공작부인", "후작", "귀공자", "영애", "기사단장", "대공", "성주", "음유시인", "정원사", "수석사서"],
+        suffixes: ["", "", " 님", " 경", " 전하"],
+        adjectives: ["고귀한", "우아한", "기품있는", "황금빛", "벨벳", "단아한", "순백의"],
+      },
+    ];
+
+    // 스타일별 카드 색상 (Tailwind CDN은 런타임 동적 클래스를 인식하지 못하므로
+    // 완전한 클래스 문자열을 정적 매핑으로 미리 정의한다)
+    const STYLE_THEME = {
+      animal:  { card: "from-pink-50 to-rose-50 border-pink-200",     ring: "ring-pink-400",    text: "text-pink-600",    chip: "bg-pink-100 text-pink-700" },
+      game:    { card: "from-indigo-50 to-blue-50 border-indigo-200", ring: "ring-indigo-400",  text: "text-indigo-600",  chip: "bg-indigo-100 text-indigo-700" },
+      fantasy: { card: "from-violet-50 to-fuchsia-50 border-violet-200", ring: "ring-violet-400", text: "text-violet-600", chip: "bg-violet-100 text-violet-700" },
+      mz:      { card: "from-amber-50 to-orange-50 border-amber-200", ring: "ring-amber-400",   text: "text-amber-600",   chip: "bg-amber-100 text-amber-700" },
+      elegant: { card: "from-emerald-50 to-teal-50 border-emerald-200", ring: "ring-emerald-400", text: "text-emerald-600", chip: "bg-emerald-100 text-emerald-700" },
+    };
+
+    // ========================================
+    // 🧠 별명 생성 알고리즘
+    // ========================================
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const chance = (p) => Math.random() < p;
+
+    // 취미/키워드에서 짧은 토큰을 뽑아낸다 (예: "축구하기" → "축구")
+    function tokenize(raw) {
+      if (!raw) return [];
+      return raw
+        .split(/[\s,/·]+/)
+        .map((w) => w.trim().replace(/하기$|하는것$|을$|를$|이$|가$/g, ""))
+        .filter((w) => w.length >= 1 && w.length <= 6);
+    }
+
+    // 성격 입력(칩 또는 자유 텍스트)으로부터 형용사 풀을 구성
+    function buildAdjPool(personality) {
+      const pool = [];
+      const tokens = tokenize(personality);
+      tokens.forEach((t) => {
+        if (PERSONA_ADJ[t]) pool.push(...PERSONA_ADJ[t]);
+        else pool.push(t); // 자유 입력은 그대로 형용사처럼 활용
+      });
+      return pool.length ? pool : FALLBACK_ADJ;
+    }
+
+    function generateNicknames(input, styleId, count = 8) {
+      const style = STYLES.find((s) => s.id === styleId) || STYLES[0];
+      const adjPool = buildAdjPool(input.personality);
+      const hobbyTokens = tokenize(input.hobby);
+      const keywordTokens = tokenize(input.keyword);
+      const flavorTokens = [...hobbyTokens, ...keywordTokens];
+      const name = (input.name || "").trim();
+
+      const results = new Set();
+      let guard = 0;
+
+      while (results.size < count && guard < count * 40) {
+        guard++;
+        const adj = pick(adjPool);
+        const noun = pick(style.nouns);
+        const suffix = pick(style.suffixes);
+        const styleAdj = pick(style.adjectives);
+        const flavor = flavorTokens.length ? pick(flavorTokens) : null;
+
+        // 여러 조합 패턴 중 무작위 선택 → 결과 다양화
+        const patterns = [];
+
+        patterns.push(`${adj} ${noun}${suffix}`);
+        patterns.push(`${styleAdj} ${noun}${suffix}`);
+
+        if (flavor) {
+          patterns.push(`${flavor} ${noun}${suffix}`);
+          patterns.push(`${flavor}하는 ${noun}`);
+          patterns.push(`${adj} ${flavor}${style.id === "mz" ? "러" : noun}`);
+        }
+        if (name) {
+          patterns.push(`${styleAdj} ${name}`);
+          patterns.push(`${name} ${noun}${suffix}`);
+          if (flavor) patterns.push(`${flavor}${name}`);
+        }
+        // 스타일 특화 패턴
+        if (style.id === "game") {
+          patterns.push(`${styleAdj}${noun}${suffix}`.replace(/\s/g, ""));
+        }
+        if (style.id === "mz") {
+          patterns.push(`${noun}${suffix}`);
+          if (flavor) patterns.push(`${flavor}${suffix || "甲"}`);
+        }
+        if (style.id === "fantasy") {
+          patterns.push(`${adj} ${noun}`);
+        }
+
+        let candidate = pick(patterns).replace(/\s+/g, " ").trim();
+
+        // 가끔 살짝 데코레이션을 더해 재미를 준다
+        if (chance(0.18)) {
+          const deco = pick(["✨", "🌟", "⭐", "💫"]);
+          candidate = chance(0.5) ? `${candidate} ${deco}` : `${deco} ${candidate}`;
+        }
+
+        if (candidate.length >= 2 && candidate.length <= 24) {
+          results.add(candidate);
+        }
+      }
+
+      return Array.from(results).slice(0, count);
+    }
+
+    // ========================================
+    // 🎨 디자인 시스템 컴포넌트
+    // ========================================
+    function Button({ children, onClick, variant = "primary", size = "md", disabled = false, type = "button", className = "" }) {
+      const base = "inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.97]";
+      const variants = {
+        primary: "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-lg shadow-violet-500/30 hover:shadow-xl hover:shadow-violet-500/40 hover:-translate-y-0.5 focus:ring-violet-300",
+        secondary: "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 hover:border-slate-300 focus:ring-slate-200",
+        ghost: "bg-transparent text-slate-600 hover:bg-slate-100 focus:ring-slate-200",
+        danger: "bg-rose-500 text-white hover:bg-rose-600 focus:ring-rose-200",
+      };
+      const sizes = {
+        sm: "px-3 py-1.5 text-sm",
+        md: "px-5 py-2.5 text-sm",
+        lg: "px-8 py-4 text-base",
+      };
+      return (
+        <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}>
+          {children}
+        </button>
+      );
+    }
+
+    function Input({ label, value, onChange, placeholder, icon }) {
+      return (
+        <label className="block">
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700 mb-1.5">
+            {icon && <span aria-hidden="true">{icon}</span>}
+            {label}
+          </span>
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white/80 text-slate-800 placeholder-slate-400 shadow-sm transition-all duration-200 focus:outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100"
+          />
+        </label>
+      );
+    }
+
+    function Card({ children, className = "" }) {
+      return (
+        <div className={`bg-white rounded-3xl shadow-xl shadow-slate-200/60 border border-slate-100 ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    function Toast({ message, show }) {
+      if (!show) return null;
+      return (
+        <div className="anim-toast fixed bottom-8 left-1/2 z-50 -translate-x-1/2 rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-2xl">
+          {message}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 섹션 컴포넌트
+    // ========================================
+    function Header() {
+      return (
+        <header className="text-center pt-10 pb-6 px-4">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-violet-100 text-violet-700 text-xs font-bold mb-4">
+            <span>🤖</span> AI 별명 생성기
+          </div>
+          <h1 className="title-shimmer text-4xl sm:text-5xl font-black bg-gradient-to-r from-violet-600 via-fuchsia-500 to-pink-500 bg-clip-text text-transparent leading-tight">
+            나만의 찰떡 별명 찾기 ✨
+          </h1>
+          <p className="mt-3 text-slate-500 text-sm sm:text-base max-w-md mx-auto">
+            이름, 성격, 취미를 입력하고 원하는 스타일을 고르면<br className="hidden sm:block" />
+            센스 넘치는 별명을 한가득 만들어 드려요.
+          </p>
+        </header>
+      );
+    }
+
+    // 성격 칩 선택기
+    function PersonaChips({ personality, setPersonality }) {
+      const active = useMemo(() => new Set(tokenize(personality)), [personality]);
+
+      const toggle = (chip) => {
+        const current = personality.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+        if (active.has(chip)) {
+          setPersonality(current.filter((c) => c !== chip).join(" "));
+        } else {
+          setPersonality([...current, chip].join(" "));
+        }
+      };
+
+      return (
+        <div className="flex flex-wrap gap-2 mt-2">
+          {PERSONA_CHIPS.map((chip) => {
+            const on = active.has(chip);
+            return (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => toggle(chip)}
+                className={
+                  "px-3.5 py-1.5 rounded-full text-sm font-semibold border transition-all duration-200 active:scale-95 " +
+                  (on
+                    ? "bg-violet-600 text-white border-violet-600 shadow-md shadow-violet-500/30"
+                    : "bg-white text-slate-600 border-slate-200 hover:border-violet-300 hover:text-violet-600")
+                }
+              >
+                {on ? "✓ " : ""}{chip}
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // 스타일 선택기
+    function StylePicker({ styleId, setStyleId }) {
+      return (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+          {STYLES.map((s) => {
+            const on = s.id === styleId;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setStyleId(s.id)}
+                aria-pressed={on}
+                className={
+                  "group flex flex-col items-start gap-0.5 p-3 rounded-2xl border text-left transition-all duration-200 active:scale-[0.97] " +
+                  (on
+                    ? "bg-gradient-to-br from-violet-600 to-fuchsia-600 border-transparent text-white shadow-lg shadow-violet-500/30 -translate-y-0.5"
+                    : "bg-white border-slate-200 text-slate-700 hover:border-violet-300 hover:shadow-md")
+                }
+              >
+                <span className="text-xl">{s.emoji}</span>
+                <span className="text-sm font-bold">{s.label}</span>
+                <span className={"text-[11px] leading-tight " + (on ? "text-violet-100" : "text-slate-400")}>
+                  {s.desc}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // 별명 카드
+    function NicknameCard({ value, styleId, selected, onSelect, onCopy, index }) {
+      const theme = STYLE_THEME[styleId] || STYLE_THEME.animal;
+      return (
+        <div
+          className={
+            "anim-float group relative bg-gradient-to-br rounded-2xl border p-4 transition-all duration-200 cursor-pointer hover:-translate-y-1 hover:shadow-lg " +
+            theme.card + " " +
+            (selected ? `ring-4 ${theme.ring} shadow-lg` : "")
+          }
+          style={{ animationDelay: `${index * 45}ms` }}
+          onClick={onSelect}
+          role="button"
+          aria-pressed={selected}
+        >
+          {selected && (
+            <span className="absolute -top-2 -right-2 anim-pop flex h-6 w-6 items-center justify-center rounded-full bg-violet-600 text-white text-xs shadow-md">
+              ★
+            </span>
+          )}
+          <p className={"font-bold text-lg break-keep pr-1 " + theme.text}>{value}</p>
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-[11px] text-slate-400">탭하여 찜하기</span>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onCopy(value); }}
+              className="flex items-center gap-1 rounded-lg bg-white/70 px-2.5 py-1 text-xs font-semibold text-slate-600 shadow-sm transition-all hover:bg-white hover:text-slate-900 active:scale-95"
+              aria-label={`${value} 복사`}
+            >
+              📋 복사
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // 찜한 별명 영역
+    function Favorites({ favorites, onCopy, onRemove }) {
+      if (favorites.length === 0) return null;
+      return (
+        <Card className="p-5 sm:p-6 mt-6">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-xl">💖</span>
+            <h3 className="font-bold text-slate-800">마음에 드는 별명</h3>
+            <span className="ml-auto text-xs font-semibold text-slate-400">{favorites.length}개</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {favorites.map((fav) => (
+              <span key={fav} className="anim-pop group inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-100 to-fuchsia-100 pl-4 pr-2 py-2 text-sm font-bold text-violet-700">
+                {fav}
+                <button onClick={() => onCopy(fav)} className="rounded-full px-1.5 hover:bg-white/60" aria-label="복사" title="복사">📋</button>
+                <button onClick={() => onRemove(fav)} className="rounded-full px-1.5 text-violet-400 hover:bg-white/60 hover:text-rose-500" aria-label="삭제" title="삭제">✕</button>
+              </span>
+            ))}
+          </div>
+        </Card>
+      );
+    }
+
+    // 초기 안내 / 빈 상태
+    function EmptyState() {
+      return (
+        <div className="text-center py-14 px-6">
+          <div className="text-6xl mb-4 select-none">🎁</div>
+          <p className="font-bold text-slate-700 text-lg">아직 만들어진 별명이 없어요</p>
+          <p className="text-slate-400 text-sm mt-1.5">
+            정보를 입력하고 <span className="font-semibold text-violet-500">별명 생성하기</span> 버튼을 눌러보세요.<br />
+            비워두면 랜덤 기본값으로도 만들 수 있어요!
+          </p>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      const [name, setName] = useState("");
+      const [personality, setPersonality] = useState("");
+      const [hobby, setHobby] = useState("");
+      const [keyword, setKeyword] = useState("");
+      const [styleId, setStyleId] = useState("animal");
+
+      const [results, setResults] = useState([]);
+      const [selected, setSelected] = useState(() => new Set());
+      const [favorites, setFavorites] = useState([]);
+      const [generating, setGenerating] = useState(false);
+      const [hasGenerated, setHasGenerated] = useState(false);
+      const [notice, setNotice] = useState(null); // { type: "error" | "fallback", text }
+
+      const [toast, setToast] = useState("");
+      const toastTimer = useRef(null);
+      const resultsRef = useRef(null);
+
+      const showToast = useCallback((msg) => {
+        setToast(msg);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(""), 1600);
+      }, []);
+
+      useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+      // 결과를 화면에 반영하고 모바일에서 결과 영역으로 스크롤
+      const applyResults = useCallback((list) => {
+        setResults(list);
+        setSelected(new Set());
+        setHasGenerated(true);
+        requestAnimationFrame(() => {
+          if (resultsRef.current && window.innerWidth < 1024) {
+            resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      }, []);
+
+      // 별명 생성: 서버(OpenAI)를 먼저 시도하고, 실패하면 로컬 알고리즘으로 폴백
+      const handleGenerate = useCallback(async () => {
+        setGenerating(true);
+        setNotice(null);
+        const input = { name, personality, hobby, keyword };
+
+        try {
+          // 서버는 'likes' 키를 표준으로 받지만 'keyword'도 허용한다
+          const resp = await fetch("/api/nicknames", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, personality, hobby, likes: keyword, style: styleId }),
+          });
+          const data = await resp.json().catch(() => null);
+
+          if (resp.ok && data && Array.isArray(data.nicknames) && data.nicknames.length > 0) {
+            applyResults(data.nicknames.slice(0, 8));
+            setNotice(null);
+          } else {
+            // 서버는 응답했지만 에러/빈 결과 → 로컬 폴백
+            const msg = (data && data.message) || "AI 응답을 받지 못했어요.";
+            applyResults(generateNicknames(input, styleId, 8));
+            setNotice({ type: "fallback", text: `AI 호출에 실패해 오프라인 모드로 생성했어요. (${msg})` });
+          }
+        } catch (e) {
+          // 네트워크 자체 실패(서버 미기동 등) → 로컬 폴백
+          applyResults(generateNicknames(input, styleId, 8));
+          setNotice({ type: "fallback", text: "서버에 연결할 수 없어 오프라인 모드로 생성했어요." });
+        } finally {
+          setGenerating(false);
+        }
+      }, [name, personality, hobby, keyword, styleId, applyResults]);
+
+      const toggleSelect = useCallback((value) => {
+        setSelected((prev) => {
+          const next = new Set(prev);
+          if (next.has(value)) {
+            next.delete(value);
+            setFavorites((f) => f.filter((x) => x !== value));
+          } else {
+            next.add(value);
+            setFavorites((f) => (f.includes(value) ? f : [...f, value]));
+          }
+          return next;
+        });
+      }, []);
+
+      const removeFavorite = useCallback((value) => {
+        setFavorites((f) => f.filter((x) => x !== value));
+        setSelected((prev) => {
+          const next = new Set(prev);
+          next.delete(value);
+          return next;
+        });
+      }, []);
+
+      const copyToClipboard = useCallback((text) => {
+        const done = () => showToast("복사됨! 📋");
+        const fail = () => showToast("복사에 실패했어요 😢");
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done).catch(() => {
+            // 일부 환경(file://, 비보안 컨텍스트) 폴백
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.position = "fixed";
+              ta.style.opacity = "0";
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              document.body.removeChild(ta);
+              done();
+            } catch (e) { fail(); }
+          });
+        } else {
+          fail();
+        }
+      }, [showToast]);
+
+      const activeStyle = STYLES.find((s) => s.id === styleId);
+
+      return (
+        <div className="min-h-screen bg-gradient-to-b from-violet-50 via-slate-50 to-fuchsia-50">
+          <div className="max-w-5xl mx-auto px-4 pb-20">
+            <Header />
+
+            <div className="grid lg:grid-cols-5 gap-6 items-start">
+              {/* 입력 패널 */}
+              <Card className="lg:col-span-2 p-5 sm:p-6 lg:sticky lg:top-6">
+                <h2 className="flex items-center gap-2 font-bold text-slate-800 mb-4">
+                  <span className="text-lg">✏️</span> 내 정보 입력
+                </h2>
+
+                <div className="space-y-4">
+                  <Input label="이름" icon="🙂" value={name} onChange={setName} placeholder="예) 지민, 또는 닉네임" />
+
+                  <div>
+                    <Input label="성격" icon="✨" value={personality} onChange={setPersonality} placeholder="직접 입력 또는 아래 칩 선택" />
+                    <PersonaChips personality={personality} setPersonality={setPersonality} />
+                  </div>
+
+                  <Input label="취미" icon="🎯" value={hobby} onChange={setHobby} placeholder="예) 축구, 그림 그리기, 게임" />
+                  <Input label="좋아하는 것 / 키워드 (선택)" icon="💡" value={keyword} onChange={setKeyword} placeholder="예) 커피, 우주, 고양이" />
+                </div>
+
+                <div className="mt-6">
+                  <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700 mb-2.5">
+                    🎨 별명 스타일
+                  </span>
+                  <StylePicker styleId={styleId} setStyleId={setStyleId} />
+                </div>
+
+                <div className="mt-6">
+                  <Button onClick={handleGenerate} size="lg" disabled={generating} className="w-full">
+                    {generating ? (
+                      <>
+                        <span className="inline-block h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                        생성 중...
+                      </>
+                    ) : (
+                      <>{hasGenerated ? "🔄 다시 생성하기" : "🤖 AI로 별명 생성하기"}</>
+                    )}
+                  </Button>
+                  <p className="text-center text-[11px] text-slate-400 mt-2.5">
+                    OpenAI가 입력을 분석해 별명을 만들어요 · 연결 실패 시 오프라인 모드로 자동 전환
+                  </p>
+                </div>
+              </Card>
+
+              {/* 결과 패널 */}
+              <div className="lg:col-span-3" ref={resultsRef}>
+                <Card className="p-5 sm:p-6 min-h-[300px]">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="flex items-center gap-2 font-bold text-slate-800">
+                      <span className="text-lg">{activeStyle.emoji}</span>
+                      추천 별명
+                    </h2>
+                    {results.length > 0 && (
+                      <span className="text-xs font-semibold text-slate-400 bg-slate-100 rounded-full px-3 py-1">
+                        {activeStyle.label} · {results.length}개
+                      </span>
+                    )}
+                  </div>
+
+                  {notice && (
+                    <div
+                      className={
+                        "anim-float mb-4 flex items-start gap-2 rounded-xl border px-3.5 py-2.5 text-xs font-semibold " +
+                        (notice.type === "fallback"
+                          ? "bg-amber-50 border-amber-200 text-amber-700"
+                          : "bg-rose-50 border-rose-200 text-rose-700")
+                      }
+                      role="status"
+                    >
+                      <span aria-hidden="true">{notice.type === "fallback" ? "📴" : "⚠️"}</span>
+                      <span className="leading-snug">{notice.text}</span>
+                    </div>
+                  )}
+
+                  {results.length === 0 ? (
+                    <EmptyState />
+                  ) : (
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      {results.map((nick, i) => (
+                        <NicknameCard
+                          key={nick + i}
+                          index={i}
+                          value={nick}
+                          styleId={styleId}
+                          selected={selected.has(nick)}
+                          onSelect={() => toggleSelect(nick)}
+                          onCopy={copyToClipboard}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </Card>
+
+                <Favorites favorites={favorites} onCopy={copyToClipboard} onRemove={removeFavorite} />
+              </div>
+            </div>
+
+            <footer className="text-center mt-12 text-xs text-slate-400">
+              🤖 OpenAI 기반 AI 별명 생성기 · 연결이 어려우면 오프라인 모드로 동작해요 · 별명은 자유롭게 사용하세요
+            </footer>
+          </div>
+
+          <Toast message={toast} show={!!toast} />
+        </div>
+      );
+    }
+
+    // ========================================
+    // 렌더링
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

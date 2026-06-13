@@ -1,0 +1,17 @@
+{
+  "name": "weather-outfit-recommender",
+  "version": "1.0.0",
+  "description": "기온 구간 기반 옷차림 추천 — Express 서버가 OpenWeather를 호출하고, 기온 구간별 옷차림 문구로 가공해 /recommend 로 응답",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env --watch server.js"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

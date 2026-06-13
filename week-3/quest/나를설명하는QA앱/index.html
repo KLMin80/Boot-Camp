@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About Me Q&A 챗봇</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .msg-in { animation: fadeInUp .25s ease both; }
+    @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+    .dot { animation: blink 1.2s infinite both; }
+    .dot:nth-child(2) { animation-delay: .2s; }
+    .dot:nth-child(3) { animation-delay: .4s; }
+    .chat-scroll::-webkit-scrollbar { width: 8px; }
+    .chat-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-slate-100 via-indigo-50 to-slate-100 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ========================================
+    // 🧠 Knowledge Base
+    //   답변 텍스트는 about-me-qa-bot 에이전트가 about-me.md를 근거로 생성한 결과를 그대로 사용.
+    //   모르는 정보는 에이전트와 동일하게 "몰라요"로 응답.
+    // ========================================
+    const FALLBACK = {
+      text: "음, 잘 모르겠어요 🤔 about-me.md에 담긴 내용 위주로 다시 물어봐 주실래요?",
+      suggest: true,
+    };
+
+    const INTENTS = [
+      {
+        id: "greeting", suggest: true,
+        keywords: ["안녕", "하이", "hello", "hi", "반가", "방가", "ㅎㅇ", "헬로"],
+        answer: "안녕하세요! 👋 저는 이 분에 대해 알려드리는 Q&A 봇이에요. 직업, 거주지, 가족, 요즘 관심사 등 무엇이든 편하게 물어보세요.",
+      },
+      {
+        id: "thanks", suggest: false,
+        keywords: ["고마워", "고맙", "감사", "땡큐", "thank", "thx", "ㄱㅅ"],
+        answer: "천만에요! 😊 더 궁금한 게 있으면 언제든 물어보세요.",
+      },
+      {
+        id: "intro", suggest: false,
+        keywords: ["소개", "자기소개", "누구", "어떤 사람", "어떤사람", "한마디", "한 마디", "요약", "어떤 분", "어떤분"],
+        answer: "외국계 기업에서 **20년간 구매·글로벌 영업**을 이끌어 온 시니어 전문가예요. 현재는 **AI 기반 1인 기업 창업과 업무 자동화**를 준비하고 있어요.",
+      },
+      {
+        id: "job", suggest: false,
+        keywords: ["무슨 일", "무슨일", "직업", "직무", "하는 일", "하는일", "일해", "일하", "커리어", "경력", "회사", "업무", "직장", "뭐하", "뭐 하", "종사", "job", "work", "career"],
+        answer: "외국계 기업에서 약 **20년간 구매(Procurement)·글로벌 영업(Sales)** 분야를 담당해 온 시니어 전문가예요.",
+      },
+      {
+        id: "skills", suggest: false,
+        keywords: ["역량", "강점", "잘하는", "잘 하는", "능력", "스킬", "skill", "전문", "특기", "장점"],
+        answer: "주요 역량은 다음과 같아요:\n- 글로벌 비즈니스 미팅 주도\n- 고난도 가격·계약 조건 협상(Negotiation)\n- 글로벌 파트너사 관리",
+      },
+      {
+        id: "workplace", suggest: false,
+        keywords: ["업무 환경", "업무환경", "근무", "일하는 곳", "일하는곳", "사무실", "거점", "출근", "근무지"],
+        answer: "수도권 주요 비즈니스 거점(도심 및 IT/제조 클러스터 지역)에 거점을 두고 활동해요.",
+      },
+      {
+        id: "residence", suggest: false,
+        keywords: ["어디 살", "어디살", "어디서 살", "거주", "사는 곳", "사는곳", "사는데", "동네", "사세요", "살아", "살고", "수지구", "용인", "어디에 살", "어느 지역"],
+        answer: "**경기도 용인시 수지구**에 거주하고 있어요.",
+      },
+      {
+        id: "education", suggest: false,
+        keywords: ["학력", "학교", "대학교", "대학", "전공", "졸업", "출신", "공부했", "인하대", "기계공학", "학사"],
+        answer: "**인하대학교 기계공학과** 학사 학위를 취득했어요.",
+      },
+      {
+        id: "family", suggest: false,
+        keywords: ["가족", "결혼", "아내", "와이프", "부인", "자녀", "아들", "딸", "식구", "가정", "자식", "애들"],
+        answer: "**아내, 아들 하나, 딸 하나**로 총 4인 가족이에요.",
+      },
+      {
+        id: "focus_ai", suggest: false,
+        keywords: ["관심", "요즘", "집중", "하고 싶", "하고싶", "목표", "인공지능", "자동화", "워크플로우", "에이전트", "요새", "관심사", "ai"],
+        answer: "요즘 집중하는 분야예요:\n- AI 기술을 활용한 비즈니스 워크플로우 자동화\n- AI 에이전트 기반 앱 개발\n- 소셜 미디어 링크 자동 큐레이션 및 자동화된 콘텐츠 제작 로직 연구",
+      },
+      {
+        id: "startup", suggest: false,
+        keywords: ["창업", "사업", "1인 기업", "1인기업", "비즈니스 모델", "비즈니스모델", "솔로", "독립", "스타트업", "회사 차", "회사차"],
+        answer: "AI 기술 역량을 내재화해 고부가가치를 창출하는 **1인 기업(Solo Entrepreneurship)** 모델을 설계·구상 중이에요.",
+      },
+      {
+        id: "global_comm", suggest: false,
+        keywords: ["글로벌", "협상", "영어", "리스닝", "외국어", "커뮤니케이", "소통 역량", "비즈니스 영어"],
+        answer: "고도화된 글로벌 협상 및 비즈니스 리스닝 역량을 유지·발전시키기 위해 지속적으로 학습하고 있어요.",
+      },
+      {
+        id: "study", suggest: false,
+        keywords: ["대학원", "학업", "진학", "데이터 과학", "데이터과학", "데이터 사이언스", "자기계발", "석사"],
+        answer: "현업과 병행 가능한 주요 대학원의 **AI·데이터 과학(Data Science)** 전문 과정 진학을 검토 중이에요.",
+      },
+      {
+        id: "invest", suggest: false,
+        keywords: ["재테크", "투자", "주식", "부동산", "etf", "자산", "시장", "경제", "모니터링"],
+        answer: "재테크·시장 분석에 관심이 많아요:\n- 국내 주식 시장(주요 대형주·인덱스 ETF) 모니터링\n- 수도권 주거용 부동산 시장 동향을 데이터 기반으로 모니터링하며 자산 관리 전략 수립",
+      },
+      {
+        id: "tools", suggest: false,
+        keywords: ["툴", "도구", "노션", "notion", "생산성", "디바이스", "기기", "스마트폰", "스마트워치", "워치", "어플", "앱"],
+        answer: "생산성을 중요하게 생각해요:\n- 생산성 툴: **Notion** (프로젝트·업무 위키·개인 지식 DB 관리)\n- 디바이스: 국내 제조사의 최신 플래그십 스마트폰·스마트워치 생태계 활용",
+      },
+      {
+        id: "travel", suggest: false,
+        keywords: ["여행", "휴식", "휴가", "쉴 때", "쉴때", "웰빙", "수면", "리프레시", "여가", "취미", "놀 때", "놀때"],
+        answer: "가족과 함께하는 국내외 여행(미주 지역, 동남아 휴양지 등)으로 리프레시하고, 일상 루틴과 웰빙(수면 건강 등)을 중요하게 생각해요.",
+      },
+      {
+        id: "ai_style", suggest: false,
+        keywords: ["답변 스타일", "답변스타일", "선호하는", "협업", "소통 방식", "일하는 방식", "스타일", "팩트 체크", "팩트체크", "근거"],
+        answer: "AI와 협업할 때 이런 답변을 선호해요:\n- 추정치·제안 시 배경 설명과 근거를 함께 제공\n- 철저한 팩트 체크를 거친 정확한 정보 전달\n- 장황한 서술보다 개조식·테이블 등 구조화된 형태",
+      },
+      {
+        id: "unknown", suggest: true,
+        keywords: ["이름", "성함", "나이", "몇 살", "몇살", "연세", "mbti", "성격 유형", "성격유형", "연락처", "전화번호", "전화 번호", "휴대폰 번호", "사진", "얼굴", "생일", "띠", "혈액형", "종교", "연봉", "월급"],
+        answer: "그건 제가 가진 자료(about-me.md)에 없어서 **몰라요** 🙏",
+      },
+    ];
+
+    const SUGGESTIONS = [
+      "무슨 일 하세요?",
+      "어디 살아요?",
+      "가족이 어떻게 되나요?",
+      "요즘 관심사는?",
+      "취미가 뭐예요?",
+      "학력이 어떻게 되나요?",
+    ];
+
+    // 입력/키워드 정규화: 공백·문장부호 제거 + 소문자화
+    const normalize = (s) =>
+      s.toLowerCase().replace(/[\s.,!?~…·_\/()'"`\-]/g, "");
+
+    // 키워드 매칭 점수(매칭된 키워드 길이의 합)가 가장 높은 인텐트를 선택
+    function getAnswer(input) {
+      const q = normalize(input);
+      if (!q) return FALLBACK;
+      let best = null;
+      let bestScore = 0;
+      for (const intent of INTENTS) {
+        let score = 0;
+        for (const kw of intent.keywords) {
+          const nk = normalize(kw);
+          if (nk && q.includes(nk)) score += nk.length;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = intent;
+        }
+      }
+      if (!best) return FALLBACK;
+      return { text: best.answer, suggest: !!best.suggest };
+    }
+
+    // 메시지 ID 카운터
+    let MSG_ID = 0;
+    const nextId = () => ++MSG_ID;
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+    function Avatar({ children, className = "" }) {
+      return (
+        <div
+          className={
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg shadow-sm " +
+            className
+          }
+          aria-hidden="true"
+        >
+          {children}
+        </div>
+      );
+    }
+
+    function Chip({ label, onClick, disabled }) {
+      return (
+        <button
+          type="button"
+          onClick={onClick}
+          disabled={disabled}
+          className="rounded-full border border-indigo-200 bg-white px-3 py-1.5 text-sm text-indigo-700 shadow-sm transition hover:bg-indigo-50 hover:border-indigo-300 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+        >
+          {label}
+        </button>
+      );
+    }
+
+    function TypingDots() {
+      return (
+        <div className="flex items-center gap-1 px-1 py-1" aria-label="답변 작성 중">
+          <span className="dot h-2 w-2 rounded-full bg-slate-400"></span>
+          <span className="dot h-2 w-2 rounded-full bg-slate-400"></span>
+          <span className="dot h-2 w-2 rounded-full bg-slate-400"></span>
+        </div>
+      );
+    }
+
+    // **굵게** 인라인 파싱
+    function renderInline(text) {
+      const parts = text.split("**");
+      return parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <strong key={i} className="font-semibold text-slate-900">{p}</strong>
+        ) : (
+          <span key={i}>{p}</span>
+        )
+      );
+    }
+
+    // 줄바꿈 + "- " 불릿을 구조화 렌더 (인물의 개조식 선호 반영)
+    function RichText({ text }) {
+      const lines = text.split("\n");
+      return (
+        <div className="space-y-1">
+          {lines.map((line, i) => {
+            const t = line.trim();
+            if (t === "") return <div key={i} className="h-1" />;
+            if (t.startsWith("- ")) {
+              return (
+                <div key={i} className="flex gap-2">
+                  <span className="select-none text-indigo-400">•</span>
+                  <span className="flex-1">{renderInline(t.slice(2))}</span>
+                </div>
+              );
+            }
+            return <p key={i}>{renderInline(t)}</p>;
+          })}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 Layout / Chat Components
+    // ========================================
+    function Header() {
+      return (
+        <header className="flex items-center gap-3 border-b border-slate-100 bg-white/80 px-4 py-3 backdrop-blur">
+          <Avatar className="bg-gradient-to-br from-indigo-500 to-violet-500 text-white">🧑‍💼</Avatar>
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-bold text-slate-800">About Me Q&A</h1>
+            <p className="truncate text-xs text-slate-500">
+              <span className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-400 align-middle"></span>
+              이 사람에 대해 무엇이든 물어보세요
+            </p>
+          </div>
+        </header>
+      );
+    }
+
+    function MessageBubble({ role, text, suggest, onSuggest, disabled }) {
+      const isUser = role === "user";
+      return (
+        <div className={"msg-in flex gap-2.5 " + (isUser ? "flex-row-reverse" : "")}>
+          {!isUser && (
+            <Avatar className="bg-gradient-to-br from-indigo-500 to-violet-500 text-white">🧑‍💼</Avatar>
+          )}
+          <div className={"flex max-w-[78%] flex-col gap-2 " + (isUser ? "items-end" : "items-start")}>
+            <div
+              className={
+                "rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm " +
+                (isUser
+                  ? "rounded-tr-sm bg-indigo-600 text-white"
+                  : "rounded-tl-sm border border-slate-100 bg-white text-slate-700")
+              }
+            >
+              {isUser ? <span className="whitespace-pre-wrap">{text}</span> : <RichText text={text} />}
+            </div>
+
+            {!isUser && suggest && (
+              <div className="flex flex-wrap gap-2 pt-0.5">
+                {SUGGESTIONS.map((s) => (
+                  <Chip key={s} label={s} onClick={() => onSuggest(s)} disabled={disabled} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function InputBar({ value, onChange, onSubmit, disabled }) {
+      return (
+        <form
+          onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
+          className="flex items-center gap-2 border-t border-slate-100 bg-white/80 px-3 py-3 backdrop-blur"
+        >
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="예) 무슨 일 하세요?"
+            aria-label="질문 입력"
+            className="flex-1 rounded-full border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+          />
+          <button
+            type="submit"
+            disabled={disabled || !value.trim()}
+            aria-label="질문 보내기"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white shadow-sm transition hover:bg-indigo-700 active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
+              <path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.993.993 0 00-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z" />
+            </svg>
+          </button>
+        </form>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function App() {
+      const [messages, setMessages] = useState([
+        {
+          id: nextId(),
+          role: "bot",
+          text:
+            "안녕하세요! 👋 저는 이 분에 대해 무엇이든 답해드리는 **About Me Q&A 봇**이에요.\nabout-me.md 자료를 바탕으로 답하고, 모르는 정보는 솔직하게 **몰라요**라고 말씀드려요. 아래 버튼을 눌러보거나 직접 질문해 보세요!",
+          suggest: true,
+        },
+      ]);
+      const [input, setInput] = useState("");
+      const [typing, setTyping] = useState(false);
+      const bottomRef = useRef(null);
+      const timerRef = useRef(null);
+
+      useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      }, [messages, typing]);
+
+      useEffect(() => () => clearTimeout(timerRef.current), []);
+
+      const send = useCallback((raw) => {
+        const text = (raw ?? "").trim();
+        if (!text || typing) return;
+
+        setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
+        setInput("");
+        setTyping(true);
+
+        timerRef.current = setTimeout(() => {
+          const { text: answer, suggest } = getAnswer(text);
+          setMessages((prev) => [...prev, { id: nextId(), role: "bot", text: answer, suggest }]);
+          setTyping(false);
+        }, 600);
+      }, [typing]);
+
+      return (
+        <div className="mx-auto flex h-[100dvh] w-full flex-col bg-slate-50 sm:my-6 sm:h-[88vh] sm:max-w-lg sm:overflow-hidden sm:rounded-3xl sm:shadow-xl sm:ring-1 sm:ring-slate-200">
+          <Header />
+
+          <main
+            className="chat-scroll flex-1 space-y-4 overflow-y-auto px-4 py-5"
+            role="log"
+            aria-live="polite"
+            aria-label="대화 내용"
+          >
+            {messages.map((m) => (
+              <MessageBubble
+                key={m.id}
+                role={m.role}
+                text={m.text}
+                suggest={m.suggest}
+                onSuggest={send}
+                disabled={typing}
+              />
+            ))}
+
+            {typing && (
+              <div className="msg-in flex gap-2.5">
+                <Avatar className="bg-gradient-to-br from-indigo-500 to-violet-500 text-white">🧑‍💼</Avatar>
+                <div className="rounded-2xl rounded-tl-sm border border-slate-100 bg-white px-3 py-2 shadow-sm">
+                  <TypingDots />
+                </div>
+              </div>
+            )}
+
+            <div ref={bottomRef} />
+          </main>
+
+          <InputBar value={input} onChange={setInput} onSubmit={() => send(input)} disabled={typing} />
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

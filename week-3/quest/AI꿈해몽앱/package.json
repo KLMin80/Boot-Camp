@@ -1,0 +1,14 @@
+{
+  "name": "ai-dream-interpreter",
+  "version": "1.0.0",
+  "description": "OpenAI API 기반 AI 꿈해몽 앱 — 몽몽도사 (의존성 0개, Node 내장 모듈만 사용)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env --watch server.js"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}

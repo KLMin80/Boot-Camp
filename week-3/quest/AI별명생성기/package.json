@@ -1,0 +1,14 @@
+{
+  "name": "ai-nickname-generator",
+  "version": "1.0.0",
+  "description": "OpenAI API 기반 한국어 AI 별명 생성기 (의존성 0개, Node 24 내장 모듈만 사용)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env --watch server.js"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}
