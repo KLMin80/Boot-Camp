@@ -1,0 +1,11 @@
+{
+  "name": "about-me-qa-bot-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "About Me Q&A 챗봇 백엔드 (OpenAI 기반, 의존성 0개)",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
