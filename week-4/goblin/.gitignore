@@ -1,0 +1,14 @@
+# 환경 변수 (DB 접속 문자열 등 비밀 정보 — 절대 커밋 금지)
+.env
+.env.*
+
+# 의존성
+node_modules/
+
+# 로그
+*.log
+npm-debug.log*
+
+# OS 파일
+.DS_Store
+Thumbs.db

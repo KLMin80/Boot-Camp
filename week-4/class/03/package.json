@@ -1,0 +1,14 @@
+{
+  "name": "todo-week4-class03",
+  "version": "1.0.0",
+  "description": "오늘 할 일 Todo 앱 - Supabase PostgreSQL 연동 (의존성 0 http 서버 + pg)",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file=.env server.js"
+  },
+  "dependencies": {
+    "pg": "^8.21.0"
+  }
+}

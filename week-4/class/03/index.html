@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>오늘 할 일 · Todo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind으로 표현하기 어려운 진입 애니메이션과 폰트만 별도 정의 */
+    body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Malgun Gothic", sans-serif; }
+
+    @keyframes itemIn {
+      from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .item-in { animation: itemIn 0.25s ease-out; }
+
+    @keyframes checkPop {
+      0%   { transform: scale(1); }
+      45%  { transform: scale(1.25); }
+      100% { transform: scale(1); }
+    }
+    .check-pop { animation: checkPop 0.3s ease-out; }
+
+    /* 커스텀 스크롤바 (목록이 길어질 때) */
+    .scroll-area::-webkit-scrollbar { width: 8px; }
+    .scroll-area::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 9999px; }
+    .scroll-area::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    // 데이터는 같은 origin 의 백엔드 API(Supabase PostgreSQL)에 저장된다.
+    const API_BASE = "/api/todos";
+
+    // 공통 fetch 래퍼: JSON 파싱 + 서버 표준 응답({success,data,message}) 처리
+    async function apiFetch(url, options) {
+      const res = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch (_) {
+        /* 본문 없는 응답일 수 있음 */
+      }
+      if (!res.ok || (payload && payload.success === false)) {
+        const msg = (payload && payload.message) || `요청 실패 (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+      return payload ? payload.data : null;
+    }
+
+    // ========================================
+    // 🎨 Design System Components (순수 프레젠테이션)
+    // ========================================
+
+    // 기본 버튼
+    function Button({ variant = "primary", size = "md", className = "", children, ...props }) {
+      const base = "inline-flex items-center justify-center font-semibold rounded-xl transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95";
+      const variants = {
+        primary: "bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-400 shadow-sm shadow-indigo-200",
+        ghost: "bg-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus:ring-slate-300",
+        danger: "bg-transparent text-slate-400 hover:bg-rose-50 hover:text-rose-500 focus:ring-rose-300",
+      };
+      const sizes = {
+        sm: "text-sm px-3 py-1.5",
+        md: "text-base px-5 py-2.5",
+        icon: "p-2",
+      };
+      return (
+        <button className={`${base} ${variants[variant]} ${sizes[size]} ${className}`} {...props}>
+          {children}
+        </button>
+      );
+    }
+
+    // 체크박스 (커스텀 원형)
+    function Checkbox({ checked, onChange, justChecked }) {
+      return (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={checked}
+          aria-label={checked ? "완료 해제" : "완료 표시"}
+          onClick={onChange}
+          className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-indigo-400 ${
+            checked
+              ? "bg-indigo-600 border-indigo-600"
+              : "bg-white border-slate-300 hover:border-indigo-400"
+          }`}
+        >
+          {checked && (
+            <svg className={`w-3.5 h-3.5 text-white ${justChecked ? "check-pop" : ""}`} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M5 10.5l3.5 3.5L15 6.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </button>
+      );
+    }
+
+    // 통계 카드 셀 하나
+    function StatCell({ label, value, accent }) {
+      return (
+        <div className="flex flex-col items-center justify-center px-2 py-3 rounded-xl bg-white/70">
+          <span className={`text-2xl font-bold tabular-nums ${accent}`}>{value}</span>
+          <span className="mt-0.5 text-xs font-medium text-slate-500">{label}</span>
+        </div>
+      );
+    }
+
+    // 필터 탭 한 개
+    function FilterTab({ active, onClick, children, count }) {
+      return (
+        <button
+          type="button"
+          onClick={onClick}
+          aria-pressed={active}
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-indigo-300 ${
+            active ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <span>{children}</span>
+          <span className={`text-xs tabular-nums px-1.5 py-0.5 rounded-full ${active ? "bg-indigo-50 text-indigo-500" : "bg-slate-200/70 text-slate-500"}`}>
+            {count}
+          </span>
+        </button>
+      );
+    }
+
+    // 빈 상태
+    function EmptyState({ filter }) {
+      const messages = {
+        all: { emoji: "📝", title: "아직 할 일이 없어요", desc: "위 입력창에 첫 번째 할 일을 추가해 보세요." },
+        active: { emoji: "🎉", title: "진행 중인 일이 없어요", desc: "모든 일을 끝냈거나, 새로운 일을 추가해 보세요." },
+        done: { emoji: "💪", title: "완료한 일이 없어요", desc: "할 일을 체크하면 여기에 모여요." },
+      };
+      const m = messages[filter] || messages.all;
+      return (
+        <div className="flex flex-col items-center justify-center py-14 px-4 text-center select-none">
+          <div className="text-5xl mb-3" aria-hidden="true">{m.emoji}</div>
+          <p className="text-slate-700 font-semibold">{m.title}</p>
+          <p className="mt-1 text-sm text-slate-400">{m.desc}</p>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 기능 컴포넌트
+    // ========================================
+
+    // 할 일 입력창
+    function TodoInput({ onAdd }) {
+      const [text, setText] = useState("");
+      const inputRef = useRef(null);
+
+      const submit = (e) => {
+        e.preventDefault();
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        onAdd(trimmed);
+        setText("");
+        // 연속 입력을 위해 포커스 유지
+        inputRef.current && inputRef.current.focus();
+      };
+
+      return (
+        <form onSubmit={submit} className="flex gap-2">
+          <input
+            ref={inputRef}
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="할 일을 입력하세요"
+            aria-label="할 일 입력"
+            maxLength={120}
+            className="flex-1 min-w-0 px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent focus:bg-white transition-all"
+          />
+          <Button type="submit" size="md" disabled={!text.trim()} className="shrink-0">
+            추가
+          </Button>
+        </form>
+      );
+    }
+
+    // 할 일 한 줄
+    function TodoItem({ todo, onToggle, onDelete }) {
+      const [justChecked, setJustChecked] = useState(false);
+
+      const handleToggle = () => {
+        if (!todo.done) {
+          setJustChecked(true);
+          setTimeout(() => setJustChecked(false), 320);
+        }
+        onToggle(todo.id);
+      };
+
+      return (
+        <li className="item-in group flex items-center gap-3 px-4 py-3 rounded-xl bg-white border border-slate-100 hover:border-slate-200 hover:shadow-sm transition-all">
+          <Checkbox checked={todo.done} onChange={handleToggle} justChecked={justChecked} />
+          <span
+            className={`flex-1 min-w-0 break-words text-[15px] leading-snug transition-colors ${
+              todo.done ? "line-through text-slate-400" : "text-slate-800"
+            }`}
+          >
+            {todo.text}
+          </span>
+          <Button
+            variant="danger"
+            size="icon"
+            onClick={() => onDelete(todo.id)}
+            aria-label="삭제"
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </Button>
+        </li>
+      );
+    }
+
+    // 할 일 목록
+    function TodoList({ todos, onToggle, onDelete, filter }) {
+      if (todos.length === 0) return <EmptyState filter={filter} />;
+      return (
+        <ul className="scroll-area flex flex-col gap-2 max-h-[46vh] overflow-y-auto pr-1 -mr-1">
+          {todos.map((todo) => (
+            <TodoItem key={todo.id} todo={todo} onToggle={onToggle} onDelete={onDelete} />
+          ))}
+        </ul>
+      );
+    }
+
+    // ========================================
+    // 🚀 App Component
+    // ========================================
+    function App() {
+      // 서버에서 불러온 할 일 목록
+      const [todos, setTodos] = useState([]);
+      const [loading, setLoading] = useState(true); // 최초 로딩
+      const [error, setError] = useState("");        // 에러 메시지(있으면 배너 표시)
+
+      const [filter, setFilter] = useState("all"); // all | active | done
+
+      // ---- 최초 마운트 시 목록 로드 ----
+      const loadTodos = useCallback(async () => {
+        setLoading(true);
+        setError("");
+        try {
+          const data = await apiFetch(API_BASE, { method: "GET" });
+          setTodos(Array.isArray(data) ? data : []);
+        } catch (e) {
+          console.error(e);
+          setError("할 일을 불러오지 못했어요. " + e.message);
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadTodos();
+      }, [loadTodos]);
+
+      // ---- 액션 (모두 서버 API 호출 → 성공 시 상태 갱신, 실패 시 롤백/에러표시) ----
+
+      // 추가: 서버가 생성한 row(서버 id 포함)를 받아 맨 앞에 추가
+      const addTodo = useCallback(async (text) => {
+        setError("");
+        try {
+          const created = await apiFetch(API_BASE, {
+            method: "POST",
+            body: JSON.stringify({ text }),
+          });
+          setTodos((prev) => [created, ...prev]);
+        } catch (e) {
+          console.error(e);
+          setError("추가에 실패했어요. " + e.message);
+        }
+      }, []);
+
+      // 완료 토글: 낙관적 업데이트 후 실패 시 롤백
+      const toggleTodo = useCallback(async (id) => {
+        setError("");
+        const target = todos.find((t) => t.id === id);
+        if (!target) return;
+        const nextDone = !target.done;
+        // 낙관적 반영
+        setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: nextDone } : t)));
+        try {
+          const updated = await apiFetch(`${API_BASE}/${id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ done: nextDone }),
+          });
+          setTodos((prev) => prev.map((t) => (t.id === id ? updated : t)));
+        } catch (e) {
+          console.error(e);
+          // 롤백
+          setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: !nextDone } : t)));
+          setError("상태 변경에 실패했어요. " + e.message);
+        }
+      }, [todos]);
+
+      // 삭제: 낙관적 제거 후 실패 시 복구
+      const deleteTodo = useCallback(async (id) => {
+        setError("");
+        const snapshot = todos;
+        setTodos((prev) => prev.filter((t) => t.id !== id));
+        try {
+          await apiFetch(`${API_BASE}/${id}`, { method: "DELETE" });
+        } catch (e) {
+          console.error(e);
+          setTodos(snapshot); // 복구
+          setError("삭제에 실패했어요. " + e.message);
+        }
+      }, [todos]);
+
+      // 완료 항목 일괄 삭제
+      const clearCompleted = useCallback(async () => {
+        setError("");
+        const snapshot = todos;
+        setTodos((prev) => prev.filter((t) => !t.done));
+        try {
+          await apiFetch(`${API_BASE}?completed=true`, { method: "DELETE" });
+        } catch (e) {
+          console.error(e);
+          setTodos(snapshot); // 복구
+          setError("완료 항목 정리에 실패했어요. " + e.message);
+        }
+      }, [todos]);
+
+      // ---- 파생 값 ----
+      const stats = useMemo(() => {
+        const total = todos.length;
+        const done = todos.filter((t) => t.done).length;
+        return { total, done, active: total - done };
+      }, [todos]);
+
+      const filteredTodos = useMemo(() => {
+        if (filter === "active") return todos.filter((t) => !t.done);
+        if (filter === "done") return todos.filter((t) => t.done);
+        return todos;
+      }, [todos, filter]);
+
+      const progress = stats.total === 0 ? 0 : Math.round((stats.done / stats.total) * 100);
+
+      return (
+        <div className="min-h-screen flex items-start sm:items-center justify-center p-4 sm:p-6">
+          <main className="w-full max-w-md">
+            {/* 헤더 */}
+            <header className="mb-5 px-1">
+              <div className="flex items-baseline justify-between">
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">
+                  오늘 할 일
+                </h1>
+                <span className="text-sm font-medium text-slate-400 tabular-nums">
+                  {stats.done} / {stats.total} 완료
+                </span>
+              </div>
+              {/* 진행률 바 */}
+              <div className="mt-3 h-2 w-full rounded-full bg-slate-200 overflow-hidden" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="완료 진행률">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-500 ease-out"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </header>
+
+            {/* 카드 본문 */}
+            <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/60 ring-1 ring-slate-100 p-4 sm:p-5">
+              {/* 입력 */}
+              <TodoInput onAdd={addTodo} />
+
+              {/* 에러 배너 (서버 통신 실패 시) */}
+              {error && (
+                <div className="mt-3 flex items-start gap-2 px-3 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-sm" role="alert">
+                  <svg className="w-4 h-4 mt-0.5 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9 9a1 1 0 012 0v4a1 1 0 01-2 0V9zm1-5a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
+                  </svg>
+                  <span className="flex-1 break-words">{error}</span>
+                  <button type="button" onClick={loadTodos} className="shrink-0 font-semibold underline hover:no-underline">
+                    다시 시도
+                  </button>
+                </div>
+              )}
+
+              {/* 통계 */}
+              <div className="grid grid-cols-3 gap-2 mt-4 p-2 rounded-2xl bg-slate-50">
+                <StatCell label="전체" value={stats.total} accent="text-slate-700" />
+                <StatCell label="진행중" value={stats.active} accent="text-indigo-600" />
+                <StatCell label="완료" value={stats.done} accent="text-emerald-500" />
+              </div>
+
+              {/* 필터 탭 */}
+              <div className="flex gap-1 mt-4 p-1 rounded-xl bg-slate-100">
+                <FilterTab active={filter === "all"} onClick={() => setFilter("all")} count={stats.total}>전체</FilterTab>
+                <FilterTab active={filter === "active"} onClick={() => setFilter("active")} count={stats.active}>진행중</FilterTab>
+                <FilterTab active={filter === "done"} onClick={() => setFilter("done")} count={stats.done}>완료</FilterTab>
+              </div>
+
+              {/* 목록 */}
+              <div className="mt-4">
+                {loading ? (
+                  <div className="flex flex-col items-center justify-center py-14 text-slate-400 select-none">
+                    <svg className="w-7 h-7 animate-spin text-indigo-400" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <p className="mt-3 text-sm">불러오는 중…</p>
+                  </div>
+                ) : (
+                  <TodoList todos={filteredTodos} onToggle={toggleTodo} onDelete={deleteTodo} filter={filter} />
+                )}
+              </div>
+
+              {/* 하단 액션: 완료 항목이 있을 때만 노출 */}
+              {stats.done > 0 && (
+                <div className="flex justify-end mt-4 pt-3 border-t border-slate-100">
+                  <Button variant="ghost" size="sm" onClick={clearCompleted}>
+                    완료한 항목 지우기 ({stats.done})
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* 푸터 안내 */}
+            <p className="mt-4 text-center text-xs text-slate-400">
+              할 일은 서버 DB(Supabase)에 저장돼요. 다른 기기에서도 동일하게 유지됩니다.
+            </p>
+          </main>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

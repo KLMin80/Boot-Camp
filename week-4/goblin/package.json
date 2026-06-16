@@ -1,0 +1,12 @@
+{
+  "name": "goblin-notes",
+  "version": "1.0.0",
+  "description": "메모장 앱 (Supabase PostgreSQL 백엔드)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

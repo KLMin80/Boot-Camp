@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>메모장 · Notes</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind 유틸리티로 표현하기 어려운 부분만 커스텀 */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes modalIn { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .anim-fade-in { animation: fadeIn 0.25s ease-out both; }
+    .anim-overlay-in { animation: overlayIn 0.15s ease-out both; }
+    .anim-modal-in { animation: modalIn 0.2s ease-out both; }
+    /* 내용 미리보기 줄 제한 */
+    .clamp-3 {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    /* 스크롤바를 살짝 다듬어 가독성 향상 */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks 추출
+    // ========================================
+    const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+    // ========================================
+    // 🎨 디자인 시스템 - 정적 클래스 매핑
+    //    (Tailwind CDN JIT는 런타임 조립 클래스를 인식하지 못하므로
+    //     variant/size는 완전한 클래스 문자열로 미리 정의)
+    // ========================================
+    const BTN_BASE =
+      "inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors " +
+      "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed select-none";
+
+    const BTN_VARIANT = {
+      primary:   "bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:ring-indigo-500",
+      secondary: "bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 focus-visible:ring-slate-400",
+      danger:    "bg-rose-600 text-white hover:bg-rose-700 focus-visible:ring-rose-500",
+      ghost:     "bg-transparent text-slate-600 hover:bg-slate-100 focus-visible:ring-slate-300",
+    };
+
+    const BTN_SIZE = {
+      sm: "text-sm px-3 py-1.5",
+      md: "text-sm px-4 py-2",
+      lg: "text-base px-5 py-2.5",
+    };
+
+    const MODAL_SIZE = {
+      sm: "max-w-sm",
+      md: "max-w-lg",
+      lg: "max-w-2xl",
+    };
+
+    // ========================================
+    // 🎨 디자인 시스템 컴포넌트 (순수 프레젠테이셔널)
+    // ========================================
+
+    // 버튼
+    function Button({ variant = "primary", size = "md", className = "", type = "button", ...props }) {
+      const cls = `${BTN_BASE} ${BTN_VARIANT[variant] || BTN_VARIANT.primary} ${BTN_SIZE[size] || BTN_SIZE.md} ${className}`;
+      return <button type={type} className={cls} {...props} />;
+    }
+
+    // 입력 필드 (라벨 + 에러 메시지 포함, 제어 컴포넌트, ref 포워딩 지원)
+    const Input = React.forwardRef(function Input({ label, id, error, className = "", ...props }, ref) {
+      const inputId = id || `input-${Math.random().toString(36).slice(2)}`;
+      return (
+        <div className={className}>
+          {label && (
+            <label htmlFor={inputId} className="block text-sm font-medium text-slate-700 mb-1.5">
+              {label}
+            </label>
+          )}
+          <input
+            ref={ref}
+            id={inputId}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${inputId}-error` : undefined}
+            className={
+              "w-full rounded-lg border px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors " +
+              "focus:outline-none focus:ring-2 " +
+              (error
+                ? "border-rose-400 focus:ring-rose-400 bg-rose-50"
+                : "border-slate-300 focus:ring-indigo-500 focus:border-indigo-500 bg-white")
+            }
+            {...props}
+          />
+          {error && (
+            <p id={`${inputId}-error`} className="mt-1.5 text-sm text-rose-600">
+              {error}
+            </p>
+          )}
+        </div>
+      );
+    });
+
+    // 텍스트영역 (라벨 + 에러 메시지 포함, 제어 컴포넌트)
+    function Textarea({ label, id, error, className = "", rows = 5, ...props }) {
+      const taId = id || `textarea-${Math.random().toString(36).slice(2)}`;
+      return (
+        <div className={className}>
+          {label && (
+            <label htmlFor={taId} className="block text-sm font-medium text-slate-700 mb-1.5">
+              {label}
+            </label>
+          )}
+          <textarea
+            id={taId}
+            rows={rows}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${taId}-error` : undefined}
+            className={
+              "w-full rounded-lg border px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors resize-y " +
+              "focus:outline-none focus:ring-2 " +
+              (error
+                ? "border-rose-400 focus:ring-rose-400 bg-rose-50"
+                : "border-slate-300 focus:ring-indigo-500 focus:border-indigo-500 bg-white")
+            }
+            {...props}
+          />
+          {error && (
+            <p id={`${taId}-error`} className="mt-1.5 text-sm text-rose-600">
+              {error}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    // 카드
+    function Card({ className = "", children, ...props }) {
+      return (
+        <div
+          className={"bg-white rounded-xl border border-slate-200 shadow-sm " + className}
+          {...props}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    // 모달 (isOpen, onClose, title, size 지원 + ESC 닫기 + 포커스 처리 + 접근성)
+    function Modal({ isOpen, onClose, title, size = "md", children }) {
+      const dialogRef = useRef(null);
+
+      useEffect(() => {
+        if (!isOpen) return;
+        const onKey = (e) => { if (e.key === "Escape") onClose(); };
+        document.addEventListener("keydown", onKey);
+        // 배경 스크롤 잠금
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        // 모달 열리면 첫 포커스를 다이얼로그로 이동
+        if (dialogRef.current) dialogRef.current.focus();
+        return () => {
+          document.removeEventListener("keydown", onKey);
+          document.body.style.overflow = prevOverflow;
+        };
+      }, [isOpen, onClose]);
+
+      if (!isOpen) return null;
+
+      return (
+        <div
+          className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto"
+          aria-labelledby="modal-title"
+          role="dialog"
+          aria-modal="true"
+        >
+          {/* 배경 오버레이 */}
+          <div
+            className="fixed inset-0 bg-slate-900/50 anim-overlay-in"
+            onClick={onClose}
+            aria-hidden="true"
+          />
+          {/* 다이얼로그 */}
+          <div
+            ref={dialogRef}
+            tabIndex={-1}
+            className={
+              "relative w-full bg-white rounded-2xl shadow-xl my-8 outline-none anim-modal-in " +
+              (MODAL_SIZE[size] || MODAL_SIZE.md)
+            }
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <h2 id="modal-title" className="text-lg font-semibold text-slate-900">
+                {title}
+              </h2>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="닫기"
+                className="rounded-lg p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 py-5">{children}</div>
+          </div>
+        </div>
+      );
+    }
+
+    // 뱃지 (메모 개수 등 표시용)
+    function Badge({ className = "", children }) {
+      return (
+        <span className={"inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold px-2.5 py-0.5 " + className}>
+          {children}
+        </span>
+      );
+    }
+
+    // ========================================
+    // 🛠️ 유틸리티
+    // ========================================
+
+    // ----------------------------------------
+    // 🌐 백엔드 API 클라이언트
+    //    서버(server.js)가 createdAt/updatedAt 을 epoch ms 숫자로 내려주므로
+    //    기존 정렬/표시 로직을 그대로 사용할 수 있다.
+    // ----------------------------------------
+    const API_BASE_URL = "/api";
+
+    // 공통 fetch 래퍼: { success, data, message } 구조를 해석해
+    // 실패 시 message를 담은 Error를 throw 한다.
+    async function apiRequest(path, options = {}) {
+      let res;
+      try {
+        res = await fetch(`${API_BASE_URL}${path}`, {
+          headers: { "Content-Type": "application/json" },
+          ...options,
+        });
+      } catch (e) {
+        // 네트워크 단절 등
+        throw new Error("서버에 연결할 수 없습니다. 네트워크 상태를 확인해 주세요.");
+      }
+
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch (e) {
+        payload = null;
+      }
+
+      if (!res.ok || !payload || payload.success === false) {
+        const msg =
+          (payload && payload.message) ||
+          `요청에 실패했습니다. (${res.status})`;
+        throw new Error(msg);
+      }
+      return payload.data;
+    }
+
+    const notesApi = {
+      list: () => apiRequest("/notes", { method: "GET" }),
+      create: (title, content) =>
+        apiRequest("/notes", {
+          method: "POST",
+          body: JSON.stringify({ title, content }),
+        }),
+      update: (id, title, content) =>
+        apiRequest(`/notes/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          body: JSON.stringify({ title, content }),
+        }),
+      remove: (id) =>
+        apiRequest(`/notes/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    };
+
+    // 날짜 포맷 (예: 2026. 6. 16. 오후 3:24)
+    function formatDate(ts) {
+      if (!ts) return "";
+      try {
+        return new Date(ts).toLocaleString("ko-KR", {
+          year: "numeric", month: "numeric", day: "numeric",
+          hour: "numeric", minute: "2-digit",
+        });
+      } catch (e) {
+        return "";
+      }
+    }
+
+    // 검색어 하이라이트 (대소문자 무시)
+    function Highlight({ text, query }) {
+      if (!query) return <>{text}</>;
+      const q = query.trim();
+      if (!q) return <>{text}</>;
+      // 정규식 특수문자 이스케이프
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+      return (
+        <>
+          {parts.map((part, i) =>
+            part.toLowerCase() === q.toLowerCase() ? (
+              <mark key={i} className="bg-amber-200 text-slate-900 rounded px-0.5">{part}</mark>
+            ) : (
+              <React.Fragment key={i}>{part}</React.Fragment>
+            )
+          )}
+        </>
+      );
+    }
+
+    // ========================================
+    // 🧩 공통/레이아웃 컴포넌트
+    // ========================================
+
+    // 상단 헤더 (제목 + 메모 개수)
+    function Header({ count }) {
+      return (
+        <header className="border-b border-slate-200 bg-white/80 backdrop-blur sticky top-0 z-30">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-indigo-600 text-white shrink-0" aria-hidden="true">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-slate-900">메모장</h1>
+              <Badge>{count}개</Badge>
+            </div>
+          </div>
+        </header>
+      );
+    }
+
+    // 검색 바
+    function SearchBar({ value, onChange }) {
+      return (
+        <div className="relative">
+          <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400" aria-hidden="true">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </span>
+          <input
+            type="search"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="제목·내용으로 검색…"
+            aria-label="메모 검색"
+            className="w-full rounded-lg border border-slate-300 bg-white pl-11 pr-10 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          />
+          {value && (
+            <button
+              type="button"
+              onClick={() => onChange("")}
+              aria-label="검색어 지우기"
+              className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    // 빈 상태 (메모 없음 / 검색결과 없음 두 가지)
+    function EmptyState({ searching }) {
+      return (
+        <div className="text-center py-16 px-4" role="status">
+          <div className="mx-auto flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 text-slate-400 mb-4" aria-hidden="true">
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {searching ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              )}
+            </svg>
+          </div>
+          <h3 className="text-base font-semibold text-slate-900">
+            {searching ? "검색 결과가 없어요" : "아직 메모가 없어요"}
+          </h3>
+          <p className="mt-1.5 text-sm text-slate-500">
+            {searching
+              ? "다른 키워드로 검색해 보세요."
+              : "오른쪽 위 '새 메모' 버튼을 눌러 첫 메모를 작성해 보세요."}
+          </p>
+        </div>
+      );
+    }
+
+    // 로딩 상태 (목록 불러오는 중)
+    function LoadingState() {
+      return (
+        <div className="text-center py-16 px-4" role="status" aria-live="polite">
+          <div className="mx-auto mb-4 w-10 h-10 rounded-full border-4 border-slate-200 border-t-indigo-600 animate-spin" aria-hidden="true" />
+          <p className="text-sm text-slate-500">메모를 불러오는 중…</p>
+        </div>
+      );
+    }
+
+    // 오류 배너 (불러오기 실패 등) — 재시도 버튼 포함
+    function ErrorBanner({ message, onRetry }) {
+      return (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 mb-4 flex items-start gap-3" role="alert">
+          <svg className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+              d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-rose-800 break-words">{message}</p>
+          </div>
+          {onRetry && (
+            <Button variant="secondary" size="sm" onClick={onRetry} className="shrink-0">
+              다시 시도
+            </Button>
+          )}
+        </div>
+      );
+    }
+
+    // 토스트 (저장/삭제 성공·실패 등 일시적 알림)
+    function Toast({ toast, onClose }) {
+      useEffect(() => {
+        if (!toast) return;
+        const t = setTimeout(onClose, 3500);
+        return () => clearTimeout(t);
+      }, [toast, onClose]);
+
+      if (!toast) return null;
+      const isError = toast.type === "error";
+      return (
+        <div
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] anim-fade-in"
+          role="status"
+          aria-live="polite"
+        >
+          <div
+            className={
+              "flex items-center gap-2.5 rounded-xl px-4 py-3 shadow-lg text-sm font-medium " +
+              (isError
+                ? "bg-rose-600 text-white"
+                : "bg-slate-900 text-white")
+            }
+          >
+            <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              {isError ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                  d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                  d="M5 13l4 4L19 7" />
+              )}
+            </svg>
+            <span className="break-words">{toast.message}</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 메모 폼 (작성/수정 공용) - 모달 내부에서 사용
+    // ========================================
+    function NoteForm({ initialTitle = "", initialContent = "", submitLabel, onSubmit, onCancel }) {
+      const [title, setTitle] = useState(initialTitle);
+      const [content, setContent] = useState(initialContent);
+      const [errors, setErrors] = useState({});
+      const [submitting, setSubmitting] = useState(false);
+      const titleRef = useRef(null);
+
+      // 폼이 열리면 제목 입력에 포커스
+      useEffect(() => {
+        if (titleRef.current) titleRef.current.focus();
+      }, []);
+
+      const validate = () => {
+        const next = {};
+        if (!title.trim()) next.title = "제목을 입력해 주세요.";
+        if (!content.trim()) next.content = "내용을 입력해 주세요.";
+        setErrors(next);
+        return Object.keys(next).length === 0;
+      };
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (submitting) return;
+        if (!validate()) return;
+        setSubmitting(true);
+        try {
+          // onSubmit은 비동기(서버 저장)일 수 있다. 성공 시 부모가 모달을 닫는다.
+          await onSubmit({ title: title.trim(), content: content.trim() });
+        } finally {
+          // 컴포넌트가 unmount(모달 닫힘)되지 않은 경우에만 의미가 있음
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <form onSubmit={handleSubmit} noValidate>
+          <div className="space-y-4">
+            <Input
+              ref={titleRef}
+              label="제목"
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                if (errors.title) setErrors((p) => ({ ...p, title: undefined }));
+              }}
+              placeholder="메모 제목"
+              error={errors.title}
+              maxLength={100}
+            />
+            <Textarea
+              label="내용"
+              value={content}
+              onChange={(e) => {
+                setContent(e.target.value);
+                if (errors.content) setErrors((p) => ({ ...p, content: undefined }));
+              }}
+              placeholder="메모 내용을 입력하세요"
+              error={errors.content}
+              rows={7}
+            />
+          </div>
+          <div className="mt-6 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+            <Button variant="secondary" onClick={onCancel} disabled={submitting}>취소</Button>
+            <Button type="submit" variant="primary" disabled={submitting}>
+              {submitting ? "저장 중…" : submitLabel}
+            </Button>
+          </div>
+        </form>
+      );
+    }
+
+    // ========================================
+    // 🧩 메모 카드
+    // ========================================
+    function NoteCard({ note, query, onEdit, onDelete }) {
+      const edited = note.updatedAt && note.updatedAt !== note.createdAt;
+      return (
+        <Card className="p-5 flex flex-col anim-fade-in hover:shadow-md transition-shadow">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-base font-semibold text-slate-900 break-words flex-1 min-w-0">
+              <Highlight text={note.title} query={query} />
+            </h3>
+          </div>
+
+          <p className="mt-2 text-sm text-slate-600 whitespace-pre-wrap break-words clamp-3 flex-1">
+            <Highlight text={note.content} query={query} />
+          </p>
+
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+            <time className="text-xs text-slate-400" dateTime={new Date(note.updatedAt || note.createdAt).toISOString()}>
+              {edited ? "수정 " : "작성 "}
+              {formatDate(note.updatedAt || note.createdAt)}
+            </time>
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onEdit(note)}
+                aria-label={`'${note.title}' 메모 수정`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                수정
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onDelete(note)}
+                aria-label={`'${note.title}' 메모 삭제`}
+                className="text-rose-600 hover:bg-rose-50"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                삭제
+              </Button>
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 📄 메인 페이지 컴포넌트
+    // ========================================
+    function NotesPage() {
+      // 메모 목록 상태 (서버에서 비동기로 로드)
+      const [notes, setNotes] = useState([]);
+      const [query, setQuery] = useState("");
+
+      // 로딩/에러 상태
+      const [loading, setLoading] = useState(true);
+      const [loadError, setLoadError] = useState(null); // 목록 불러오기 실패 메시지
+      const [toast, setToast] = useState(null); // { type: 'success'|'error', message }
+
+      // 모달 상태: null이면 닫힘, { mode: 'create' } 또는 { mode: 'edit', note }
+      const [formModal, setFormModal] = useState(null);
+      // 삭제 확인 모달: 대상 note 또는 null
+      const [deleteTarget, setDeleteTarget] = useState(null);
+      const [deleting, setDeleting] = useState(false);
+
+      const showToast = useCallback((type, message) => {
+        setToast({ type, message });
+      }, []);
+
+      // 서버에서 메모 목록 불러오기
+      const fetchNotes = useCallback(async () => {
+        setLoading(true);
+        setLoadError(null);
+        try {
+          const data = await notesApi.list();
+          setNotes(Array.isArray(data) ? data : []);
+        } catch (e) {
+          setLoadError(e.message || "메모를 불러오지 못했습니다.");
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      // 최초 1회 로드
+      useEffect(() => {
+        fetchNotes();
+      }, [fetchNotes]);
+
+      // 검색 필터링 + 최신순 정렬 (수정/작성 시각 기준, epoch ms 숫자 뺄셈)
+      const filteredNotes = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        const list = q
+          ? notes.filter(
+              (n) =>
+                n.title.toLowerCase().includes(q) ||
+                n.content.toLowerCase().includes(q)
+            )
+          : notes;
+        return [...list].sort(
+          (a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)
+        );
+      }, [notes, query]);
+
+      // 작성 — 서버에 저장 후 반환된 행을 목록에 반영
+      // (실패 시 throw하여 NoteForm이 submitting 상태를 풀고 모달을 유지)
+      const handleCreate = useCallback(async ({ title, content }) => {
+        try {
+          const created = await notesApi.create(title, content);
+          setNotes((prev) => [created, ...prev]);
+          setFormModal(null);
+          showToast("success", "메모를 저장했어요.");
+        } catch (e) {
+          showToast("error", e.message || "저장에 실패했습니다.");
+          throw e;
+        }
+      }, [showToast]);
+
+      // 수정 — 서버에 저장 후 반환된 행으로 교체
+      const handleUpdate = useCallback(async (id, { title, content }) => {
+        try {
+          const updated = await notesApi.update(id, title, content);
+          setNotes((prev) => prev.map((n) => (n.id === id ? updated : n)));
+          setFormModal(null);
+          showToast("success", "메모를 수정했어요.");
+        } catch (e) {
+          showToast("error", e.message || "수정에 실패했습니다.");
+          throw e;
+        }
+      }, [showToast]);
+
+      // 삭제 (확인 모달에서 확정 시 호출)
+      const confirmDelete = useCallback(async () => {
+        if (!deleteTarget || deleting) return;
+        setDeleting(true);
+        try {
+          await notesApi.remove(deleteTarget.id);
+          setNotes((prev) => prev.filter((n) => n.id !== deleteTarget.id));
+          setDeleteTarget(null);
+          showToast("success", "메모를 삭제했어요.");
+        } catch (e) {
+          showToast("error", e.message || "삭제에 실패했습니다.");
+        } finally {
+          setDeleting(false);
+        }
+      }, [deleteTarget, deleting, showToast]);
+
+      const isSearching = query.trim().length > 0;
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          <Header count={notes.length} />
+
+          <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-6">
+            {/* 검색 + 새 메모 작성 버튼 */}
+            <div className="flex flex-col sm:flex-row gap-3 mb-6">
+              <div className="flex-1">
+                <SearchBar value={query} onChange={setQuery} />
+              </div>
+              <Button
+                size="lg"
+                onClick={() => setFormModal({ mode: "create" })}
+                className="shrink-0"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                </svg>
+                새 메모
+              </Button>
+            </div>
+
+            {/* 불러오기 실패 배너 */}
+            {loadError && !loading && (
+              <ErrorBanner message={loadError} onRetry={fetchNotes} />
+            )}
+
+            {/* 검색 결과 요약 (로딩/에러가 아닐 때만) */}
+            {!loading && !loadError && isSearching && (
+              <p className="text-sm text-slate-500 mb-4" role="status">
+                <span className="font-semibold text-slate-700">"{query.trim()}"</span> 검색 결과 {filteredNotes.length}개
+              </p>
+            )}
+
+            {/* 본문: 로딩 → 에러 → 목록/빈 상태 순서로 분기 */}
+            {loading ? (
+              <Card className="overflow-hidden">
+                <LoadingState />
+              </Card>
+            ) : loadError ? (
+              null
+            ) : filteredNotes.length === 0 ? (
+              <Card className="overflow-hidden">
+                <EmptyState searching={isSearching} />
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredNotes.map((note) => (
+                  <NoteCard
+                    key={note.id}
+                    note={note}
+                    query={query.trim()}
+                    onEdit={(n) => setFormModal({ mode: "edit", note: n })}
+                    onDelete={(n) => setDeleteTarget(n)}
+                  />
+                ))}
+              </div>
+            )}
+          </main>
+
+          <footer className="border-t border-slate-200 py-6 text-center text-xs text-slate-400">
+            모든 메모는 데이터베이스에 안전하게 저장됩니다 · PostgreSQL
+          </footer>
+
+          {/* 작성/수정 모달 */}
+          <Modal
+            isOpen={!!formModal}
+            onClose={() => setFormModal(null)}
+            title={formModal?.mode === "edit" ? "메모 수정" : "새 메모 작성"}
+            size="md"
+          >
+            {formModal && (
+              <NoteForm
+                key={formModal.mode === "edit" ? formModal.note.id : "create"}
+                initialTitle={formModal.mode === "edit" ? formModal.note.title : ""}
+                initialContent={formModal.mode === "edit" ? formModal.note.content : ""}
+                submitLabel={formModal.mode === "edit" ? "수정 완료" : "저장"}
+                onCancel={() => setFormModal(null)}
+                onSubmit={(data) =>
+                  formModal.mode === "edit"
+                    ? handleUpdate(formModal.note.id, data)
+                    : handleCreate(data)
+                }
+              />
+            )}
+          </Modal>
+
+          {/* 삭제 확인 모달 */}
+          <Modal
+            isOpen={!!deleteTarget}
+            onClose={() => setDeleteTarget(null)}
+            title="메모 삭제"
+            size="sm"
+          >
+            <p className="text-sm text-slate-600">
+              <span className="font-semibold text-slate-900 break-words">
+                "{deleteTarget?.title}"
+              </span>{" "}
+              메모를 삭제할까요? 삭제하면 되돌릴 수 없습니다.
+            </p>
+            <div className="mt-6 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+              <Button variant="secondary" onClick={() => setDeleteTarget(null)} disabled={deleting}>취소</Button>
+              <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
+                {deleting ? "삭제 중…" : "삭제"}
+              </Button>
+            </div>
+          </Modal>
+
+          {/* 토스트 알림 */}
+          <Toast toast={toast} onClose={() => setToast(null)} />
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App 루트 컴포넌트
+    // ========================================
+    function App() {
+      return <NotesPage />;
+    }
+
+    // ========================================
+    // 렌더링
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

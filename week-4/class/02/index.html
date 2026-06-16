@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>할 일 관리 앱</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Tailwind 유틸리티로 처리 불가능한 부분만 정의 */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up { animation: fadeInUp 0.18s ease-out; }
+  </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    const STORAGE_KEY = "todo-app.items.v1";
+
+    // ========================================
+    // 🎨 Design System Components
+    // ========================================
+
+    // variant → 완전한 Tailwind 클래스 문자열 정적 매핑 (CDN JIT 대응)
+    const BTN_VARIANT = {
+      primary: "bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-400",
+      secondary: "bg-slate-200 hover:bg-slate-300 text-slate-700 focus:ring-slate-400",
+      danger: "bg-rose-500 hover:bg-rose-600 text-white focus:ring-rose-400",
+      ghost: "bg-transparent hover:bg-slate-100 text-slate-500 focus:ring-slate-300",
+    };
+    const BTN_SIZE = {
+      sm: "px-3 py-1.5 text-sm",
+      md: "px-4 py-2 text-sm",
+      lg: "px-5 py-3 text-base",
+    };
+
+    function Button({ variant = "primary", size = "md", disabled = false, type = "button", onClick, className = "", children, ...rest }) {
+      return (
+        <button
+          type={type}
+          disabled={disabled}
+          onClick={onClick}
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed ${BTN_VARIANT[variant]} ${BTN_SIZE[size]} ${className}`}
+          {...rest}
+        >
+          {children}
+        </button>
+      );
+    }
+
+    function Input({ value, onChange, onKeyDown, placeholder = "", disabled = false, ariaLabel, className = "" }) {
+      return (
+        <input
+          type="text"
+          value={value}
+          onChange={onChange}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          aria-label={ariaLabel}
+          className={`w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-slate-800 placeholder-slate-400 transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-50 ${className}`}
+        />
+      );
+    }
+
+    function Card({ className = "", children }) {
+      return (
+        <div className={`rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 ${className}`}>
+          {children}
+        </div>
+      );
+    }
+
+    function Checkbox({ checked, onChange, ariaLabel }) {
+      return (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={checked}
+          aria-label={ariaLabel}
+          onClick={onChange}
+          className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-300 ${
+            checked
+              ? "border-indigo-600 bg-indigo-600 text-white"
+              : "border-slate-300 bg-white text-transparent hover:border-indigo-400"
+          }`}
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 10l4 4 8-9" />
+          </svg>
+        </button>
+      );
+    }
+
+    // 상단 통계 필 (필터 탭 겸용)
+    const FILTERS = [
+      { key: "all", label: "전체" },
+      { key: "active", label: "진행 중" },
+      { key: "done", label: "완료" },
+    ];
+
+    function FilterTabs({ value, onChange, counts }) {
+      return (
+        <div className="flex gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="할 일 필터">
+          {FILTERS.map((f) => {
+            const isActive = value === f.key;
+            return (
+              <button
+                key={f.key}
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => onChange(f.key)}
+                className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-300 ${
+                  isActive ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {f.label}
+                <span className={`ml-1.5 text-xs ${isActive ? "text-indigo-400" : "text-slate-400"}`}>
+                  {counts[f.key]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 할 일 항목 컴포넌트
+    // ========================================
+    function TodoItem({ todo, onToggle, onDelete }) {
+      return (
+        <li className="animate-fade-in-up flex items-center gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition hover:border-slate-200 hover:shadow-sm">
+          <Checkbox
+            checked={todo.done}
+            onChange={() => onToggle(todo.id)}
+            ariaLabel={`${todo.text} 완료 토글`}
+          />
+          <span
+            className={`flex-1 break-words text-[15px] leading-snug ${
+              todo.done ? "text-slate-400 line-through" : "text-slate-700"
+            }`}
+          >
+            {todo.text}
+          </span>
+          <button
+            type="button"
+            onClick={() => onDelete(todo.id)}
+            aria-label={`${todo.text} 삭제`}
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-300"
+          >
+            <svg className="h-4.5 w-4.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 6l8 8M14 6l-8 8" />
+            </svg>
+          </button>
+        </li>
+      );
+    }
+
+    function EmptyState({ filter }) {
+      const message =
+        filter === "done" ? "완료한 할 일이 아직 없어요."
+        : filter === "active" ? "진행 중인 할 일이 없어요. 잠깐 쉬어 가세요!"
+        : "할 일이 없어요. 위에서 새 할 일을 추가해 보세요.";
+      return (
+        <div className="flex flex-col items-center justify-center gap-3 px-4 py-12 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+            <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+          </div>
+          <p className="text-sm text-slate-500">{message}</p>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 메인 페이지: TodoApp
+    // ========================================
+    function TodoApp() {
+      // localStorage 에서 초기값 복원 (lazy initializer)
+      const [todos, setTodos] = useState(() => {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return [];
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+          console.error("저장된 할 일을 불러오지 못했습니다.", e);
+          return [];
+        }
+      });
+      const [text, setText] = useState("");
+      const [filter, setFilter] = useState("all");
+      const inputRef = useRef(null);
+
+      // todos 변경 시마다 localStorage 에 저장 (영속화)
+      useEffect(() => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
+        } catch (e) {
+          console.error("할 일을 저장하지 못했습니다.", e);
+        }
+      }, [todos]);
+
+      const counts = useMemo(() => {
+        const done = todos.filter((t) => t.done).length;
+        return { all: todos.length, active: todos.length - done, done };
+      }, [todos]);
+
+      const visibleTodos = useMemo(() => {
+        if (filter === "active") return todos.filter((t) => !t.done);
+        if (filter === "done") return todos.filter((t) => t.done);
+        return todos;
+      }, [todos, filter]);
+
+      function addTodo() {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        const newTodo = {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          text: trimmed,
+          done: false,
+          createdAt: Date.now(),
+        };
+        setTodos((prev) => [newTodo, ...prev]);
+        setText("");
+        inputRef.current && inputRef.current.focus();
+      }
+
+      function toggleTodo(id) {
+        setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
+      }
+
+      function deleteTodo(id) {
+        setTodos((prev) => prev.filter((t) => t.id !== id));
+      }
+
+      function clearCompleted() {
+        setTodos((prev) => prev.filter((t) => !t.done));
+      }
+
+      function handleKeyDown(e) {
+        if (e.key === "Enter") addTodo();
+      }
+
+      return (
+        <div className="mx-auto flex min-h-screen max-w-xl flex-col px-4 py-8 sm:py-12">
+          {/* 헤더 */}
+          <header className="mb-6 text-center">
+            <h1 className="text-2xl font-bold text-slate-800 sm:text-3xl">할 일 관리</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              {counts.all === 0
+                ? "오늘 할 일을 추가해 보세요"
+                : `전체 ${counts.all}개 중 ${counts.done}개 완료`}
+            </p>
+          </header>
+
+          <Card className="flex flex-1 flex-col p-4 sm:p-6">
+            {/* 입력 영역 */}
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="새로운 할 일을 입력하세요"
+                  aria-label="새로운 할 일 입력"
+                  maxLength={200}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-slate-800 placeholder-slate-400 transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                />
+              </div>
+              <Button onClick={addTodo} disabled={!text.trim()} size="md" className="flex-shrink-0">
+                추가
+              </Button>
+            </div>
+
+            {/* 필터 탭 */}
+            <div className="mt-4">
+              <FilterTabs value={filter} onChange={setFilter} counts={counts} />
+            </div>
+
+            {/* 목록 */}
+            <div className="mt-4 flex-1">
+              {visibleTodos.length === 0 ? (
+                <EmptyState filter={filter} />
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {visibleTodos.map((todo) => (
+                    <TodoItem key={todo.id} todo={todo} onToggle={toggleTodo} onDelete={deleteTodo} />
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* 푸터: 완료 항목 정리 */}
+            {counts.done > 0 && (
+              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                <span className="text-xs text-slate-400">{counts.active}개 남음</span>
+                <Button variant="ghost" size="sm" onClick={clearCompleted}>
+                  완료한 항목 지우기
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          <p className="mt-6 text-center text-xs text-slate-400">
+            데이터는 이 브라우저에 자동 저장됩니다 · 새로고침해도 유지돼요
+          </p>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App & 렌더링
+    // ========================================
+    function App() {
+      return <TodoApp />;
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

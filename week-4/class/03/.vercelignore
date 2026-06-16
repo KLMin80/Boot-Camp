@@ -1,0 +1,10 @@
+# 자격증명 — 절대 업로드 금지 (Vercel 환경변수로 주입)
+.env
+.env.*
+
+# 불필요 산출물 (server.js 는 Vercel 엔트리포인트라 업로드함)
+node_modules
+.claude
+03.zip
+*.log
+.vercel
