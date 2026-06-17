@@ -3,55 +3,56 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>할 일 관리 앱</title>
+  <title>할 일 관리</title>
+
+  <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <style>
-    /* Tailwind 유틸리티로 처리 불가능한 부분만 정의 */
-    @keyframes fadeInUp {
-      from { opacity: 0; transform: translateY(6px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .animate-fade-in-up { animation: fadeInUp 0.18s ease-out; }
-  </style>
+
+  <!-- React 18 + ReactDOM + Babel (CDN, 빌드 도구 없이 JSX 사용) -->
+  <!-- 주의: 버전을 고정(pin)한다. @babel/standalone을 버전 없이 쓰면 unpkg가 최신(8.x)을
+       내려주는데, 8.x는 브라우저용 text/babel 자동 실행이 깨져 화면이 안 뜬다. 7.x로 고정. -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
 </head>
 <body class="bg-slate-100">
   <div id="root"></div>
 
   <script type="text/babel">
     // ========================================
-    // React Hooks
+    // React 훅 가져오기
     // ========================================
     const { useState, useEffect, useMemo, useRef } = React;
 
-    const STORAGE_KEY = "todo-app.items.v1";
+    // localStorage에 데이터를 저장할 때 사용할 키 이름
+    const STORAGE_KEY = "todo-app:todos";
 
     // ========================================
-    // 🎨 Design System Components
+    // 🎨 디자인 시스템 컴포넌트 (재사용 UI 조각, 비즈니스 로직 없음)
     // ========================================
 
-    // variant → 완전한 Tailwind 클래스 문자열 정적 매핑 (CDN JIT 대응)
-    const BTN_VARIANT = {
-      primary: "bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-400",
-      secondary: "bg-slate-200 hover:bg-slate-300 text-slate-700 focus:ring-slate-400",
-      danger: "bg-rose-500 hover:bg-rose-600 text-white focus:ring-rose-400",
-      ghost: "bg-transparent hover:bg-slate-100 text-slate-500 focus:ring-slate-300",
+    // 버튼 색상은 Tailwind JIT가 정적으로 스캔할 수 있도록
+    // 완전한 클래스 문자열을 미리 적어 둔다. (런타임 조립 X)
+    const BUTTON_VARIANTS = {
+      primary: "bg-indigo-600 hover:bg-indigo-700 text-white",
+      secondary: "bg-white hover:bg-slate-50 text-slate-700 border border-slate-300",
+      danger: "bg-white hover:bg-red-50 text-red-600 border border-red-200",
+      ghost: "bg-transparent hover:bg-slate-100 text-slate-600",
     };
-    const BTN_SIZE = {
+
+    const BUTTON_SIZES = {
       sm: "px-3 py-1.5 text-sm",
       md: "px-4 py-2 text-sm",
-      lg: "px-5 py-3 text-base",
+      lg: "px-5 py-2.5 text-base",
     };
 
-    function Button({ variant = "primary", size = "md", disabled = false, type = "button", onClick, className = "", children, ...rest }) {
+    function Button({ variant = "primary", size = "md", className = "", children, ...rest }) {
       return (
         <button
-          type={type}
-          disabled={disabled}
-          onClick={onClick}
-          className={`inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed ${BTN_VARIANT[variant]} ${BTN_SIZE[size]} ${className}`}
+          className={`inline-flex items-center justify-center rounded-lg font-medium transition-colors
+            disabled:opacity-50 disabled:cursor-not-allowed
+            focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1
+            ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`}
           {...rest}
         >
           {children}
@@ -59,20 +60,22 @@
       );
     }
 
-    function Input({ value, onChange, onKeyDown, placeholder = "", disabled = false, ariaLabel, className = "" }) {
+    // 자동 포커스를 위해 내부 input에 ref를 연결할 수 있도록 forwardRef로 정의한다.
+    const Input = React.forwardRef(function Input(
+      { className = "", ...rest },
+      ref
+    ) {
       return (
         <input
-          type="text"
-          value={value}
-          onChange={onChange}
-          onKeyDown={onKeyDown}
-          placeholder={placeholder}
-          disabled={disabled}
-          aria-label={ariaLabel}
-          className={`w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-slate-800 placeholder-slate-400 transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-50 ${className}`}
+          ref={ref}
+          className={`w-full rounded-lg border border-slate-300 px-4 py-2.5 text-slate-800
+            placeholder:text-slate-400
+            focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400
+            ${className}`}
+          {...rest}
         />
       );
-    }
+    });
 
     function Card({ className = "", children }) {
       return (
@@ -82,256 +85,225 @@
       );
     }
 
-    function Checkbox({ checked, onChange, ariaLabel }) {
-      return (
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={checked}
-          aria-label={ariaLabel}
-          onClick={onChange}
-          className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-300 ${
-            checked
-              ? "border-indigo-600 bg-indigo-600 text-white"
-              : "border-slate-300 bg-white text-transparent hover:border-indigo-400"
-          }`}
-        >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 10l4 4 8-9" />
-          </svg>
-        </button>
-      );
-    }
-
-    // 상단 통계 필 (필터 탭 겸용)
-    const FILTERS = [
-      { key: "all", label: "전체" },
-      { key: "active", label: "진행 중" },
-      { key: "done", label: "완료" },
-    ];
-
-    function FilterTabs({ value, onChange, counts }) {
-      return (
-        <div className="flex gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="할 일 필터">
-          {FILTERS.map((f) => {
-            const isActive = value === f.key;
-            return (
-              <button
-                key={f.key}
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => onChange(f.key)}
-                className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-300 ${
-                  isActive ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {f.label}
-                <span className={`ml-1.5 text-xs ${isActive ? "text-indigo-400" : "text-slate-400"}`}>
-                  {counts[f.key]}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      );
-    }
-
     // ========================================
-    // 🧩 할 일 항목 컴포넌트
+    // 🧩 하위 컴포넌트 (목록의 한 항목)
     // ========================================
     function TodoItem({ todo, onToggle, onDelete }) {
       return (
-        <li className="animate-fade-in-up flex items-center gap-3 rounded-xl border border-slate-100 bg-white px-3 py-3 transition hover:border-slate-200 hover:shadow-sm">
-          <Checkbox
+        <li className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
+          {/* 체크박스: 완료 토글 */}
+          <input
+            type="checkbox"
             checked={todo.done}
             onChange={() => onToggle(todo.id)}
-            ariaLabel={`${todo.text} 완료 토글`}
+            className="h-5 w-5 shrink-0 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-400"
+            aria-label={`${todo.text} 완료 여부`}
           />
+
+          {/* 할 일 텍스트: 완료되면 취소선 + 흐리게 */}
           <span
-            className={`flex-1 break-words text-[15px] leading-snug ${
-              todo.done ? "text-slate-400 line-through" : "text-slate-700"
+            onClick={() => onToggle(todo.id)}
+            className={`flex-1 cursor-pointer break-all select-none ${
+              todo.done ? "line-through text-slate-400" : "text-slate-800"
             }`}
           >
             {todo.text}
           </span>
-          <button
-            type="button"
+
+          {/* 삭제 버튼 */}
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => onDelete(todo.id)}
-            aria-label={`${todo.text} 삭제`}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-300"
+            aria-label="삭제"
           >
-            <svg className="h-4.5 w-4.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 6l8 8M14 6l-8 8" />
-            </svg>
-          </button>
+            삭제
+          </Button>
         </li>
       );
     }
 
-    function EmptyState({ filter }) {
-      const message =
-        filter === "done" ? "완료한 할 일이 아직 없어요."
-        : filter === "active" ? "진행 중인 할 일이 없어요. 잠깐 쉬어 가세요!"
-        : "할 일이 없어요. 위에서 새 할 일을 추가해 보세요.";
-      return (
-        <div className="flex flex-col items-center justify-center gap-3 px-4 py-12 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-            <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 11l3 3L22 4" />
-              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-            </svg>
-          </div>
-          <p className="text-sm text-slate-500">{message}</p>
-        </div>
-      );
-    }
-
     // ========================================
-    // 📄 메인 페이지: TodoApp
+    // 📄 메인 페이지 컴포넌트 (상태와 비즈니스 로직)
     // ========================================
     function TodoApp() {
-      // localStorage 에서 초기값 복원 (lazy initializer)
+      // 초기값을 localStorage에서 한 번만 읽어 온다. (lazy initializer)
       const [todos, setTodos] = useState(() => {
         try {
-          const raw = localStorage.getItem(STORAGE_KEY);
-          if (!raw) return [];
-          const parsed = JSON.parse(raw);
-          return Array.isArray(parsed) ? parsed : [];
+          const saved = localStorage.getItem(STORAGE_KEY);
+          return saved ? JSON.parse(saved) : [];
         } catch (e) {
+          // 저장된 데이터가 깨졌을 때를 대비한 안전 처리
           console.error("저장된 할 일을 불러오지 못했습니다.", e);
           return [];
         }
       });
-      const [text, setText] = useState("");
-      const [filter, setFilter] = useState("all");
+
+      const [text, setText] = useState("");        // 입력창 값
+      const [filter, setFilter] = useState("all");  // all | active | done
       const inputRef = useRef(null);
 
-      // todos 변경 시마다 localStorage 에 저장 (영속화)
+      // todos가 바뀔 때마다 localStorage에 자동 저장한다.
       useEffect(() => {
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
-        } catch (e) {
-          console.error("할 일을 저장하지 못했습니다.", e);
-        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
       }, [todos]);
 
-      const counts = useMemo(() => {
-        const done = todos.filter((t) => t.done).length;
-        return { all: todos.length, active: todos.length - done, done };
-      }, [todos]);
+      // 첫 렌더 시 입력창에 자동 포커스
+      useEffect(() => {
+        inputRef.current?.focus();
+      }, []);
 
+      // 할 일 추가 (빈 입력 방지)
+      function addTodo() {
+        const trimmed = text.trim();
+        if (!trimmed) return; // 공백만 입력하면 추가하지 않음
+
+        const newTodo = {
+          id: Date.now(),     // 간단한 고유 id로 현재 시각 사용
+          text: trimmed,
+          done: false,
+        };
+        setTodos((prev) => [newTodo, ...prev]); // 최신 항목을 위로
+        setText("");
+        inputRef.current?.focus();
+      }
+
+      // Enter 키로도 추가 가능
+      function handleKeyDown(e) {
+        if (e.key === "Enter") addTodo();
+      }
+
+      // 완료 토글
+      function toggleTodo(id) {
+        setTodos((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
+        );
+      }
+
+      // 삭제
+      function deleteTodo(id) {
+        setTodos((prev) => prev.filter((t) => t.id !== id));
+      }
+
+      // 완료된 항목 모두 비우기
+      function clearCompleted() {
+        setTodos((prev) => prev.filter((t) => !t.done));
+      }
+
+      // 남은(진행중) 할 일 개수
+      const remainingCount = useMemo(
+        () => todos.filter((t) => !t.done).length,
+        [todos]
+      );
+
+      // 현재 필터에 맞는 목록만 추려서 보여 준다.
       const visibleTodos = useMemo(() => {
         if (filter === "active") return todos.filter((t) => !t.done);
         if (filter === "done") return todos.filter((t) => t.done);
         return todos;
       }, [todos, filter]);
 
-      function addTodo() {
-        const trimmed = text.trim();
-        if (!trimmed) return;
-        const newTodo = {
-          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-          text: trimmed,
-          done: false,
-          createdAt: Date.now(),
-        };
-        setTodos((prev) => [newTodo, ...prev]);
-        setText("");
-        inputRef.current && inputRef.current.focus();
-      }
-
-      function toggleTodo(id) {
-        setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
-      }
-
-      function deleteTodo(id) {
-        setTodos((prev) => prev.filter((t) => t.id !== id));
-      }
-
-      function clearCompleted() {
-        setTodos((prev) => prev.filter((t) => !t.done));
-      }
-
-      function handleKeyDown(e) {
-        if (e.key === "Enter") addTodo();
-      }
+      // 필터 버튼 정의
+      const filters = [
+        { key: "all", label: "전체" },
+        { key: "active", label: "진행중" },
+        { key: "done", label: "완료" },
+      ];
 
       return (
-        <div className="mx-auto flex min-h-screen max-w-xl flex-col px-4 py-8 sm:py-12">
-          {/* 헤더 */}
-          <header className="mb-6 text-center">
-            <h1 className="text-2xl font-bold text-slate-800 sm:text-3xl">할 일 관리</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              {counts.all === 0
-                ? "오늘 할 일을 추가해 보세요"
-                : `전체 ${counts.all}개 중 ${counts.done}개 완료`}
-            </p>
-          </header>
+        <div className="min-h-screen px-4 py-10 sm:py-16">
+          <div className="mx-auto w-full max-w-xl">
+            {/* 헤더 */}
+            <header className="mb-6 text-center">
+              <h1 className="text-3xl font-bold text-slate-800">📝 할 일 관리</h1>
+              <p className="mt-2 text-sm text-slate-500">
+                남은 할 일 <span className="font-semibold text-indigo-600">{remainingCount}</span>개
+              </p>
+            </header>
 
-          <Card className="flex flex-1 flex-col p-4 sm:p-6">
-            {/* 입력 영역 */}
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <input
+            <Card className="p-5">
+              {/* 입력 영역 */}
+              <div className="flex gap-2">
+                <Input
                   ref={inputRef}
-                  type="text"
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="새로운 할 일을 입력하세요"
-                  aria-label="새로운 할 일 입력"
-                  maxLength={200}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-slate-800 placeholder-slate-400 transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                  placeholder="할 일을 입력하세요"
+                  aria-label="할 일 입력"
                 />
-              </div>
-              <Button onClick={addTodo} disabled={!text.trim()} size="md" className="flex-shrink-0">
-                추가
-              </Button>
-            </div>
-
-            {/* 필터 탭 */}
-            <div className="mt-4">
-              <FilterTabs value={filter} onChange={setFilter} counts={counts} />
-            </div>
-
-            {/* 목록 */}
-            <div className="mt-4 flex-1">
-              {visibleTodos.length === 0 ? (
-                <EmptyState filter={filter} />
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {visibleTodos.map((todo) => (
-                    <TodoItem key={todo.id} todo={todo} onToggle={toggleTodo} onDelete={deleteTodo} />
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {/* 푸터: 완료 항목 정리 */}
-            {counts.done > 0 && (
-              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                <span className="text-xs text-slate-400">{counts.active}개 남음</span>
-                <Button variant="ghost" size="sm" onClick={clearCompleted}>
-                  완료한 항목 지우기
+                <Button onClick={addTodo} className="shrink-0">
+                  추가
                 </Button>
               </div>
-            )}
-          </Card>
 
-          <p className="mt-6 text-center text-xs text-slate-400">
-            데이터는 이 브라우저에 자동 저장됩니다 · 새로고침해도 유지돼요
-          </p>
+              {/* 필터 버튼 */}
+              <div className="mt-4 flex gap-2">
+                {filters.map((f) => (
+                  <Button
+                    key={f.key}
+                    variant={filter === f.key ? "primary" : "secondary"}
+                    size="sm"
+                    onClick={() => setFilter(f.key)}
+                  >
+                    {f.label}
+                  </Button>
+                ))}
+                {/* 완료된 항목이 있을 때만 '완료 비우기' 노출 */}
+                {todos.some((t) => t.done) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearCompleted}
+                    className="ml-auto"
+                  >
+                    완료 비우기
+                  </Button>
+                )}
+              </div>
+
+              {/* 목록 영역 */}
+              <div className="mt-4">
+                {visibleTodos.length === 0 ? (
+                  // 빈 상태 처리
+                  <p className="py-10 text-center text-sm text-slate-400">
+                    {todos.length === 0
+                      ? "아직 할 일이 없어요. 위에서 추가해 보세요!"
+                      : "이 필터에 해당하는 할 일이 없어요."}
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-100">
+                    {visibleTodos.map((todo) => (
+                      <TodoItem
+                        key={todo.id}
+                        todo={todo}
+                        onToggle={toggleTodo}
+                        onDelete={deleteTodo}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </Card>
+
+            <footer className="mt-6 text-center text-xs text-slate-400">
+              변경 사항은 자동으로 저장됩니다 (localStorage)
+            </footer>
+          </div>
         </div>
       );
     }
 
     // ========================================
-    // 🚀 App & 렌더링
+    // 🚀 App (루트 컴포넌트)
     // ========================================
     function App() {
       return <TodoApp />;
     }
 
+    // ========================================
+    // 렌더링
+    // ========================================
     ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   </script>
 </body>
