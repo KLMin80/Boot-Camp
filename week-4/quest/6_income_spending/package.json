@@ -1,0 +1,12 @@
+{
+  "name": "income-spending-compare",
+  "version": "1.0.0",
+  "description": "익명 연봉·지출 비교 — 단일 React index.html + Node 내장 http 서버 + Supabase Postgres",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  }
+}
