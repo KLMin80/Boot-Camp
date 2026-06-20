@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>밸런스 게임 ⚔️ — 둘 중 하나, 당신의 선택은?</title>
+
+  <!-- ⚠️ 모든 CDN은 버전을 명시적으로 고정한다. 미고정 시 @babel/standalone 이
+       최신(8.x)으로 올라가 type="text/babel" 인라인 변환이 통째로 깨진다(백지 화면).
+       Babel 은 반드시 7.x 로 고정한다. React/ReactDOM/Tailwind 도 정확히 핀. -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+
+  <style>
+    /* Tailwind 으로 표현하기 어려운 것만 커스텀 처리 */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up { animation: fadeInUp 0.32s ease-out both; }
+
+    /* 투표 확정 시 VS 배지가 살짝 튀는 효과 */
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.25); }
+      100% { transform: scale(1); }
+    }
+    .animate-pop { animation: pop 0.34s ease-out; }
+
+    /* 대결 테마 배경: 좌(인디고) → 우(로즈)로 은은하게 가르는 그라데이션 */
+    body {
+      background:
+        radial-gradient(1200px 600px at 0% 0%, #eef2ff 0%, transparent 55%),
+        radial-gradient(1200px 600px at 100% 0%, #fff1f2 0%, transparent 55%),
+        linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      min-height: 100vh;
+    }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #c7d2fe; border-radius: 9999px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+    // ========================================
+    // 상수 / 설정
+    // ========================================
+    // 서버 연동 베이스 URL. ❌ http://localhost:xxxx 하드코딩 금지
+    // → ✅ 같은 오리진의 상대경로 사용 (index.html 과 /api 를 server.js 가 함께 서빙).
+    const API_BASE_URL = "/api"; // 또는 window.location.origin + "/api"
+
+    // 폴링 주기(ms). useEffect 안에서 setInterval 로 목록을 주기적으로 재조회한다.
+    const POLL_INTERVAL = 5000;
+
+    // 입력 제약 (선택지 A/B 공통)
+    const OPTION_MIN = 1;
+    const OPTION_MAX = 100;
+
+    // 이 브라우저가 어떤 질문에 무엇을 투표했는지 저장하는 localStorage 키.
+    // ⚠️ 한계: 익명(로그인 없음)이라 서버는 같은 사람을 식별하지 못한다.
+    //    그래서 "중복 투표 방지"와 "내 선택 하이라이트 유지"는 순전히 이 브라우저
+    //    로컬에만 존재한다. 다른 기기/브라우저/시크릿창에서는 다시 투표할 수 있고,
+    //    localStorage 를 비우면 잠금도 풀린다. (진짜 1인 1표는 서버 인증이 필요.)
+    const VOTE_STORAGE_KEY = "balance_game_votes_v1";
+
+    // 선택지 A / B 의 색 테마.
+    // ⚠️ Tailwind CDN(JIT)은 런타임에 조립한 클래스(`bg-${x}`)를 못 잡으므로,
+    //    A/B 별 색은 반드시 "완전한 클래스 문자열"을 정적으로 미리 적어 둔다.
+    // - A: 인디고/스카이(차가운 쪽), B: 로즈/핑크(따뜻한 쪽) → 대결 구도를 색으로 표현.
+    const SIDE_STYLES = {
+      A: {
+        key: "A",
+        emoji: "🅰️",
+        // 미투표 패널 (클릭 가능한 큰 버튼)
+        panelIdle: "bg-indigo-50 hover:bg-indigo-100 ring-1 ring-indigo-200 text-indigo-900",
+        // 결과 막대(차오르는 바)
+        bar: "bg-gradient-to-r from-indigo-500 to-sky-500",
+        // 결과 영역에서 내가 고른 쪽을 강조하는 테두리/배경
+        resultBox: "ring-2 ring-indigo-400 bg-indigo-50/70",
+        resultBoxIdle: "ring-1 ring-gray-200 bg-white",
+        // 텍스트/퍼센트 강조색
+        text: "text-indigo-700",
+        // "내 선택" 배지
+        myBadge: "bg-indigo-500 text-white",
+        // VS 배지의 절반 톤
+        vsFrom: "from-indigo-500",
+      },
+      B: {
+        key: "B",
+        emoji: "🅱️",
+        panelIdle: "bg-rose-50 hover:bg-rose-100 ring-1 ring-rose-200 text-rose-900",
+        bar: "bg-gradient-to-r from-rose-500 to-pink-500",
+        resultBox: "ring-2 ring-rose-400 bg-rose-50/70",
+        resultBoxIdle: "ring-1 ring-gray-200 bg-white",
+        text: "text-rose-700",
+        myBadge: "bg-rose-500 text-white",
+        vsTo: "to-rose-500",
+      },
+    };
+
+    // ========================================
+    // 유틸: 상대시간 표시 ("방금 전 / N분 전 / N시간 전 ...")
+    // 외부 라이브러리 없이 직접 구현 (Day.js 불필요).
+    // 서버 계약상 createdAt 은 epoch milliseconds(숫자)라 그대로 뺄셈에 쓴다.
+    // ========================================
+    function formatRelativeTime(timestamp) {
+      const diff = Date.now() - timestamp;            // ms
+      const sec = Math.floor(diff / 1000);
+      if (sec < 60) return "방금 전";
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}분 전`;
+      const hour = Math.floor(min / 60);
+      if (hour < 24) return `${hour}시간 전`;
+      const day = Math.floor(hour / 24);
+      if (day < 7) return `${day}일 전`;
+      const d = new Date(timestamp);
+      return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+    }
+
+    // 퍼센트 계산: 총 투표가 0이면 0%. 소수점은 반올림.
+    // percentB 는 (총이 있을 때) 100 - percentA 로 맞춰 합이 항상 100% 가 되게 한다.
+    function calcPercents(aCount, bCount) {
+      const a = Number(aCount) || 0;
+      const b = Number(bCount) || 0;
+      const total = a + b;
+      if (total === 0) return { total: 0, percentA: 0, percentB: 0 };
+      const percentA = Math.round((a / total) * 100);
+      return { total, percentA, percentB: 100 - percentA };
+    }
+
+    // ========================================
+    // 🗳️ 내 투표 기록(localStorage) — 중복 방지 & 내 선택 하이라이트의 단일 소스
+    // 구조: { [questionId]: 'A' | 'B' }  (questionId 는 서버가 준 불투명 값 → 문자열 키로)
+    // ========================================
+    function loadMyVotes() {
+      try {
+        const raw = localStorage.getItem(VOTE_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        // 방어: 객체가 아니면 빈 객체로
+        return parsed && typeof parsed === "object" ? parsed : {};
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function saveMyVotes(votes) {
+      try {
+        localStorage.setItem(VOTE_STORAGE_KEY, JSON.stringify(votes));
+      } catch (_) {
+        // 사파리 프라이빗 모드 등 저장 실패는 조용히 무시(앱은 계속 동작).
+      }
+    }
+
+    // ========================================
+    // 📦 데이터 레이어 (Data Layer) — 서버(server.js) 연동
+    // ----------------------------------------
+    // 모든 질문/투표 수는 서버 DB 에 저장된다. 클라이언트는 소비만 한다.
+    // 서버 계약(바이트 단위로 맞춤):
+    //   GET  /api/questions
+    //        → 200, 최신순 배열. 원소: { id, optionA, optionB, aCount, bCount, createdAt(ms) }
+    //   POST /api/questions            body { optionA, optionB }
+    //        → 201, 생성된 질문(aCount=0, bCount=0 포함 위와 동일 형태)
+    //   POST /api/questions/:id/vote   body { choice: 'A' | 'B' }
+    //        → 200 { aCount, bCount }  (이 투표 반영 후 최신 카운트). 없으면 404 { error }.
+    // 실패 응답은 { error: "..." }.
+    // ========================================
+
+    // 응답이 실패(4xx/5xx)면 throw. 성공이면 파싱된 JSON 반환.
+    // 본문이 없을 수 있는 응답도 안전하게 처리(비-JSON → null).
+    async function requestJSON(url, options) {
+      const res = await fetch(url, options);
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {
+        data = null; // 본문 없음/비-JSON
+      }
+      if (!res.ok) {
+        const msg = (data && data.error) ? data.error : `요청 실패 (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    // [읽기] 전체 질문 목록 (최신순). 서버가 배열이 아닌 걸 주면 빈 목록으로 방어.
+    async function fetchQuestions() {
+      const data = await requestJSON(`${API_BASE_URL}/questions`);
+      if (!Array.isArray(data)) return [];
+      // 방어: 카운트가 빠져 오면 0 으로 보정 (퍼센트 계산이 NaN 되지 않도록).
+      return data.map((q) => ({
+        ...q,
+        aCount: Number(q.aCount) || 0,
+        bCount: Number(q.bCount) || 0,
+      }));
+    }
+
+    // [생성] 새 밸런스 질문 등록 → 서버가 id/createdAt/카운트(0)를 부여해 돌려준 객체 반환
+    async function createQuestion({ optionA, optionB }) {
+      const created = await requestJSON(`${API_BASE_URL}/questions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ optionA, optionB }),
+      });
+      return {
+        ...created,
+        aCount: Number(created.aCount) || 0,
+        bCount: Number(created.bCount) || 0,
+      };
+    }
+
+    // [투표] 특정 질문에 A 또는 B 투표 → 반영 후 최신 { aCount, bCount } 반환
+    async function voteQuestion(questionId, choice) {
+      const updated = await requestJSON(`${API_BASE_URL}/questions/${questionId}/vote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ choice }),
+      });
+      return {
+        aCount: Number(updated.aCount) || 0,
+        bCount: Number(updated.bCount) || 0,
+      };
+    }
+
+    // ========================================
+    // 🎨 디자인 시스템 (재사용 UI 프리미티브 — 비즈니스 로직 없음, props 로만 동작)
+    // ========================================
+
+    // --- Button ---
+    function Button({ variant = "primary", size = "md", className = "", disabled = false, type = "button", ...rest }) {
+      const base =
+        "inline-flex items-center justify-center gap-1.5 font-semibold rounded-xl transition " +
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 " +
+        "disabled:opacity-50 disabled:cursor-not-allowed";
+      // 대결 테마라 primary 는 인디고~로즈 그라데이션으로 정체성을 준다.
+      const variants = {
+        primary: "bg-gradient-to-r from-indigo-500 to-rose-500 text-white hover:from-indigo-600 hover:to-rose-600 focus-visible:ring-indigo-300 shadow-sm shadow-indigo-200",
+        secondary: "bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50 focus-visible:ring-gray-300",
+        ghost: "bg-transparent text-gray-600 hover:bg-gray-100 focus-visible:ring-gray-300",
+        danger: "bg-red-500 text-white hover:bg-red-600 focus-visible:ring-red-300",
+      };
+      const sizes = {
+        sm: "text-sm px-3 py-1.5",
+        md: "text-sm px-4 py-2.5",
+        lg: "text-base px-5 py-3",
+      };
+      return (
+        <button
+          type={type}
+          disabled={disabled}
+          className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+          {...rest}
+        />
+      );
+    }
+
+    // --- Card ---
+    function Card({ className = "", children, ...rest }) {
+      return (
+        <div
+          className={`bg-white/90 backdrop-blur rounded-2xl shadow-sm ring-1 ring-black/5 ${className}`}
+          {...rest}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    // --- Input (선택지 입력 등 단일 행 입력 — 자동 포커스 위해 forwardRef 로 내부까지 ref 전달) ---
+    const Input = React.forwardRef(function Input(
+      { label, value, onChange, placeholder, error, disabled, maxLength, type = "text", className = "", id, ...rest },
+      ref
+    ) {
+      return (
+        <div className={className}>
+          {label && (
+            <label htmlFor={id} className="block mb-1.5 text-sm font-semibold text-gray-700">
+              {label}
+            </label>
+          )}
+          <input
+            ref={ref}
+            id={id}
+            type={type}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            disabled={disabled}
+            maxLength={maxLength}
+            aria-invalid={!!error}
+            className={
+              "w-full px-3.5 py-2.5 rounded-xl text-gray-800 placeholder-gray-400 " +
+              "ring-1 transition focus:outline-none focus:ring-2 " +
+              (error
+                ? "ring-red-300 focus:ring-red-400 bg-red-50/40"
+                : "ring-gray-200 focus:ring-indigo-300 bg-white")
+            }
+            {...rest}
+          />
+          {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+        </div>
+      );
+    });
+
+    // --- Modal (등록 폼을 담는 다이얼로그) ---
+    function Modal({ isOpen, onClose, title, children, size = "md" }) {
+      // ESC 로 닫기 + 배경 스크롤 잠금
+      useEffect(() => {
+        if (!isOpen) return;
+        const onKey = (e) => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", onKey);
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+          window.removeEventListener("keydown", onKey);
+          document.body.style.overflow = prev;
+        };
+      }, [isOpen, onClose]);
+
+      if (!isOpen) return null;
+      const sizes = { sm: "max-w-md", md: "max-w-lg", lg: "max-w-2xl" };
+
+      return (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+        >
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+          <Card className={`relative w-full ${sizes[size]} p-5 sm:p-6 rounded-b-none sm:rounded-2xl animate-fade-in-up`}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-800">{title}</h2>
+              <button
+                onClick={onClose}
+                aria-label="닫기"
+                className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+              >
+                ✕
+              </button>
+            </div>
+            {children}
+          </Card>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 공통 / 레이아웃 컴포넌트
+    // ========================================
+
+    function Header({ questionCount, totalVotes, onCreateClick }) {
+      return (
+        <header className="text-center pt-10 pb-6 px-4">
+          <div className="inline-flex items-center gap-2 px-3 py-1 mb-3 rounded-full bg-white/70 ring-1 ring-indigo-100 text-indigo-600 text-xs font-semibold">
+            ⚔️ 양자택일 투표
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-800">
+            밸런스 게임 <span aria-hidden="true">⚖️</span>
+          </h1>
+          <p className="mt-2 text-sm sm:text-base text-gray-500">
+            둘 중 하나만 고를 수 있다면? 당신의 선택을 던지고, 모두의 비율을 확인하세요.
+          </p>
+          <div className="mt-5">
+            <Button size="lg" onClick={onCreateClick} className="px-6">
+              ➕ 새 밸런스 질문 만들기
+            </Button>
+          </div>
+          {/* 전체 집계: 질문 수 + 모든 질문의 총 참여 합계 */}
+          <div className="mt-4 flex items-center justify-center gap-2 text-xs text-gray-500">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/70 ring-1 ring-gray-200">
+              <span aria-hidden="true">📝</span> 질문 <strong className="tabular-nums text-gray-700">{questionCount}</strong>개
+            </span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/70 ring-1 ring-gray-200">
+              <span aria-hidden="true">🗳️</span> 누적 참여 <strong className="tabular-nums text-gray-700">{totalVotes.toLocaleString()}</strong>표
+            </span>
+          </div>
+        </header>
+      );
+    }
+
+    function Footer() {
+      return (
+        <footer className="text-center py-8 px-4 text-xs text-gray-400">
+          <p>한 번 고른 질문은 이 브라우저에 기록돼 다시 투표할 수 없어요 · 정답은 없어요, 취향만 있을 뿐 💫</p>
+        </footer>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 구성 컴포넌트 (비즈니스 로직 포함)
+    // ========================================
+
+    // --- 등록 폼 (Modal 내부에서 사용) ---
+    function QuestionForm({ onSubmit, onCancel, submitting }) {
+      const [optionA, setOptionA] = useState("");
+      const [optionB, setOptionB] = useState("");
+      const [errors, setErrors] = useState({}); // { a?, b? }
+      const firstRef = useRef(null);
+
+      // 모달이 열리면 첫 입력(A)에 자동 포커스 (forwardRef 덕분에 실제로 동작)
+      useEffect(() => {
+        firstRef.current && firstRef.current.focus();
+      }, []);
+
+      // 한 선택지 검증: 1~100자 필수
+      const validateOne = (raw) => {
+        const v = raw.trim();
+        if (v.length < OPTION_MIN) return "선택지를 입력해주세요.";
+        if (v.length > OPTION_MAX) return `${OPTION_MAX}자 이내로 입력해주세요.`;
+        return "";
+      };
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        const ea = validateOne(optionA);
+        const eb = validateOne(optionB);
+        if (ea || eb) {
+          setErrors({ a: ea, b: eb });
+          // 먼저 비어있는 쪽으로 포커스 이동
+          if (ea) firstRef.current && firstRef.current.focus();
+          return;
+        }
+        onSubmit({ optionA: optionA.trim(), optionB: optionB.trim() });
+      };
+
+      return (
+        <form onSubmit={handleSubmit} noValidate>
+          <p className="mb-4 text-sm text-gray-500">
+            두 선택지를 입력하면 사람들이 둘 중 하나에 투표해요. (각 1~{OPTION_MAX}자)
+          </p>
+
+          {/* 선택지 A — 인디고 톤 라벨로 색 정체성 부여 */}
+          <div className="mb-2">
+            <Input
+              ref={firstRef}
+              id="option-a"
+              label="🅰️ 선택지 A"
+              value={optionA}
+              onChange={(e) => { setOptionA(e.target.value); if (errors.a) setErrors((p) => ({ ...p, a: "" })); }}
+              placeholder="예) 월급 500만원 + 주 7일 출근"
+              maxLength={OPTION_MAX}
+              error={errors.a}
+            />
+            <div className="mt-1 text-right text-xs text-gray-400 tabular-nums">{optionA.length} / {OPTION_MAX}</div>
+          </div>
+
+          {/* VS 구분선 */}
+          <div className="flex items-center gap-3 my-1" aria-hidden="true">
+            <div className="flex-1 h-px bg-gray-200" />
+            <span className="text-xs font-extrabold text-gray-400 tracking-widest">VS</span>
+            <div className="flex-1 h-px bg-gray-200" />
+          </div>
+
+          {/* 선택지 B — 로즈 톤 */}
+          <div className="mb-2">
+            <Input
+              id="option-b"
+              label="🅱️ 선택지 B"
+              value={optionB}
+              onChange={(e) => { setOptionB(e.target.value); if (errors.b) setErrors((p) => ({ ...p, b: "" })); }}
+              placeholder="예) 월급 300만원 + 주 4일 출근"
+              maxLength={OPTION_MAX}
+              error={errors.b}
+            />
+            <div className="mt-1 text-right text-xs text-gray-400 tabular-nums">{optionB.length} / {OPTION_MAX}</div>
+          </div>
+
+          {/* 액션 */}
+          <div className="mt-5 flex gap-2 justify-end">
+            <Button variant="secondary" onClick={onCancel} disabled={submitting}>취소</Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "등록 중…" : "질문 등록하기"}
+            </Button>
+          </div>
+        </form>
+      );
+    }
+
+    // --- 미투표 패널 (클릭하면 그 선택지에 투표하는 큰 버튼) ---
+    // side: "A" | "B" → 정적 색 매핑 사용. voting 중엔 비활성화.
+    function VotePanel({ side, text, onVote, voting }) {
+      const style = SIDE_STYLES[side];
+      return (
+        <button
+          type="button"
+          onClick={onVote}
+          disabled={voting}
+          aria-label={`선택지 ${side}: ${text} 에 투표`}
+          className={
+            "group relative flex-1 min-h-[112px] sm:min-h-[140px] p-4 rounded-2xl text-left transition " +
+            "active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-indigo-300 " +
+            "disabled:opacity-60 disabled:cursor-wait " +
+            style.panelIdle
+          }
+        >
+          <span className="inline-flex items-center gap-1 text-xs font-extrabold opacity-70">
+            <span aria-hidden="true">{style.emoji}</span> 선택 {side}
+          </span>
+          <span className="mt-2 block text-base sm:text-lg font-bold leading-snug break-words whitespace-pre-wrap">
+            {text}
+          </span>
+          <span className="mt-2 block text-xs font-semibold opacity-0 group-hover:opacity-80 transition">
+            여기를 눌러 투표 →
+          </span>
+        </button>
+      );
+    }
+
+    // --- 결과 막대 한 줄 (투표 후 표시) ---
+    // mine: 이 줄이 내가 고른 쪽인지 → 강조 테두리 + "내 선택" 배지.
+    function ResultBar({ side, text, count, percent, mine }) {
+      const style = SIDE_STYLES[side];
+      return (
+        <div
+          className={
+            "relative p-3 sm:p-3.5 rounded-2xl transition-all duration-300 " +
+            (mine ? style.resultBox : style.resultBoxIdle)
+          }
+        >
+          {/* 라벨 줄: 선택지 텍스트 + 퍼센트 */}
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="min-w-0">
+              <span className="inline-flex items-center gap-1 text-xs font-bold opacity-70">
+                <span aria-hidden="true">{style.emoji}</span> 선택 {side}
+                {mine && (
+                  <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${style.myBadge}`}>
+                    내 선택
+                  </span>
+                )}
+              </span>
+              <p className="mt-0.5 text-sm sm:text-base font-semibold text-gray-800 break-words whitespace-pre-wrap leading-snug">
+                {text}
+              </p>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className={`text-lg sm:text-xl font-extrabold tabular-nums ${style.text}`}>{percent}%</div>
+              <div className="text-[11px] text-gray-400 tabular-nums">{count.toLocaleString()}표</div>
+            </div>
+          </div>
+
+          {/* 막대 그래프: 폭 = 퍼센트. transition-all duration-500 으로 부드럽게 차오름.
+              ⚠️ 폭은 런타임 값이라 클래스가 아닌 인라인 style(width)로 준다(Tailwind JIT 무관). */}
+          <div
+            className="h-2.5 w-full rounded-full bg-gray-100 overflow-hidden"
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`선택 ${side} 득표율 ${percent}%`}
+          >
+            <div
+              className={`h-full rounded-full transition-all duration-500 ease-out ${style.bar}`}
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    // --- 질문 카드 ---
+    // myChoice: 'A' | 'B' | undefined (localStorage 기반). 있으면 결과 화면, 없으면 투표 화면.
+    function QuestionCard({ question, myChoice, onVote, voting }) {
+      const { total, percentA, percentB } = calcPercents(question.aCount, question.bCount);
+      const voted = myChoice === "A" || myChoice === "B";
+
+      return (
+        <Card className="overflow-hidden animate-fade-in-up">
+          {/* 상단 컬러바: 좌(인디고) → 우(로즈) 로 대결 정체성 */}
+          <div className="h-1.5 w-full bg-gradient-to-r from-indigo-500 via-purple-400 to-rose-500" />
+
+          <div className="p-4 sm:p-5">
+            {/* 메타: 등록 시각 + 총 참여자 */}
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <time className="text-xs text-gray-400" title={new Date(question.createdAt).toLocaleString("ko-KR")}>
+                {formatRelativeTime(question.createdAt)}
+              </time>
+              <span className="text-xs text-gray-500">
+                총 참여자 <strong className="tabular-nums text-gray-700">{total.toLocaleString()}</strong>명
+              </span>
+            </div>
+
+            {voted ? (
+              // ── 결과 화면 (이미 투표함) ──────────────────────────
+              <div className="space-y-2.5">
+                <ResultBar
+                  side="A"
+                  text={question.optionA}
+                  count={question.aCount}
+                  percent={percentA}
+                  mine={myChoice === "A"}
+                />
+                {/* 가운데 VS 배지 (결과에서도 대결감 유지) */}
+                <div className="flex justify-center -my-1">
+                  <span className="z-10 inline-flex items-center justify-center w-9 h-9 rounded-full bg-gray-800 text-white text-xs font-extrabold shadow ring-4 ring-white">
+                    VS
+                  </span>
+                </div>
+                <ResultBar
+                  side="B"
+                  text={question.optionB}
+                  count={question.bCount}
+                  percent={percentB}
+                  mine={myChoice === "B"}
+                />
+
+                {total === 0 ? (
+                  <p className="pt-1 text-center text-xs text-gray-400">아직 집계된 표가 없어요.</p>
+                ) : (
+                  <p className="pt-1 text-center text-xs text-gray-400">
+                    내 선택은 <strong className={SIDE_STYLES[myChoice].text}>선택 {myChoice}</strong> 였어요 · 결과는 실시간으로 갱신돼요
+                  </p>
+                )}
+              </div>
+            ) : (
+              // ── 투표 화면 (아직 안 함) ──────────────────────────
+              // 데스크톱: 좌우(A | VS | B), 모바일: 상하. 가운데 원형 VS 배지.
+              <div className="relative">
+                <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 items-stretch">
+                  <VotePanel side="A" text={question.optionA} onVote={() => onVote("A")} voting={voting} />
+                  <VotePanel side="B" text={question.optionB} onVote={() => onVote("B")} voting={voting} />
+                </div>
+                {/* 두 패널 사이 중앙 VS 배지 — 절대배치로 정확히 가운데 */}
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <span className={`inline-flex items-center justify-center w-11 h-11 rounded-full text-white text-sm font-extrabold shadow-lg ring-4 ring-white bg-gradient-to-br ${SIDE_STYLES.A.vsFrom} ${SIDE_STYLES.B.vsTo}`}>
+                    VS
+                  </span>
+                </div>
+                {voting && (
+                  <p className="mt-2 text-center text-xs text-gray-400 animate-pulse">투표하는 중이에요…</p>
+                )}
+              </div>
+            )}
+          </div>
+        </Card>
+      );
+    }
+
+    // --- 빈 상태 ---
+    function EmptyState({ onCreateClick }) {
+      return (
+        <Card className="p-10 text-center">
+          <div className="text-5xl mb-3" aria-hidden="true">⚖️</div>
+          <p className="font-bold text-gray-700">아직 등록된 밸런스 질문이 없어요</p>
+          <p className="mt-1 text-sm text-gray-500">첫 번째 딜레마를 사람들에게 던져보세요!</p>
+          <div className="mt-4">
+            <Button onClick={onCreateClick}>➕ 새 밸런스 질문 만들기</Button>
+          </div>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🚀 App (루트 — 상태/데이터 흐름 총괄)
+    // ========================================
+    function App() {
+      const [questions, setQuestions] = useState([]);   // 서버 DB 미러 (최신순)
+      const [myVotes, setMyVotes] = useState(loadMyVotes); // { [id]: 'A'|'B' } — 내 투표 기록
+      const [isModalOpen, setModalOpen] = useState(false);
+      const [submitting, setSubmitting] = useState(false); // 질문 등록 중
+      const [votingId, setVotingId] = useState(null);   // 현재 투표 처리 중인 질문 id (중복클릭 방지)
+      const [loading, setLoading] = useState(true);     // 최초 목록 로딩
+      const [loadError, setLoadError] = useState("");   // 목록 로딩 실패 메시지
+
+      // ── 목록 로드 ──────────────────────────────
+      // showSpinner=false 이면(=폴링) 화면을 깜빡이지 않고 조용히 카운트만 머지한다.
+      const loadQuestions = useCallback(async (showSpinner = true) => {
+        if (showSpinner) { setLoading(true); setLoadError(""); }
+        try {
+          const data = await fetchQuestions();
+          setQuestions((prev) => {
+            // ⚠️ 폴링 머지 핵심:
+            //  - 서버가 준 최신 카운트(aCount/bCount)는 그대로 받아들인다(타인 표 반영).
+            //  - 단, "내가 이미 투표해 잠긴 선택"은 myVotes(localStorage) 가 단일 소스라
+            //    서버 응답에는 그 정보가 없다 → 카운트만 갱신하면 잠금은 자연히 유지된다.
+            //  - 그래서 여기서는 서버 목록을 그대로 신뢰해 교체하면 된다.
+            //    (별도 머지가 필요한 클라이언트 전용 필드는 없음.)
+            return data;
+          });
+          if (showSpinner) setLoadError("");
+        } catch (e) {
+          console.error("질문 목록을 불러오지 못했어요:", e);
+          if (showSpinner) setLoadError("질문을 불러오지 못했어요. 잠시 후 다시 시도해주세요.");
+          // 폴링 실패는 조용히 무시(다음 틱에 다시 시도).
+        } finally {
+          if (showSpinner) setLoading(false);
+        }
+      }, []);
+
+      // 최초 1회 로드
+      useEffect(() => {
+        loadQuestions(true);
+      }, [loadQuestions]);
+
+      // ── 실시간 폴링: 5초마다 목록 재조회 (타인의 표 반영) ──────────
+      // - 탭이 보이지 않으면(visibilityState !== "visible") 그 틱은 건너뛴다(불필요한 요청 절약).
+      // - unmount 시 clearInterval 로 정리.
+      useEffect(() => {
+        const id = setInterval(() => {
+          if (document.visibilityState !== "visible") return;
+          loadQuestions(false); // 스피너 없이 조용히 갱신
+        }, POLL_INTERVAL);
+        return () => clearInterval(id);
+      }, [loadQuestions]);
+
+      // ── 새 질문 등록 ──────────────────────────
+      const handleCreate = useCallback(async ({ optionA, optionB }) => {
+        setSubmitting(true);
+        try {
+          const created = await createQuestion({ optionA, optionB });
+          setQuestions((prev) => [created, ...prev]); // 최신 질문 맨 앞
+          setModalOpen(false);
+        } catch (e) {
+          console.error("질문을 등록하지 못했어요:", e);
+          alert(`질문을 등록하지 못했어요.\n${e.message}`);
+        } finally {
+          setSubmitting(false);
+        }
+      }, []);
+
+      // ── 투표 ──────────────────────────────────
+      // 1) 중복 방지: 이미 내가 투표한 질문이면(myVotes) 막는다.
+      // 2) 서버에 POST → 최신 { aCount, bCount } 로 그 질문만 갱신.
+      // 3) 성공 시 myVotes 에 기록(localStorage) → 잠금 + 새로고침 후에도 내 선택 유지.
+      const handleVote = useCallback(async (questionId, choice) => {
+        // 가드: 이미 투표했거나, 다른 투표 처리 중이면 무시
+        if (myVotes[questionId]) return;
+        if (votingId) return;
+
+        setVotingId(questionId);
+        try {
+          const { aCount, bCount } = await voteQuestion(questionId, choice);
+          // 해당 질문의 카운트만 서버 응답값으로 교체
+          setQuestions((prev) =>
+            prev.map((q) => (String(q.id) === String(questionId) ? { ...q, aCount, bCount } : q))
+          );
+          // 내 선택 기록 (함수형 업데이트 + localStorage 동기화)
+          setMyVotes((prev) => {
+            const next = { ...prev, [questionId]: choice };
+            saveMyVotes(next);
+            return next;
+          });
+        } catch (e) {
+          console.error("투표를 반영하지 못했어요:", e);
+          // 404(질문 삭제 등) 포함 사용자 친화 안내
+          alert(`투표를 반영하지 못했어요.\n${e.message}`);
+        } finally {
+          setVotingId(null);
+        }
+      }, [myVotes, votingId]);
+
+      // ── 헤더 집계: 질문 수 + 모든 질문의 (aCount+bCount) 총합 ──────
+      const totalVotes = useMemo(
+        () => questions.reduce((sum, q) => sum + (Number(q.aCount) || 0) + (Number(q.bCount) || 0), 0),
+        [questions]
+      );
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          <Header
+            questionCount={questions.length}
+            totalVotes={totalVotes}
+            onCreateClick={() => setModalOpen(true)}
+          />
+
+          <main className="flex-1 w-full max-w-2xl mx-auto px-4 pb-6">
+            {/* 목록 / 로딩 / 에러 / 빈 상태 */}
+            {loading ? (
+              <Card className="p-10 text-center">
+                <div className="text-4xl mb-3 animate-pulse" aria-hidden="true">⚖️</div>
+                <p className="font-bold text-gray-600">밸런스 질문을 불러오는 중이에요…</p>
+              </Card>
+            ) : loadError ? (
+              <Card className="p-10 text-center">
+                <div className="text-5xl mb-3" aria-hidden="true">😢</div>
+                <p className="font-bold text-gray-700">{loadError}</p>
+                <div className="mt-4">
+                  <Button variant="secondary" onClick={() => loadQuestions(true)}>다시 시도</Button>
+                </div>
+              </Card>
+            ) : questions.length === 0 ? (
+              <EmptyState onCreateClick={() => setModalOpen(true)} />
+            ) : (
+              <div className="space-y-4">
+                {questions.map((q) => (
+                  <QuestionCard
+                    key={q.id}
+                    question={q}
+                    myChoice={myVotes[q.id]}
+                    onVote={(choice) => handleVote(q.id, choice)}
+                    voting={String(votingId) === String(q.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </main>
+
+          <Footer />
+
+          {/* 모바일용 떠 있는 등록 버튼 (FAB) */}
+          <button
+            onClick={() => setModalOpen(true)}
+            aria-label="새 밸런스 질문 만들기"
+            className="sm:hidden fixed bottom-5 right-5 z-40 w-14 h-14 rounded-full bg-gradient-to-br from-indigo-500 to-rose-500 text-white text-2xl shadow-lg shadow-indigo-300 active:scale-95 transition flex items-center justify-center"
+          >
+            ➕
+          </button>
+
+          {/* 등록 모달 */}
+          <Modal isOpen={isModalOpen} onClose={() => setModalOpen(false)} title="새 밸런스 질문 만들기">
+            <QuestionForm
+              onSubmit={handleCreate}
+              onCancel={() => setModalOpen(false)}
+              submitting={submitting}
+            />
+          </Modal>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

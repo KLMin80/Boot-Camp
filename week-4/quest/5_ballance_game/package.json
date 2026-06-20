@@ -1,0 +1,12 @@
+{
+  "name": "ballance-game",
+  "version": "1.0.0",
+  "description": "밸런스 게임(양자택일 투표) 백엔드 — 투표를 SQL COUNT로 집계 (Supabase Postgres)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  }
+}
