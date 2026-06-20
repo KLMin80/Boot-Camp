@@ -1,0 +1,12 @@
+{
+  "name": "bulletin-board",
+  "version": "1.0.0",
+  "description": "마음 게시판 — 익명 고민·칭찬·응원 게시판 백엔드 (Supabase Postgres)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  }
+}

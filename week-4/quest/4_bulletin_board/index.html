@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>마음 게시판 💬 — 익명으로 고민·칭찬·응원 나누기</title>
+
+  <!-- ⚠️ 모든 CDN은 버전을 명시적으로 고정한다. 미고정 시 @babel/standalone 이
+       최신(8.x)으로 올라가 type="text/babel" 인라인 변환이 통째로 깨진다(백지 화면).
+       Babel 은 반드시 7.x 로 고정한다. React/ReactDOM/Tailwind 도 정확히 핀. -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+
+  <style>
+    /* Tailwind 으로 표현하기 어려운 것만 커스텀 처리 */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up { animation: fadeInUp 0.32s ease-out both; }
+
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.35); }
+      100% { transform: scale(1); }
+    }
+    .animate-pop { animation: pop 0.34s ease-out; }
+
+    /* 따뜻하고 부드러운 배경 그라데이션 (커뮤니티 톤) */
+    body { background: linear-gradient(180deg, #fff7ed 0%, #fdf2f8 50%, #eef2ff 100%); min-height: 100vh; }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #fbcfe8; border-radius: 9999px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+    // ========================================
+    // 상수 / 설정
+    // ========================================
+    // 서버 연동 베이스 URL. ❌ http://localhost:xxxx 하드코딩 금지
+    // → ✅ 같은 오리진의 상대경로 사용 (index.html 과 /api 를 server.js 가 함께 서빙).
+    const API_BASE_URL = "/api"; // 또는 window.location.origin + "/api"
+
+    // 카테고리 목록 (작성 폼 / 필터 공용)
+    const CATEGORIES = ["고민", "칭찬", "응원"];
+
+    // 카테고리별 스타일 — Tailwind CDN(JIT)은 런타임 조립 클래스를 못 잡으므로
+    // 반드시 "완전한 클래스 문자열"을 정적 매핑으로 미리 적어 둔다. (bg-${x} 금지)
+    const CATEGORY_STYLES = {
+      "고민": {
+        emoji: "🌧️",
+        badge: "bg-sky-100 text-sky-700 ring-1 ring-sky-200",
+        chipActive: "bg-sky-500 text-white shadow-sm shadow-sky-200",
+        chipIdle: "bg-white text-sky-700 ring-1 ring-sky-200 hover:bg-sky-50",
+        bar: "bg-sky-400",
+      },
+      "칭찬": {
+        emoji: "🌸",
+        badge: "bg-pink-100 text-pink-700 ring-1 ring-pink-200",
+        chipActive: "bg-pink-500 text-white shadow-sm shadow-pink-200",
+        chipIdle: "bg-white text-pink-700 ring-1 ring-pink-200 hover:bg-pink-50",
+        bar: "bg-pink-400",
+      },
+      "응원": {
+        emoji: "🌻",
+        badge: "bg-amber-100 text-amber-700 ring-1 ring-amber-200",
+        chipActive: "bg-amber-500 text-white shadow-sm shadow-amber-200",
+        chipIdle: "bg-white text-amber-700 ring-1 ring-amber-200 hover:bg-amber-50",
+        bar: "bg-amber-400",
+      },
+    };
+
+    // 정렬 옵션
+    const SORTS = [
+      { key: "latest", label: "최신순", icon: "🕒" },
+      { key: "likes",  label: "공감순", icon: "❤️" },
+    ];
+
+    // ========================================
+    // 유틸: 상대시간 표시 ("방금 전 / N분 전 / N시간 전 ...")
+    // 외부 라이브러리 없이 직접 구현 (Day.js 불필요)
+    // ========================================
+    function formatRelativeTime(timestamp) {
+      const diff = Date.now() - timestamp;            // ms
+      const sec = Math.floor(diff / 1000);
+      if (sec < 60) return "방금 전";
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}분 전`;
+      const hour = Math.floor(min / 60);
+      if (hour < 24) return `${hour}시간 전`;
+      const day = Math.floor(hour / 24);
+      if (day < 7) return `${day}일 전`;
+      // 일주일 넘으면 날짜로 표시
+      const d = new Date(timestamp);
+      return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+    }
+
+    // ========================================
+    // 📦 데이터 레이어 (Data Layer) — 서버(server.js / Supabase) 연동
+    // ----------------------------------------
+    // 모든 글·댓글은 서버 DB(Supabase Postgres)에 저장된다.
+    // 시드/저장은 서버(ensureDB)가 담당하므로 클라이언트엔 localStorage·시드 로직이 없다.
+    // 각 함수는 async 이며, 호출부(핸들러)에서 await 로 사용한다.
+    // 서버 계약:
+    //   - createdAt 은 epoch milliseconds(숫자) → new Date(createdAt) / 숫자 뺄셈에 그대로 쓰임
+    //   - id 는 불투명 값(문자열일 수 있음) → 비교/키로만 사용
+    // ========================================
+
+    // 응답이 실패(4xx/5xx)면 throw. 성공이면 파싱된 JSON 반환.
+    // 본문이 없을 수 있는 응답(예: 일부 PATCH)도 안전하게 처리.
+    async function requestJSON(url, options) {
+      const res = await fetch(url, options);
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {
+        data = null; // 본문 없음/비-JSON
+      }
+      if (!res.ok) {
+        const msg = (data && data.error) ? data.error : `요청 실패 (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    // [읽기] 전체 글 목록 가져오기 (각 글에 comments 배열 포함)
+    async function fetchPosts() {
+      const data = await requestJSON(`${API_BASE_URL}/posts`);
+      // 방어: 서버가 배열이 아닌 걸 주면 빈 목록. 각 글의 comments 도 [] 로 방어.
+      if (!Array.isArray(data)) return [];
+      return data.map((p) => ({ ...p, comments: p.comments || [] }));
+    }
+
+    // [생성] 새 글 추가 → 서버가 id/createdAt/likes 를 부여해 돌려준 글 객체 반환
+    async function createPost({ category, title, body }) {
+      return await requestJSON(`${API_BASE_URL}/posts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category, title, body }),
+      });
+    }
+
+    // [수정] 글 공감 1 증가 → 서버에서 likes = likes + 1 UPDATE 후 새 likes 값 반환
+    async function likePost(postId) {
+      const updated = await requestJSON(`${API_BASE_URL}/posts/${postId}/like`, { method: "PATCH" });
+      return updated.likes;
+    }
+
+    // [생성] 특정 글에 댓글 추가 → 서버가 부여한 댓글 객체 { id, text, likes, createdAt } 반환
+    async function addComment(postId, text) {
+      return await requestJSON(`${API_BASE_URL}/posts/${postId}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    }
+
+    // [수정] 특정 댓글의 공감 1 증가 → 서버에서 likes = likes + 1 UPDATE 후 새 likes 값 반환
+    async function likeComment(postId, commentId) {
+      const updated = await requestJSON(
+        `${API_BASE_URL}/posts/${postId}/comments/${commentId}/like`,
+        { method: "PATCH" }
+      );
+      return updated.likes;
+    }
+
+    // ========================================
+    // 🎨 디자인 시스템 (재사용 UI 프리미티브 — 비즈니스 로직 없음, props 로만 동작)
+    // ========================================
+
+    // --- Button ---
+    function Button({ variant = "primary", size = "md", className = "", disabled = false, type = "button", ...rest }) {
+      const base =
+        "inline-flex items-center justify-center gap-1.5 font-semibold rounded-xl transition " +
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 " +
+        "disabled:opacity-50 disabled:cursor-not-allowed";
+      const variants = {
+        primary: "bg-rose-500 text-white hover:bg-rose-600 focus-visible:ring-rose-300 shadow-sm shadow-rose-200",
+        secondary: "bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50 focus-visible:ring-gray-300",
+        ghost: "bg-transparent text-gray-600 hover:bg-gray-100 focus-visible:ring-gray-300",
+        danger: "bg-red-500 text-white hover:bg-red-600 focus-visible:ring-red-300",
+      };
+      const sizes = {
+        sm: "text-sm px-3 py-1.5",
+        md: "text-sm px-4 py-2.5",
+        lg: "text-base px-5 py-3",
+      };
+      return (
+        <button
+          type={type}
+          disabled={disabled}
+          className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+          {...rest}
+        />
+      );
+    }
+
+    // --- Badge (카테고리 표시) ---
+    function Badge({ category, className = "" }) {
+      const style = CATEGORY_STYLES[category] || CATEGORY_STYLES["응원"];
+      return (
+        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${style.badge} ${className}`}>
+          <span aria-hidden="true">{style.emoji}</span>
+          {category}
+        </span>
+      );
+    }
+
+    // --- Card ---
+    function Card({ className = "", children, ...rest }) {
+      return (
+        <div
+          className={`bg-white/90 backdrop-blur rounded-2xl shadow-sm ring-1 ring-black/5 ${className}`}
+          {...rest}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    // --- Textarea (autofocus 등 DOM 접근 대비해 forwardRef 로 내부 엘리먼트까지 ref 전달) ---
+    const Textarea = React.forwardRef(function Textarea(
+      { label, value, onChange, placeholder, error, disabled, rows = 4, maxLength, className = "", id, ...rest },
+      ref
+    ) {
+      return (
+        <div className={className}>
+          {label && (
+            <label htmlFor={id} className="block mb-1.5 text-sm font-semibold text-gray-700">
+              {label}
+            </label>
+          )}
+          <textarea
+            ref={ref}
+            id={id}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            disabled={disabled}
+            rows={rows}
+            maxLength={maxLength}
+            aria-invalid={!!error}
+            className={
+              "w-full px-3.5 py-2.5 rounded-xl resize-none text-gray-800 placeholder-gray-400 " +
+              "ring-1 transition focus:outline-none focus:ring-2 " +
+              (error
+                ? "ring-red-300 focus:ring-red-400 bg-red-50/40"
+                : "ring-gray-200 focus:ring-rose-300 bg-white")
+            }
+            {...rest}
+          />
+          {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+        </div>
+      );
+    });
+
+    // --- Input (제목 등 단일 행 입력) ---
+    const Input = React.forwardRef(function Input(
+      { label, value, onChange, placeholder, error, disabled, maxLength, type = "text", className = "", id, ...rest },
+      ref
+    ) {
+      return (
+        <div className={className}>
+          {label && (
+            <label htmlFor={id} className="block mb-1.5 text-sm font-semibold text-gray-700">
+              {label}
+            </label>
+          )}
+          <input
+            ref={ref}
+            id={id}
+            type={type}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            disabled={disabled}
+            maxLength={maxLength}
+            aria-invalid={!!error}
+            className={
+              "w-full px-3.5 py-2.5 rounded-xl text-gray-800 placeholder-gray-400 " +
+              "ring-1 transition focus:outline-none focus:ring-2 " +
+              (error
+                ? "ring-red-300 focus:ring-red-400 bg-red-50/40"
+                : "ring-gray-200 focus:ring-rose-300 bg-white")
+            }
+            {...rest}
+          />
+          {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+        </div>
+      );
+    });
+
+    // --- Modal (작성 폼을 담는 다이얼로그) ---
+    function Modal({ isOpen, onClose, title, children, size = "md" }) {
+      // ESC 로 닫기
+      useEffect(() => {
+        if (!isOpen) return;
+        const onKey = (e) => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", onKey);
+        // 모달 열려있는 동안 배경 스크롤 잠금
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+          window.removeEventListener("keydown", onKey);
+          document.body.style.overflow = prev;
+        };
+      }, [isOpen, onClose]);
+
+      if (!isOpen) return null;
+      const sizes = { sm: "max-w-md", md: "max-w-lg", lg: "max-w-2xl" };
+
+      return (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+        >
+          {/* 배경 오버레이 */}
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+          {/* 패널 */}
+          <Card className={`relative w-full ${sizes[size]} p-5 sm:p-6 rounded-b-none sm:rounded-2xl animate-fade-in-up`}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-800">{title}</h2>
+              <button
+                onClick={onClose}
+                aria-label="닫기"
+                className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+              >
+                ✕
+              </button>
+            </div>
+            {children}
+          </Card>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 공통 / 레이아웃 컴포넌트
+    // ========================================
+
+    function Header({ count, onWriteClick }) {
+      return (
+        <header className="text-center pt-10 pb-6 px-4">
+          <div className="inline-flex items-center gap-2 px-3 py-1 mb-3 rounded-full bg-white/70 ring-1 ring-rose-100 text-rose-500 text-xs font-semibold">
+            🤫 익명 게시판
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-800">
+            마음 게시판 <span aria-hidden="true">💬</span>
+          </h1>
+          <p className="mt-2 text-sm sm:text-base text-gray-500">
+            닉네임도 로그인도 필요 없어요. 오늘의 고민·칭찬·응원을 자유롭게 나눠보세요.
+          </p>
+          <div className="mt-5">
+            <Button size="lg" onClick={onWriteClick} className="px-6">
+              ✍️ 익명으로 글쓰기
+            </Button>
+          </div>
+          <p className="mt-3 text-xs text-gray-400">
+            지금까지 {count}개의 마음이 모였어요
+          </p>
+        </header>
+      );
+    }
+
+    function Footer() {
+      return (
+        <footer className="text-center py-8 px-4 text-xs text-gray-400">
+          <p>모든 글은 서버 데이터베이스에 안전하게 저장됩니다 · 서로 따뜻하게 💗</p>
+        </footer>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 구성 컴포넌트 (비즈니스 로직 포함)
+    // ========================================
+
+    // --- 작성 폼 (Modal 내부에서 사용) ---
+    function PostForm({ onSubmit, onCancel }) {
+      const [category, setCategory] = useState("고민");
+      const [title, setTitle] = useState("");
+      const [body, setBody] = useState("");
+      const [error, setError] = useState("");
+      const bodyRef = useRef(null);
+
+      // 모달이 열리면 본문에 자동 포커스 (forwardRef 덕분에 실제로 동작)
+      useEffect(() => {
+        bodyRef.current && bodyRef.current.focus();
+      }, []);
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        // 유효성: 본문은 필수 (제목은 선택)
+        if (body.trim().length === 0) {
+          setError("본문을 입력해주세요. 한 줄이라도 괜찮아요 🙂");
+          bodyRef.current && bodyRef.current.focus();
+          return;
+        }
+        onSubmit({ category, title, body });
+      };
+
+      return (
+        <form onSubmit={handleSubmit} noValidate>
+          {/* 카테고리 선택 */}
+          <div className="mb-4">
+            <span className="block mb-1.5 text-sm font-semibold text-gray-700">카테고리</span>
+            <div className="flex gap-2" role="radiogroup" aria-label="카테고리 선택">
+              {CATEGORIES.map((cat) => {
+                const style = CATEGORY_STYLES[cat];
+                const active = category === cat;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setCategory(cat)}
+                    className={`flex-1 px-3 py-2 rounded-xl text-sm font-bold transition ${active ? style.chipActive : style.chipIdle}`}
+                  >
+                    <span aria-hidden="true">{style.emoji}</span> {cat}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 제목 (선택) */}
+          <Input
+            id="post-title"
+            label="제목 (선택)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="한 줄 제목을 달아도 좋아요"
+            maxLength={50}
+            className="mb-4"
+          />
+
+          {/* 본문 (필수) */}
+          <Textarea
+            ref={bodyRef}
+            id="post-body"
+            label="본문"
+            value={body}
+            onChange={(e) => { setBody(e.target.value); if (error) setError(""); }}
+            placeholder="마음에 담아둔 이야기를 자유롭게 적어주세요. (익명으로 등록돼요)"
+            rows={5}
+            maxLength={500}
+            error={error}
+          />
+          <div className="mt-1 text-right text-xs text-gray-400">{body.length} / 500</div>
+
+          {/* 액션 */}
+          <div className="mt-5 flex gap-2 justify-end">
+            <Button variant="secondary" onClick={onCancel}>취소</Button>
+            <Button type="submit">등록하기</Button>
+          </div>
+        </form>
+      );
+    }
+
+    // --- 정렬 탭 ---
+    function SortTabs({ value, onChange }) {
+      return (
+        <div className="inline-flex p-1 rounded-xl bg-white/80 ring-1 ring-gray-200" role="tablist" aria-label="정렬">
+          {SORTS.map((s) => {
+            const active = value === s.key;
+            return (
+              <button
+                key={s.key}
+                role="tab"
+                aria-selected={active}
+                onClick={() => onChange(s.key)}
+                className={`px-3.5 py-1.5 rounded-lg text-sm font-semibold transition ${
+                  active ? "bg-rose-500 text-white shadow-sm" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <span aria-hidden="true">{s.icon}</span> {s.label}
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // --- 카테고리 필터 칩 ---
+    function CategoryFilter({ value, onChange }) {
+      const allActive = value === "전체";
+      return (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="카테고리 필터">
+          <button
+            onClick={() => onChange("전체")}
+            aria-pressed={allActive}
+            className={`px-3 py-1.5 rounded-full text-sm font-bold transition ${
+              allActive ? "bg-gray-800 text-white shadow-sm" : "bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            전체
+          </button>
+          {CATEGORIES.map((cat) => {
+            const style = CATEGORY_STYLES[cat];
+            const active = value === cat;
+            return (
+              <button
+                key={cat}
+                onClick={() => onChange(cat)}
+                aria-pressed={active}
+                className={`px-3 py-1.5 rounded-full text-sm font-bold transition ${active ? style.chipActive : style.chipIdle}`}
+              >
+                <span aria-hidden="true">{style.emoji}</span> {cat}
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // --- 공감 버튼 (게시글 공감 + 댓글 공감 공용) ---
+    // size: "md"(게시글, 기본) | "sm"(댓글). 동적 조립 대신 정적 클래스 문자열을 매핑한다.
+    function LikeButton({ likes, onLike, size = "md", label = "공감하기" }) {
+      const [bursting, setBursting] = useState(false);
+      const handleClick = () => {
+        setBursting(true);
+        onLike();
+        setTimeout(() => setBursting(false), 340);
+      };
+      // ⚠️ Tailwind CDN(JIT)은 런타임 조립 클래스를 못 잡으므로 완전한 문자열로 미리 적어 둔다.
+      const sizeClass =
+        size === "sm"
+          ? "gap-1 px-2 py-1 text-xs"
+          : "gap-1.5 px-3 py-1.5 text-sm";
+      return (
+        <button
+          onClick={handleClick}
+          aria-label={`${label}, 현재 ${likes}명`}
+          className={`inline-flex items-center rounded-full bg-rose-50 text-rose-600 ring-1 ring-rose-100 hover:bg-rose-100 active:scale-95 transition font-semibold ${sizeClass}`}
+        >
+          <span aria-hidden="true" className={bursting ? "animate-pop inline-block" : "inline-block"}>❤️</span>
+          <span className="tabular-nums">{likes}</span>
+        </button>
+      );
+    }
+
+    // --- 댓글 한 개 ---
+    function CommentItem({ comment, onLike }) {
+      return (
+        <li className="flex items-start justify-between gap-3 py-2.5 animate-fade-in-up">
+          <div className="min-w-0">
+            <p className="text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
+              {comment.text}
+            </p>
+            <div className="mt-1 flex items-center gap-2 text-xs text-gray-400">
+              <span>익명</span>
+              <span aria-hidden="true">·</span>
+              <time title={new Date(comment.createdAt).toLocaleString("ko-KR")}>
+                {formatRelativeTime(comment.createdAt)}
+              </time>
+            </div>
+          </div>
+          {/* 게시글 공감과 동일한 룩앤필, 작은 사이즈로 재사용 */}
+          <div className="shrink-0">
+            <LikeButton
+              likes={comment.likes || 0}
+              onLike={onLike}
+              size="sm"
+              label="댓글에 공감하기"
+            />
+          </div>
+        </li>
+      );
+    }
+
+    // --- 댓글 입력창 ---
+    function CommentForm({ onSubmit }) {
+      const [text, setText] = useState("");
+      const [error, setError] = useState("");
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        // 유효성: 빈 본문 등록 방지 (작성 폼과 같은 톤)
+        if (text.trim().length === 0) {
+          setError("댓글을 입력해주세요 🙂");
+          return;
+        }
+        onSubmit(text);
+        setText(""); // 등록 후 입력창 비우기
+        setError("");
+      };
+
+      return (
+        <form onSubmit={handleSubmit} noValidate className="mt-3">
+          <div className="flex items-start gap-2">
+            <Textarea
+              id="comment-input"
+              value={text}
+              onChange={(e) => { setText(e.target.value); if (error) setError(""); }}
+              placeholder="따뜻한 댓글을 남겨보세요 (익명)"
+              rows={1}
+              maxLength={300}
+              error={error}
+              className="flex-1"
+            />
+            <Button type="submit" size="sm" className="shrink-0 mt-0.5">등록</Button>
+          </div>
+        </form>
+      );
+    }
+
+    // --- 댓글 영역 (목록 + 접기/펼치기 + 입력) ---
+    function CommentSection({ comments, onAddComment, onLikeComment }) {
+      const [expanded, setExpanded] = useState(false);
+      const PREVIEW_COUNT = 2; // 처음엔 최근 2개만 보여주고 나머지는 접어 둔다
+
+      // 작성순(오래된→최신). 새 댓글은 맨 아래에 추가된다.
+      const total = comments.length;
+      // 접힌 상태에서는 "가장 최근 PREVIEW_COUNT개"를 작성순으로 보여준다
+      const visible =
+        expanded || total <= PREVIEW_COUNT
+          ? comments
+          : comments.slice(total - PREVIEW_COUNT);
+      const hiddenCount = total - visible.length;
+
+      return (
+        <section className="mt-4 pt-4 border-t border-gray-100" aria-label="댓글">
+          <div className="flex items-center justify-between mb-1">
+            <h4 className="text-sm font-bold text-gray-600">
+              <span aria-hidden="true">💬</span> 댓글 <span className="tabular-nums">{total}</span>
+            </h4>
+          </div>
+
+          {total === 0 ? (
+            <p className="py-2 text-sm text-gray-400">아직 댓글이 없어요. 첫 댓글을 남겨보세요 🌱</p>
+          ) : (
+            <>
+              {/* 접혀 있고 숨겨진 댓글이 있으면 "모두 보기" 안내 */}
+              {!expanded && hiddenCount > 0 && (
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="mb-1 text-xs font-semibold text-rose-500 hover:text-rose-600 transition"
+                >
+                  댓글 {total}개 모두 보기 ▾
+                </button>
+              )}
+              <ul className="divide-y divide-gray-100">
+                {visible.map((c) => (
+                  <CommentItem key={c.id} comment={c} onLike={() => onLikeComment(c.id)} />
+                ))}
+              </ul>
+              {/* 펼친 상태에서 접기 버튼 (접을 게 있을 때만) */}
+              {expanded && total > PREVIEW_COUNT && (
+                <button
+                  onClick={() => setExpanded(false)}
+                  className="mt-1 text-xs font-semibold text-gray-400 hover:text-gray-600 transition"
+                >
+                  접기 ▴
+                </button>
+              )}
+            </>
+          )}
+
+          <CommentForm onSubmit={onAddComment} />
+        </section>
+      );
+    }
+
+    // --- 글 카드 ---
+    function PostCard({ post, onLike, onAddComment, onLikeComment }) {
+      const style = CATEGORY_STYLES[post.category] || CATEGORY_STYLES["응원"];
+      const comments = post.comments || []; // 하위호환: comments 없는 옛 글 방어
+      return (
+        <Card className="overflow-hidden animate-fade-in-up">
+          {/* 카테고리 색 컬러바 */}
+          <div className={`h-1.5 w-full ${style.bar}`} />
+          <div className="p-4 sm:p-5">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <Badge category={post.category} />
+              <time className="text-xs text-gray-400" title={new Date(post.createdAt).toLocaleString("ko-KR")}>
+                {formatRelativeTime(post.createdAt)}
+              </time>
+            </div>
+
+            {post.title && (
+              <h3 className="text-base font-bold text-gray-800 mb-1 break-words">{post.title}</h3>
+            )}
+            <p className="text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
+              {post.body}
+            </p>
+
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs text-gray-400">익명</span>
+              <LikeButton likes={post.likes || 0} onLike={onLike} />
+            </div>
+
+            {/* 댓글 영역 */}
+            <CommentSection
+              comments={comments}
+              onAddComment={(text) => onAddComment(post.id, text)}
+              onLikeComment={(commentId) => onLikeComment(post.id, commentId)}
+            />
+          </div>
+        </Card>
+      );
+    }
+
+    // --- 빈 상태 ---
+    function EmptyState({ filtered }) {
+      return (
+        <Card className="p-10 text-center">
+          <div className="text-5xl mb-3" aria-hidden="true">🌱</div>
+          <p className="font-bold text-gray-700">
+            {filtered ? "이 카테고리에는 아직 글이 없어요" : "아직 작성된 글이 없어요"}
+          </p>
+          <p className="mt-1 text-sm text-gray-500">
+            가장 먼저 마음을 나눠보는 건 어때요?
+          </p>
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🚀 App (루트 — 상태/데이터 흐름 총괄)
+    // ========================================
+    function App() {
+      const [posts, setPosts] = useState([]);     // 원본 글 목록 (서버 DB 미러)
+      const [sort, setSort] = useState("latest"); // 정렬 상태
+      const [filter, setFilter] = useState("전체"); // 카테고리 필터
+      const [isModalOpen, setModalOpen] = useState(false);
+      const [loading, setLoading] = useState(true); // 최초 목록 로딩 상태
+      const [loadError, setLoadError] = useState(""); // 목록 로딩 실패 메시지
+
+      // 최초 1회: 서버에서 목록 로드 (서버가 시드 포함 반환)
+      const loadPosts = useCallback(async () => {
+        setLoading(true);
+        setLoadError("");
+        try {
+          const data = await fetchPosts();
+          setPosts(data);
+        } catch (e) {
+          console.error("글 목록을 불러오지 못했어요:", e);
+          setLoadError("글을 불러오지 못했어요. 잠시 후 다시 시도해주세요.");
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadPosts();
+      }, [loadPosts]);
+
+      // 새 글 작성 핸들러 → 서버에 저장 후 응답(서버가 부여한 글)으로 화면 상태 갱신
+      const handleCreate = useCallback(async ({ category, title, body }) => {
+        try {
+          const created = await createPost({ category, title, body });
+          setPosts((prev) => [created, ...prev]); // 최신 글 맨 앞
+          setModalOpen(false);
+          setSort("latest");   // 방금 쓴 글이 바로 보이도록 최신순으로
+          setFilter("전체");
+        } catch (e) {
+          console.error("글을 등록하지 못했어요:", e);
+          alert("글을 등록하지 못했어요. 잠시 후 다시 시도해주세요.");
+        }
+      }, []);
+
+      // 공감 핸들러 → 서버에서 likes = likes + 1 후 응답값으로 갱신
+      const handleLike = useCallback(async (postId) => {
+        try {
+          const newLikes = await likePost(postId);
+          setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, likes: newLikes } : p)));
+        } catch (e) {
+          console.error("공감을 반영하지 못했어요:", e);
+          alert("공감을 반영하지 못했어요. 잠시 후 다시 시도해주세요.");
+        }
+      }, []);
+
+      // 댓글 작성 핸들러 → 서버에 저장 후 응답(서버가 부여한 댓글)으로 갱신
+      const handleAddComment = useCallback(async (postId, text) => {
+        try {
+          const created = await addComment(postId, text);
+          setPosts((prev) =>
+            prev.map((p) =>
+              p.id === postId ? { ...p, comments: [...(p.comments || []), created] } : p
+            )
+          );
+        } catch (e) {
+          console.error("댓글을 등록하지 못했어요:", e);
+          alert("댓글을 등록하지 못했어요. 잠시 후 다시 시도해주세요.");
+        }
+      }, []);
+
+      // 댓글 공감 핸들러 → 서버에서 likes = likes + 1 후 응답값으로 갱신
+      const handleLikeComment = useCallback(async (postId, commentId) => {
+        try {
+          const newLikes = await likeComment(postId, commentId);
+          setPosts((prev) =>
+            prev.map((p) => {
+              if (p.id !== postId) return p;
+              const comments = (p.comments || []).map((c) =>
+                c.id === commentId ? { ...c, likes: newLikes } : c
+              );
+              return { ...p, comments };
+            })
+          );
+        } catch (e) {
+          console.error("댓글 공감을 반영하지 못했어요:", e);
+          alert("댓글 공감을 반영하지 못했어요. 잠시 후 다시 시도해주세요.");
+        }
+      }, []);
+
+      // 필터 + 정렬 적용 (원본은 보존, 파생값만 메모이즈)
+      const visiblePosts = useMemo(() => {
+        let list = filter === "전체" ? posts : posts.filter((p) => p.category === filter);
+        list = [...list].sort((a, b) =>
+          sort === "likes"
+            ? (b.likes || 0) - (a.likes || 0) || b.createdAt - a.createdAt // 공감 같으면 최신순
+            : b.createdAt - a.createdAt
+        );
+        return list;
+      }, [posts, filter, sort]);
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          <Header count={posts.length} onWriteClick={() => setModalOpen(true)} />
+
+          <main className="flex-1 w-full max-w-2xl mx-auto px-4 pb-6">
+            {/* 컨트롤 바: 정렬 + 필터 */}
+            <div className="flex flex-col gap-3 mb-5">
+              <div className="flex items-center justify-between gap-3">
+                <SortTabs value={sort} onChange={setSort} />
+                <span className="text-xs text-gray-400 hidden sm:inline">{visiblePosts.length}개 표시 중</span>
+              </div>
+              <CategoryFilter value={filter} onChange={setFilter} />
+            </div>
+
+            {/* 목록 / 로딩 / 에러 / 빈 상태 */}
+            {loading ? (
+              <Card className="p-10 text-center">
+                <div className="text-4xl mb-3 animate-pulse" aria-hidden="true">💬</div>
+                <p className="font-bold text-gray-600">마음을 불러오는 중이에요…</p>
+              </Card>
+            ) : loadError ? (
+              <Card className="p-10 text-center">
+                <div className="text-5xl mb-3" aria-hidden="true">😢</div>
+                <p className="font-bold text-gray-700">{loadError}</p>
+                <div className="mt-4">
+                  <Button variant="secondary" onClick={loadPosts}>다시 시도</Button>
+                </div>
+              </Card>
+            ) : visiblePosts.length === 0 ? (
+              <EmptyState filtered={filter !== "전체"} />
+            ) : (
+              <div className="space-y-4">
+                {visiblePosts.map((post) => (
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    onLike={() => handleLike(post.id)}
+                    onAddComment={handleAddComment}
+                    onLikeComment={handleLikeComment}
+                  />
+                ))}
+              </div>
+            )}
+          </main>
+
+          <Footer />
+
+          {/* 모바일용 떠 있는 글쓰기 버튼 */}
+          <button
+            onClick={() => setModalOpen(true)}
+            aria-label="익명으로 글쓰기"
+            className="sm:hidden fixed bottom-5 right-5 z-40 w-14 h-14 rounded-full bg-rose-500 text-white text-2xl shadow-lg shadow-rose-300 active:scale-95 transition flex items-center justify-center"
+          >
+            ✍️
+          </button>
+
+          {/* 작성 모달 */}
+          <Modal isOpen={isModalOpen} onClose={() => setModalOpen(false)} title="익명으로 마음 남기기">
+            <PostForm onSubmit={handleCreate} onCancel={() => setModalOpen(false)} />
+          </Modal>
+        </div>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
