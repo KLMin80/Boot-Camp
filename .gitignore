@@ -4,3 +4,11 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Secrets — never commit DB URLs / API keys
+.env
+.env.*
+*.env
+
+# Node dependencies
+node_modules/

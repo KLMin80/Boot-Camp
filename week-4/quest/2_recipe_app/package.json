@@ -1,0 +1,17 @@
+{
+  "name": "2_recipe_app",
+  "version": "1.0.0",
+  "description": "냉장고 요리사 — 재료 기반 AI 레시피 생성 앱 백엔드",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "pg": "^8.21.0"
+  }
+}
