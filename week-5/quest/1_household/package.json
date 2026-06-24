@@ -1,0 +1,12 @@
+{
+  "name": "household-budget",
+  "version": "1.0.0",
+  "description": "가계부(Household Budget) 앱 백엔드 — 익명 단일 데이터셋, 거래/예산/요약 API (Node http + pg)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

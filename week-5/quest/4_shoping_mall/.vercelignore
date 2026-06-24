@@ -1,0 +1,5 @@
+# Vercel 배포에서 제외 — 비밀/로컬 산출물.
+# ⚠️ server.js·index.html·package.json 은 절대 제외 금지(엔트리포인트/정적/빌드).
+.env
+node_modules
+.vercel

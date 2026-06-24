@@ -1,0 +1,15 @@
+{
+  "name": "todos-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "할 일 관리 앱 백엔드 — Node 내장 http + pg + JWT 인증",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1"
+  }
+}

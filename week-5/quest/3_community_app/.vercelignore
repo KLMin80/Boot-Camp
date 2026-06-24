@@ -1,0 +1,6 @@
+# 비밀·불필요 파일은 업로드 제외 (server.js / index.html / package*.json 은 절대 제외 금지)
+.env
+.env.*
+node_modules
+.playwright-mcp
+*.png

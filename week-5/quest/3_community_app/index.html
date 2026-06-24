@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>맛톡 — 맛집·요리 커뮤니티</title>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <!-- ⚠️ 모든 CDN 버전 고정. 미고정 시 @babel/standalone 이 8.x 로 올라가
+       type="text/babel" 인라인 변환이 통째로 깨진다. Babel 은 반드시 7.x. -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+  <style>
+    /* Tailwind 으로 표현하기 까다로운 부분만 보강 */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .animate-fadeIn { animation: fadeIn 0.18s ease-out both; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 0.7s linear infinite; }
+    /* 본문 줄바꿈 보존 */
+    .whitespace-pre-wrap { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body class="bg-amber-50 text-stone-800 antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useCallback, useContext, createContext, useRef, useMemo } = React;
+
+    // ========================================
+    // 설정 / API
+    // ========================================
+    const API_BASE_URL = '/api'; // 상대경로. localhost 하드코딩 금지. 엔드포인트에 /api 중복 X.
+
+    const STORAGE_KEYS = {
+      token: 'community.jwt',
+      user: 'community.user',
+    };
+
+    // 401 을 공통 처리하기 위한 커스텀 에러
+    class ApiError extends Error {
+      constructor(message, status, payload) {
+        super(message);
+        this.name = 'ApiError';
+        this.status = status;
+        this.payload = payload;
+      }
+    }
+
+    // 인증 컨텍스트가 로그아웃 핸들러를 등록 → apiFetch 에서 401 시 호출
+    let onUnauthorized = null;
+    const registerUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
+
+    /**
+     * 보호 요청용 fetch 헬퍼.
+     * - 토큰을 Authorization 헤더에 자동 부착
+     * - JSON 바디 자동 직렬화
+     * - 401 이면 공통 핸들러(onUnauthorized) 호출 후 ApiError throw
+     */
+    async function apiFetch(endpoint, options = {}) {
+      const token = localStorage.getItem(STORAGE_KEYS.token);
+      const headers = { ...(options.headers || {}) };
+
+      let body = options.body;
+      if (body !== undefined && body !== null && typeof body !== 'string') {
+        headers['Content-Type'] = 'application/json';
+        body = JSON.stringify(body);
+      }
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      let res;
+      try {
+        res = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers, body });
+      } catch (networkErr) {
+        throw new ApiError('네트워크 오류가 발생했어요. 잠시 후 다시 시도해 주세요.', 0, null);
+      }
+
+      // 응답 바디 파싱 (없을 수 있음)
+      let payload = null;
+      const text = await res.text();
+      if (text) {
+        try { payload = JSON.parse(text); } catch (_) { payload = text; }
+      }
+
+      if (res.status === 401) {
+        if (onUnauthorized) onUnauthorized();
+        throw new ApiError('세션이 만료되었어요. 다시 로그인해 주세요.', 401, payload);
+      }
+
+      if (!res.ok) {
+        const msg = (payload && (payload.message || payload.error)) || `요청에 실패했어요. (${res.status})`;
+        throw new ApiError(msg, res.status, payload);
+      }
+
+      return payload;
+    }
+
+    // ========================================
+    // 유틸 — 시간 표시
+    // ========================================
+    function pad2(n) { return String(n).padStart(2, '0'); }
+
+    function formatAbsolute(ms) {
+      const d = new Date(ms);
+      if (isNaN(d.getTime())) return '';
+      return `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+
+    // 상대시간: 방금 전 / N분 전 / N시간 전 / N일 전, 그 외 절대시간
+    function formatRelative(ms) {
+      const now = Date.now();
+      const diff = now - Number(ms);
+      if (isNaN(diff)) return '';
+      if (diff < 0) return '방금 전';
+      const sec = Math.floor(diff / 1000);
+      if (sec < 60) return '방금 전';
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}분 전`;
+      const hr = Math.floor(min / 60);
+      if (hr < 24) return `${hr}시간 전`;
+      const day = Math.floor(hr / 24);
+      if (day < 7) return `${day}일 전`;
+      return formatAbsolute(ms);
+    }
+
+    // 작성자 이니셜(아바타용)
+    function initialOf(name) {
+      if (!name) return '🍽️';
+      const trimmed = String(name).trim();
+      return trimmed ? trimmed[0].toUpperCase() : '🍽️';
+    }
+
+    // ========================================
+    // 🎨 디자인 시스템 컴포넌트
+    // ========================================
+
+    // variant/size 는 정적 매핑 객체로(Tailwind CDN JIT 가 런타임 조립 클래스를 못 잡음)
+    const BTN_VARIANTS = {
+      primary: 'bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white shadow-sm focus:ring-amber-400',
+      secondary: 'bg-white hover:bg-amber-50 text-amber-700 border border-amber-300 focus:ring-amber-300',
+      danger: 'bg-red-500 hover:bg-red-600 active:bg-red-700 text-white shadow-sm focus:ring-red-400',
+      ghost: 'bg-transparent hover:bg-amber-100 text-amber-700 focus:ring-amber-300',
+    };
+    const BTN_SIZES = {
+      sm: 'px-3 py-1.5 text-sm',
+      md: 'px-4 py-2 text-sm',
+      lg: 'px-5 py-2.5 text-base',
+    };
+
+    function Spinner({ className = '' }) {
+      return (
+        <span
+          className={`inline-block h-4 w-4 rounded-full border-2 border-current border-t-transparent spin ${className}`}
+          aria-hidden="true"
+        />
+      );
+    }
+
+    function Button({
+      children, variant = 'primary', size = 'md', type = 'button',
+      disabled = false, loading = false, onClick, className = '', ...rest
+    }) {
+      const isDisabled = disabled || loading;
+      return (
+        <button
+          type={type}
+          onClick={onClick}
+          disabled={isDisabled}
+          className={`inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-colors
+            focus:outline-none focus:ring-2 focus:ring-offset-1
+            disabled:opacity-50 disabled:cursor-not-allowed
+            ${BTN_VARIANTS[variant] || BTN_VARIANTS.primary} ${BTN_SIZES[size] || BTN_SIZES.md} ${className}`}
+          {...rest}
+        >
+          {loading && <Spinner />}
+          {children}
+        </button>
+      );
+    }
+
+    // forwardRef: 디자인시스템으로 감싸도 자동포커스/DOM 접근이 살아있도록 내부 input 에 ref 연결
+    const Input = React.forwardRef(function Input(
+      { label, error, id, className = '', wrapperClassName = '', ...rest }, ref
+    ) {
+      const autoId = useRef(`in-${Math.random().toString(36).slice(2, 9)}`);
+      const inputId = id || autoId.current;
+      return (
+        <div className={`flex flex-col gap-1 ${wrapperClassName}`}>
+          {label && (
+            <label htmlFor={inputId} className="text-sm font-medium text-stone-700">{label}</label>
+          )}
+          <input
+            ref={ref}
+            id={inputId}
+            aria-invalid={!!error}
+            className={`w-full rounded-lg border px-3 py-2 text-sm text-stone-800 placeholder-stone-400
+              bg-white transition-colors
+              focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400
+              ${error ? 'border-red-400' : 'border-stone-300'} ${className}`}
+            {...rest}
+          />
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+      );
+    });
+
+    const Textarea = React.forwardRef(function Textarea(
+      { label, error, id, className = '', wrapperClassName = '', rows = 8, ...rest }, ref
+    ) {
+      const autoId = useRef(`ta-${Math.random().toString(36).slice(2, 9)}`);
+      const taId = id || autoId.current;
+      return (
+        <div className={`flex flex-col gap-1 ${wrapperClassName}`}>
+          {label && (
+            <label htmlFor={taId} className="text-sm font-medium text-stone-700">{label}</label>
+          )}
+          <textarea
+            ref={ref}
+            id={taId}
+            rows={rows}
+            aria-invalid={!!error}
+            className={`w-full rounded-lg border px-3 py-2 text-sm text-stone-800 placeholder-stone-400
+              bg-white transition-colors resize-y leading-relaxed
+              focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400
+              ${error ? 'border-red-400' : 'border-stone-300'} ${className}`}
+            {...rest}
+          />
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+      );
+    });
+
+    function Card({ children, className = '', ...rest }) {
+      return (
+        <div
+          className={`rounded-2xl bg-white shadow-sm border border-amber-100 ${className}`}
+          {...rest}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    function Avatar({ name, className = '' }) {
+      return (
+        <span
+          className={`inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 font-bold select-none ${className}`}
+          aria-hidden="true"
+        >
+          {initialOf(name)}
+        </span>
+      );
+    }
+
+    // 토스트/배너 형태의 에러 알림
+    function Alert({ children, tone = 'error', onClose, className = '' }) {
+      const tones = {
+        error: 'bg-red-50 border-red-200 text-red-700',
+        info: 'bg-amber-50 border-amber-200 text-amber-800',
+        success: 'bg-green-50 border-green-200 text-green-700',
+      };
+      return (
+        <div
+          role="alert"
+          className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${tones[tone] || tones.error} ${className}`}
+        >
+          <span className="flex-1">{children}</span>
+          {onClose && (
+            <button onClick={onClose} className="shrink-0 opacity-70 hover:opacity-100" aria-label="닫기">✕</button>
+          )}
+        </div>
+      );
+    }
+
+    // 중앙 정렬 로딩 인디케이터
+    function Loading({ label = '불러오는 중…' }) {
+      return (
+        <div className="flex flex-col items-center justify-center gap-3 py-16 text-amber-600">
+          <Spinner className="h-7 w-7 border-[3px]" />
+          <p className="text-sm text-stone-500">{label}</p>
+        </div>
+      );
+    }
+
+    function Modal({ isOpen, onClose, title, children, footer, size = 'md' }) {
+      useEffect(() => {
+        if (!isOpen) return;
+        const onKey = (e) => { if (e.key === 'Escape') onClose && onClose(); };
+        document.addEventListener('keydown', onKey);
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+          document.removeEventListener('keydown', onKey);
+          document.body.style.overflow = prev;
+        };
+      }, [isOpen, onClose]);
+
+      if (!isOpen) return null;
+      const sizes = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg' };
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-stone-900/40" onClick={onClose} aria-hidden="true" />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            className={`relative w-full ${sizes[size] || sizes.md} rounded-2xl bg-white shadow-xl animate-fadeIn`}
+          >
+            {title && (
+              <div className="px-5 pt-5 pb-2">
+                <h3 className="text-lg font-bold text-stone-800">{title}</h3>
+              </div>
+            )}
+            <div className="px-5 py-2 text-sm text-stone-600">{children}</div>
+            {footer && <div className="flex justify-end gap-2 px-5 pb-5 pt-3">{footer}</div>}
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🔀 라우터 (해시 기반)
+    // ========================================
+    const RouterContext = createContext(null);
+
+    function getHashPath() {
+      const raw = window.location.hash.replace(/^#/, '');
+      const path = raw.split('?')[0];
+      return path || '/';
+    }
+
+    function Router({ children }) {
+      const [path, setPath] = useState(getHashPath());
+      useEffect(() => {
+        const onHash = () => setPath(getHashPath());
+        window.addEventListener('hashchange', onHash);
+        // 최초 진입 시 해시 없으면 기본값 보정
+        if (!window.location.hash) window.location.hash = '#/';
+        return () => window.removeEventListener('hashchange', onHash);
+      }, []);
+
+      const navigate = useCallback((to, { replace = false } = {}) => {
+        const target = to.startsWith('#') ? to : `#${to}`;
+        if (replace) {
+          const url = window.location.pathname + window.location.search + target;
+          window.history.replaceState(null, '', url);
+          setPath(getHashPath());
+        } else {
+          window.location.hash = target;
+        }
+      }, []);
+
+      return (
+        <RouterContext.Provider value={{ path, navigate }}>
+          {children}
+        </RouterContext.Provider>
+      );
+    }
+
+    function useRouter() {
+      return useContext(RouterContext);
+    }
+
+    // :param 지원 매칭. 매치되면 params 객체, 아니면 null
+    function matchRoute(pattern, path) {
+      const pSeg = pattern.split('/').filter(Boolean);
+      const aSeg = path.split('/').filter(Boolean);
+      if (pSeg.length !== aSeg.length) return null;
+      const params = {};
+      for (let i = 0; i < pSeg.length; i++) {
+        if (pSeg[i].startsWith(':')) {
+          params[pSeg[i].slice(1)] = decodeURIComponent(aSeg[i]);
+        } else if (pSeg[i] !== aSeg[i]) {
+          return null;
+        }
+      }
+      return params;
+    }
+
+    // Routes: 자식 Route 중 첫 매치를 렌더. params 를 element 에 주입.
+    function Routes({ children }) {
+      const { path } = useRouter();
+      const routes = React.Children.toArray(children).filter(Boolean);
+      for (const route of routes) {
+        const params = matchRoute(route.props.path, path);
+        if (params) {
+          return React.cloneElement(route.props.element, { params });
+        }
+      }
+      // 매치 없으면 마지막 fallback(path="*") 사용
+      const fallback = routes.find((r) => r.props.path === '*');
+      return fallback ? React.cloneElement(fallback.props.element, { params: {} }) : null;
+    }
+
+    function Route() { return null; } // 선언용 마커
+
+    function Link({ to, children, className = '', onClick, ...rest }) {
+      const { navigate } = useRouter();
+      const handle = (e) => {
+        e.preventDefault();
+        if (onClick) onClick(e);
+        navigate(to);
+      };
+      return (
+        <a href={`#${to}`} onClick={handle} className={className} {...rest}>{children}</a>
+      );
+    }
+
+    // ========================================
+    // 🔐 인증 컨텍스트
+    // ========================================
+    const AuthContext = createContext(null);
+    function useAuth() { return useContext(AuthContext); }
+
+    function AuthProvider({ children }) {
+      const [user, setUser] = useState(() => {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEYS.user);
+          return raw ? JSON.parse(raw) : null;
+        } catch (_) { return null; }
+      });
+      // 앱 로드시 토큰 검증 진행중 여부
+      const [bootstrapping, setBootstrapping] = useState(true);
+
+      const persist = useCallback((token, nextUser) => {
+        if (token) localStorage.setItem(STORAGE_KEYS.token, token);
+        if (nextUser) localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(nextUser));
+        setUser(nextUser || null);
+      }, []);
+
+      const clear = useCallback(() => {
+        localStorage.removeItem(STORAGE_KEYS.token);
+        localStorage.removeItem(STORAGE_KEYS.user);
+        setUser(null);
+      }, []);
+
+      const logout = useCallback(() => {
+        clear();
+        window.location.hash = '#/login';
+      }, [clear]);
+
+      // 401 공통 처리: 토큰/유저 비우고 로그인으로
+      useEffect(() => {
+        registerUnauthorizedHandler(() => {
+          clear();
+          if (getHashPath() !== '/login') window.location.hash = '#/login';
+        });
+        return () => registerUnauthorizedHandler(null);
+      }, [clear]);
+
+      // 앱 로드시 토큰 있으면 /auth/me 로 사전 검증
+      useEffect(() => {
+        let cancelled = false;
+        const token = localStorage.getItem(STORAGE_KEYS.token);
+        if (!token) {
+          setBootstrapping(false);
+          return;
+        }
+        (async () => {
+          try {
+            const data = await apiFetch('/auth/me');
+            if (cancelled) return;
+            if (data && data.user) persist(token, data.user);
+            else clear();
+          } catch (_) {
+            // 401 등 → apiFetch 의 공통핸들러가 이미 clear. 여기서도 안전하게 clear.
+            if (!cancelled) clear();
+          } finally {
+            if (!cancelled) setBootstrapping(false);
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [persist, clear]);
+
+      // 로그인/회원가입 공통 처리
+      const authenticate = useCallback(async (endpoint, body) => {
+        const data = await apiFetch(endpoint, { method: 'POST', body });
+        if (!data || !data.token || !data.user) {
+          throw new ApiError('인증 응답이 올바르지 않아요.', 0, data);
+        }
+        persist(data.token, data.user);
+        return data.user;
+      }, [persist]);
+
+      const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate]);
+      const signup = useCallback((email, password) => authenticate('/auth/signup', { email, password }), [authenticate]);
+
+      const value = useMemo(() => ({
+        user, bootstrapping, login, signup, logout,
+        isAuthenticated: !!user,
+      }), [user, bootstrapping, login, signup, logout]);
+
+      return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+    }
+
+    // ========================================
+    // 🧩 레이아웃 컴포넌트
+    // ========================================
+    function Header() {
+      const { user, logout, isAuthenticated } = useAuth();
+      return (
+        <header className="sticky top-0 z-40 border-b border-amber-100 bg-white/90 backdrop-blur">
+          <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
+            <Link to="/" className="flex items-center gap-2 group">
+              <span className="text-2xl group-hover:scale-110 transition-transform">🍜</span>
+              <span className="text-lg font-extrabold tracking-tight text-stone-800">
+                맛<span className="text-amber-500">톡</span>
+              </span>
+              <span className="hidden sm:inline text-xs text-stone-400">맛집·요리 커뮤니티</span>
+            </Link>
+
+            {isAuthenticated && (
+              <div className="flex items-center gap-2 sm:gap-3">
+                <span className="hidden sm:flex items-center gap-2 text-sm text-stone-600">
+                  <Avatar name={user.email} className="h-7 w-7 text-xs" />
+                  <span className="font-medium text-stone-700 max-w-[10rem] truncate">{user.email}</span>
+                </span>
+                <Avatar name={user.email} className="h-7 w-7 text-xs sm:hidden" />
+                <Button variant="secondary" size="sm" onClick={logout}>로그아웃</Button>
+              </div>
+            )}
+          </div>
+        </header>
+      );
+    }
+
+    function PageShell({ children }) {
+      return (
+        <div className="min-h-screen flex flex-col bg-amber-50">
+          <Header />
+          <main className="flex-1">
+            <div className="mx-auto max-w-3xl px-4 py-6">{children}</div>
+          </main>
+          <footer className="border-t border-amber-100 py-6 text-center text-xs text-stone-400">
+            🍳 오늘도 맛있는 하루 — 맛톡 커뮤니티
+          </footer>
+        </div>
+      );
+    }
+
+    // 비로그인 화면용 심플 셸(로그인/회원가입)
+    function AuthShell({ children }) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-amber-100 via-amber-50 to-orange-50 px-4 py-10">
+          <div className="mb-6 text-center">
+            <div className="text-5xl mb-2">🍜</div>
+            <h1 className="text-2xl font-extrabold text-stone-800">맛<span className="text-amber-500">톡</span></h1>
+            <p className="mt-1 text-sm text-stone-500">맛집과 레시피를 나누는 따뜻한 공간</p>
+          </div>
+          {children}
+          <p className="mt-8 text-xs text-stone-400">🍳 함께 나누면 더 맛있어요</p>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 로그인
+    // ========================================
+    function LoginPage() {
+      const { login } = useAuth();
+      const { navigate } = useRouter();
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [errors, setErrors] = useState({});
+      const [formError, setFormError] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+      const emailRef = useRef(null);
+
+      useEffect(() => { emailRef.current && emailRef.current.focus(); }, []);
+
+      const validate = () => {
+        const next = {};
+        if (!email.trim()) next.email = '이메일을 입력해 주세요.';
+        else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) next.email = '이메일 형식이 올바르지 않아요.';
+        if (!password) next.password = '비밀번호를 입력해 주세요.';
+        setErrors(next);
+        return Object.keys(next).length === 0;
+      };
+
+      const onSubmit = async (e) => {
+        e.preventDefault();
+        setFormError('');
+        if (!validate()) return;
+        setSubmitting(true);
+        try {
+          await login(email.trim(), password);
+          navigate('/', { replace: true });
+        } catch (err) {
+          if (err.status === 401) setFormError('이메일 또는 비밀번호가 올바르지 않아요.');
+          else setFormError(err.message || '로그인에 실패했어요.');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <AuthShell>
+          <Card className="w-full max-w-sm p-6 animate-fadeIn">
+            <h2 className="mb-1 text-xl font-bold text-stone-800">로그인</h2>
+            <p className="mb-5 text-sm text-stone-500">맛톡에 다시 오신 걸 환영해요 👋</p>
+
+            {formError && <Alert className="mb-4" onClose={() => setFormError('')}>{formError}</Alert>}
+
+            <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+              <Input
+                ref={emailRef}
+                label="이메일"
+                type="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                error={errors.email}
+                disabled={submitting}
+              />
+              <Input
+                label="비밀번호"
+                type="password"
+                autoComplete="current-password"
+                placeholder="비밀번호"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                error={errors.password}
+                disabled={submitting}
+              />
+              <Button type="submit" size="lg" loading={submitting} className="mt-1 w-full">
+                {submitting ? '로그인 중…' : '로그인'}
+              </Button>
+            </form>
+
+            <p className="mt-5 text-center text-sm text-stone-500">
+              아직 계정이 없으신가요?{' '}
+              <Link to="/signup" className="font-semibold text-amber-600 hover:text-amber-700 hover:underline">
+                회원가입
+              </Link>
+            </p>
+          </Card>
+        </AuthShell>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 회원가입
+    // ========================================
+    function SignupPage() {
+      const { signup } = useAuth();
+      const { navigate } = useRouter();
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [passwordConfirm, setPasswordConfirm] = useState('');
+      const [errors, setErrors] = useState({});
+      const [formError, setFormError] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+      const emailRef = useRef(null);
+
+      useEffect(() => { emailRef.current && emailRef.current.focus(); }, []);
+
+      const validate = () => {
+        const next = {};
+        if (!email.trim()) next.email = '이메일을 입력해 주세요.';
+        else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) next.email = '이메일 형식이 올바르지 않아요.';
+        if (!password) next.password = '비밀번호를 입력해 주세요.';
+        else if (password.length < 6) next.password = '비밀번호는 최소 6자 이상이어야 해요.';
+        if (passwordConfirm !== password) next.passwordConfirm = '비밀번호가 일치하지 않아요.';
+        setErrors(next);
+        return Object.keys(next).length === 0;
+      };
+
+      const onSubmit = async (e) => {
+        e.preventDefault();
+        setFormError('');
+        if (!validate()) return;
+        setSubmitting(true);
+        try {
+          await signup(email.trim(), password); // 성공 시 자동 로그인
+          navigate('/', { replace: true });
+        } catch (err) {
+          if (err.status === 409) setFormError('이미 가입된 이메일이에요. 로그인해 주세요.');
+          else if (err.status === 400) setFormError(err.message || '입력값을 확인해 주세요.');
+          else setFormError(err.message || '회원가입에 실패했어요.');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <AuthShell>
+          <Card className="w-full max-w-sm p-6 animate-fadeIn">
+            <h2 className="mb-1 text-xl font-bold text-stone-800">회원가입</h2>
+            <p className="mb-5 text-sm text-stone-500">맛톡 친구가 되어 주세요 🧑‍🍳</p>
+
+            {formError && <Alert className="mb-4" onClose={() => setFormError('')}>{formError}</Alert>}
+
+            <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+              <Input
+                ref={emailRef}
+                label="이메일"
+                type="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                error={errors.email}
+                disabled={submitting}
+              />
+              <Input
+                label="비밀번호"
+                type="password"
+                autoComplete="new-password"
+                placeholder="최소 6자"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                error={errors.password}
+                disabled={submitting}
+              />
+              <Input
+                label="비밀번호 확인"
+                type="password"
+                autoComplete="new-password"
+                placeholder="비밀번호 재입력"
+                value={passwordConfirm}
+                onChange={(e) => setPasswordConfirm(e.target.value)}
+                error={errors.passwordConfirm}
+                disabled={submitting}
+              />
+              <Button type="submit" size="lg" loading={submitting} className="mt-1 w-full">
+                {submitting ? '가입 중…' : '회원가입'}
+              </Button>
+            </form>
+
+            <p className="mt-5 text-center text-sm text-stone-500">
+              이미 계정이 있으신가요?{' '}
+              <Link to="/login" className="font-semibold text-amber-600 hover:text-amber-700 hover:underline">
+                로그인
+              </Link>
+            </p>
+          </Card>
+        </AuthShell>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 게시글 목록
+    // ========================================
+    function PostListPage() {
+      const { navigate } = useRouter();
+      const [posts, setPosts] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState('');
+
+      const load = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const data = await apiFetch('/posts'); // 서버가 이미 최신순 정렬
+          setPosts(Array.isArray(data) ? data : []);
+        } catch (err) {
+          if (err.status !== 401) setError(err.message || '글을 불러오지 못했어요.');
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => { load(); }, [load]);
+
+      return (
+        <PageShell>
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-extrabold text-stone-800">맛집·요리 이야기 🍲</h2>
+              <p className="text-sm text-stone-500">맛있는 경험을 함께 나눠요</p>
+            </div>
+            <Button onClick={() => navigate('/new')} className="shrink-0">
+              ✏️ 글쓰기
+            </Button>
+          </div>
+
+          {error && (
+            <Alert className="mb-4" onClose={() => setError('')}>
+              {error} <button onClick={load} className="ml-1 font-semibold underline">다시 시도</button>
+            </Alert>
+          )}
+
+          {loading ? (
+            <Loading label="맛있는 글을 불러오는 중…" />
+          ) : posts.length === 0 ? (
+            <Card className="flex flex-col items-center gap-3 py-16 text-center">
+              <div className="text-5xl">🍽️</div>
+              <p className="text-stone-600 font-medium">아직 올라온 글이 없어요</p>
+              <p className="text-sm text-stone-400">첫 번째 맛집·레시피 이야기를 남겨보세요!</p>
+              <Button onClick={() => navigate('/new')} className="mt-1">첫 글 작성하기</Button>
+            </Card>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {posts.map((post) => (
+                <li key={post.id}>
+                  <Link to={`/posts/${post.id}`} className="block group">
+                    <Card className="p-4 transition-all hover:shadow-md hover:border-amber-200 group-active:scale-[0.99]">
+                      <h3 className="text-base font-bold text-stone-800 line-clamp-2 group-hover:text-amber-700">
+                        {post.title}
+                      </h3>
+                      {post.content && (
+                        <p className="mt-1 text-sm text-stone-500 line-clamp-2 whitespace-pre-wrap">
+                          {post.content}
+                        </p>
+                      )}
+                      <div className="mt-3 flex items-center gap-2 text-xs text-stone-400">
+                        <Avatar name={post.authorName} className="h-5 w-5 text-[10px]" />
+                        <span className="font-medium text-stone-500">{post.authorName}</span>
+                        <span aria-hidden="true">·</span>
+                        <time dateTime={new Date(Number(post.createdAt)).toISOString()} title={formatAbsolute(post.createdAt)}>
+                          {formatRelative(post.createdAt)}
+                        </time>
+                      </div>
+                    </Card>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </PageShell>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 게시글 상세
+    // ========================================
+    function PostDetailPage({ params }) {
+      const { id } = params;
+      const { user } = useAuth();
+      const { navigate } = useRouter();
+      const [post, setPost] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState('');
+      const [notFound, setNotFound] = useState(false);
+
+      const [confirmOpen, setConfirmOpen] = useState(false);
+      const [deleting, setDeleting] = useState(false);
+      const [deleteError, setDeleteError] = useState('');
+
+      const load = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        setNotFound(false);
+        try {
+          const data = await apiFetch(`/posts/${encodeURIComponent(id)}`);
+          setPost(data);
+        } catch (err) {
+          if (err.status === 404) setNotFound(true);
+          else if (err.status !== 401) setError(err.message || '글을 불러오지 못했어요.');
+        } finally {
+          setLoading(false);
+        }
+      }, [id]);
+
+      useEffect(() => { load(); }, [load]);
+
+      // 본인 글 판별은 반드시 문자열로 비교 (id/authorId 가 문자열일 수 있음)
+      const isOwner = post && user && String(post.authorId) === String(user.id);
+
+      const onDelete = async () => {
+        setDeleting(true);
+        setDeleteError('');
+        try {
+          await apiFetch(`/posts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          setConfirmOpen(false);
+          navigate('/', { replace: true });
+        } catch (err) {
+          if (err.status === 404) {
+            setDeleteError('이미 삭제되었거나 권한이 없는 글이에요.');
+          } else if (err.status !== 401) {
+            setDeleteError(err.message || '삭제에 실패했어요.');
+          }
+        } finally {
+          setDeleting(false);
+        }
+      };
+
+      return (
+        <PageShell>
+          <div className="mb-4">
+            <Link to="/" className="inline-flex items-center gap-1 text-sm text-stone-500 hover:text-amber-600">
+              ← 목록으로 돌아가기
+            </Link>
+          </div>
+
+          {loading ? (
+            <Loading label="글을 불러오는 중…" />
+          ) : notFound ? (
+            <Card className="flex flex-col items-center gap-3 py-16 text-center">
+              <div className="text-5xl">🕵️</div>
+              <p className="text-stone-600 font-medium">글을 찾을 수 없어요</p>
+              <p className="text-sm text-stone-400">삭제되었거나 잘못된 주소일 수 있어요.</p>
+              <Button variant="secondary" onClick={() => navigate('/')} className="mt-1">목록으로</Button>
+            </Card>
+          ) : error ? (
+            <Alert onClose={() => setError('')}>
+              {error} <button onClick={load} className="ml-1 font-semibold underline">다시 시도</button>
+            </Alert>
+          ) : post ? (
+            <article className="animate-fadeIn">
+              <Card className="p-6">
+                <h1 className="text-2xl font-extrabold text-stone-800 break-words">{post.title}</h1>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-stone-500 border-b border-amber-100 pb-4">
+                  <Avatar name={post.authorName} className="h-7 w-7 text-xs" />
+                  <span className="font-semibold text-stone-700">{post.authorName}</span>
+                  <span aria-hidden="true">·</span>
+                  <time dateTime={new Date(Number(post.createdAt)).toISOString()} title={formatAbsolute(post.createdAt)}>
+                    {formatRelative(post.createdAt)} ({formatAbsolute(post.createdAt)})
+                  </time>
+                </div>
+
+                <div className="mt-4 text-[15px] leading-relaxed text-stone-700 whitespace-pre-wrap min-h-[6rem]">
+                  {post.content}
+                </div>
+              </Card>
+
+              {isOwner && (
+                <div className="mt-4 flex items-center justify-end gap-2">
+                  <Button variant="secondary" onClick={() => navigate(`/posts/${post.id}/edit`)}>
+                    ✏️ 수정
+                  </Button>
+                  <Button variant="danger" onClick={() => { setDeleteError(''); setConfirmOpen(true); }}>
+                    🗑️ 삭제
+                  </Button>
+                </div>
+              )}
+            </article>
+          ) : null}
+
+          <Modal
+            isOpen={confirmOpen}
+            onClose={() => !deleting && setConfirmOpen(false)}
+            title="글을 삭제할까요?"
+            size="sm"
+            footer={
+              <>
+                <Button variant="ghost" onClick={() => setConfirmOpen(false)} disabled={deleting}>취소</Button>
+                <Button variant="danger" onClick={onDelete} loading={deleting}>
+                  {deleting ? '삭제 중…' : '삭제'}
+                </Button>
+              </>
+            }
+          >
+            <p>삭제한 글은 되돌릴 수 없어요. 정말 삭제하시겠어요?</p>
+            {deleteError && <Alert className="mt-3">{deleteError}</Alert>}
+          </Modal>
+        </PageShell>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 — 글쓰기 / 수정 (폼 공용)
+    // ========================================
+    function PostFormPage({ params, mode }) {
+      const isEdit = mode === 'edit';
+      const editId = params && params.id;
+      const { user } = useAuth();
+      const { navigate } = useRouter();
+
+      const [title, setTitle] = useState('');
+      const [content, setContent] = useState('');
+      const [errors, setErrors] = useState({});
+      const [formError, setFormError] = useState('');
+      const [submitting, setSubmitting] = useState(false);
+
+      // 수정 모드: 기존 글 로드
+      const [loading, setLoading] = useState(isEdit);
+      const [loadError, setLoadError] = useState('');
+      const [notFound, setNotFound] = useState(false);
+
+      const titleRef = useRef(null);
+
+      useEffect(() => {
+        if (!isEdit) {
+          // 새 글: 제목에 포커스
+          titleRef.current && titleRef.current.focus();
+          return;
+        }
+        let cancelled = false;
+        (async () => {
+          setLoading(true);
+          setLoadError('');
+          setNotFound(false);
+          try {
+            const data = await apiFetch(`/posts/${encodeURIComponent(editId)}`);
+            if (cancelled) return;
+            // 본인 글만 수정 가능 — 문자열 비교
+            if (!user || String(data.authorId) !== String(user.id)) {
+              setNotFound(true); // 권한 없음도 "수정 불가"로 처리
+              return;
+            }
+            setTitle(data.title || '');
+            setContent(data.content || '');
+          } catch (err) {
+            if (cancelled) return;
+            if (err.status === 404) setNotFound(true);
+            else if (err.status !== 401) setLoadError(err.message || '글을 불러오지 못했어요.');
+          } finally {
+            if (!cancelled) setLoading(false);
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [isEdit, editId, user]);
+
+      const validate = () => {
+        const next = {};
+        if (!title.trim()) next.title = '제목을 입력해 주세요.';
+        else if (title.trim().length > 120) next.title = '제목은 120자 이내로 입력해 주세요.';
+        if (!content.trim()) next.content = '내용을 입력해 주세요.';
+        setErrors(next);
+        return Object.keys(next).length === 0;
+      };
+
+      const onSubmit = async (e) => {
+        e.preventDefault();
+        setFormError('');
+        if (!validate()) return;
+        setSubmitting(true);
+        const body = { title: title.trim(), content: content.trim() };
+        try {
+          if (isEdit) {
+            const updated = await apiFetch(`/posts/${encodeURIComponent(editId)}`, { method: 'PATCH', body });
+            navigate(`/posts/${updated.id}`, { replace: true });
+          } else {
+            const created = await apiFetch('/posts', { method: 'POST', body });
+            // 생성된 글 상세로 이동
+            if (created && created.id != null) navigate(`/posts/${created.id}`, { replace: true });
+            else navigate('/', { replace: true });
+          }
+        } catch (err) {
+          if (err.status === 404) setFormError('수정할 수 없는 글이에요. (삭제되었거나 권한 없음)');
+          else if (err.status === 400) setFormError(err.message || '입력값을 확인해 주세요.');
+          else if (err.status !== 401) setFormError(err.message || '저장에 실패했어요.');
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      const backTo = isEdit && editId ? `/posts/${editId}` : '/';
+
+      return (
+        <PageShell>
+          <div className="mb-4">
+            <Link to={backTo} className="inline-flex items-center gap-1 text-sm text-stone-500 hover:text-amber-600">
+              ← {isEdit ? '상세로 돌아가기' : '목록으로 돌아가기'}
+            </Link>
+          </div>
+
+          <h2 className="mb-4 text-xl font-extrabold text-stone-800">
+            {isEdit ? '✏️ 글 수정' : '🍳 새 글 쓰기'}
+          </h2>
+
+          {isEdit && loading ? (
+            <Loading label="글을 불러오는 중…" />
+          ) : isEdit && notFound ? (
+            <Card className="flex flex-col items-center gap-3 py-16 text-center">
+              <div className="text-5xl">🚫</div>
+              <p className="text-stone-600 font-medium">수정할 수 없는 글이에요</p>
+              <p className="text-sm text-stone-400">삭제되었거나 본인 글이 아닐 수 있어요.</p>
+              <Button variant="secondary" onClick={() => navigate('/')} className="mt-1">목록으로</Button>
+            </Card>
+          ) : isEdit && loadError ? (
+            <Alert onClose={() => setLoadError('')}>{loadError}</Alert>
+          ) : (
+            <Card className="p-6 animate-fadeIn">
+              {formError && <Alert className="mb-4" onClose={() => setFormError('')}>{formError}</Alert>}
+              <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+                <Input
+                  ref={titleRef}
+                  label="제목"
+                  placeholder="예: 시청역 근처 인생 칼국수 발견!"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  error={errors.title}
+                  disabled={submitting}
+                  maxLength={140}
+                />
+                <Textarea
+                  label="내용"
+                  placeholder={'맛집 위치, 메뉴, 가격, 레시피 팁 등 자유롭게 적어주세요 🍲'}
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  error={errors.content}
+                  disabled={submitting}
+                  rows={10}
+                />
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <Button variant="ghost" onClick={() => navigate(backTo)} disabled={submitting}>취소</Button>
+                  <Button type="submit" loading={submitting}>
+                    {submitting ? '저장 중…' : isEdit ? '수정 완료' : '게시하기'}
+                  </Button>
+                </div>
+              </form>
+            </Card>
+          )}
+        </PageShell>
+      );
+    }
+
+    // ========================================
+    // 🚀 App — 라우팅 + 인증 가드 구성
+    // ========================================
+    function AppRoutes() {
+      const { isAuthenticated, bootstrapping } = useAuth();
+      const { path, navigate } = useRouter();
+
+      const isAuthRoute = path === '/login' || path === '/signup';
+
+      // 인증 가드: 비로그인인데 보호 라우트면 로그인으로, 로그인했는데 인증 라우트면 목록으로
+      useEffect(() => {
+        if (bootstrapping) return;
+        if (!isAuthenticated && !isAuthRoute) {
+          navigate('/login', { replace: true });
+        } else if (isAuthenticated && isAuthRoute) {
+          navigate('/', { replace: true });
+        }
+      }, [bootstrapping, isAuthenticated, isAuthRoute, navigate]);
+
+      // 토큰 사전검증 중에는 스플래시
+      if (bootstrapping) {
+        return (
+          <div className="min-h-screen flex flex-col items-center justify-center bg-amber-50 gap-4">
+            <div className="text-5xl animate-fadeIn">🍜</div>
+            <Spinner className="h-7 w-7 border-[3px] text-amber-500" />
+            <p className="text-sm text-stone-400">맛톡을 준비하는 중…</p>
+          </div>
+        );
+      }
+
+      // 비로그인: 로그인/회원가입만
+      if (!isAuthenticated) {
+        return (
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/signup" element={<SignupPage />} />
+            {/* 그 외 전부 로그인으로(가드 effect 가 navigate, 그동안 로그인 화면 노출) */}
+            <Route path="*" element={<LoginPage />} />
+          </Routes>
+        );
+      }
+
+      // 로그인 상태: 보호 라우트
+      return (
+        <Routes>
+          <Route path="/" element={<PostListPage />} />
+          <Route path="/posts" element={<PostListPage />} />
+          <Route path="/new" element={<PostFormPage mode="create" />} />
+          <Route path="/posts/:id/edit" element={<PostFormPage mode="edit" />} />
+          <Route path="/posts/:id" element={<PostDetailPage />} />
+          {/* 알 수 없는 경로는 목록으로 */}
+          <Route path="*" element={<PostListPage />} />
+        </Routes>
+      );
+    }
+
+    function App() {
+      return (
+        <Router>
+          <AuthProvider>
+            <AppRoutes />
+          </AuthProvider>
+        </Router>
+      );
+    }
+
+    // ========================================
+    // 렌더링
+    // ========================================
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>할 일 관리 ✅ — 로그인하고 내 할 일을 관리하세요</title>
+
+  <!-- ⚠️ 모든 CDN은 버전을 명시적으로 고정한다. 미고정 시 @babel/standalone 이
+       최신(8.x)으로 올라가 type="text/babel" 인라인 변환이 통째로 깨진다(백지 화면).
+       Babel 은 반드시 7.x 로 고정한다. React/ReactDOM/Tailwind 도 정확히 핀. -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+
+  <style>
+    /* Tailwind 으로 표현하기 어려운 것만 커스텀 처리 */
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up { animation: fadeInUp 0.28s ease-out both; }
+
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      45%  { transform: scale(1.25); }
+      100% { transform: scale(1); }
+    }
+    .animate-pop { animation: pop 0.3s ease-out; }
+
+    /* 차분하고 모던한 배경 그라데이션 */
+    body { background: linear-gradient(180deg, #eef2ff 0%, #f5f3ff 45%, #faf5ff 100%); min-height: 100vh; }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #c7d2fe; border-radius: 9999px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+    // ========================================
+    // 상수 / 설정
+    // ========================================
+    // localStorage 키. 토큰과 사용자 정보를 저장한다(앱 안에 둘 다른 비밀은 없음).
+    const TOKEN_KEY = "todo.jwt";
+    const USER_KEY = "todo.user";
+
+    // API 베이스 후보. ❌ http://localhost:xxxx 하드코딩 금지(고정 사용 금지)이지만,
+    // 같은 출처가 아닐 때(Live Server 등)를 대비한 "probe 후보 목록"으로만 사용한다.
+    // 우선순위: ① 현재 출처(상대경로 "") → ② localhost 3000~3003.
+    const PROBE_BASES = [
+      "", // 현재 출처(상대경로). server.js 가 index.html 과 /api 를 함께 서빙하는 정상 케이스.
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "http://localhost:3002",
+      "http://localhost:3003",
+    ];
+
+    // 필터 탭 정의 (전체 / 진행중 / 완료)
+    const FILTERS = [
+      { key: "all",    label: "전체" },
+      { key: "active", label: "진행중" },
+      { key: "done",   label: "완료" },
+    ];
+
+    // ========================================
+    // 유틸: 상대시간 표시 ("방금 전 / N분 전 / N시간 전 ...")
+    // createdAt 은 epoch milliseconds(숫자). 외부 라이브러리 없이 직접 구현.
+    // ========================================
+    function formatRelativeTime(timestamp) {
+      const ts = Number(timestamp);
+      if (!Number.isFinite(ts)) return ""; // 방어: 잘못된 값이면 빈 문자열
+      const diff = Date.now() - ts; // ms
+      const sec = Math.floor(diff / 1000);
+      if (sec < 0) return "방금 전";
+      if (sec < 60) return "방금 전";
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}분 전`;
+      const hour = Math.floor(min / 60);
+      if (hour < 24) return `${hour}시간 전`;
+      const day = Math.floor(hour / 24);
+      if (day < 7) return `${day}일 전`;
+      const d = new Date(ts);
+      return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+    }
+
+    // 이메일 형식 간단 검증(클라 측 즉시 피드백용 — 최종 검증은 서버)
+    function isValidEmail(email) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+
+    // ========================================
+    // 📦 데이터 레이어 — server.js / DB 연동 (JWT Bearer)
+    // ----------------------------------------
+    // 모든 함수는 async. 토큰은 localStorage 에서 읽어 Authorization 헤더로 보낸다.
+    // 서버 계약:
+    //   - createdAt 은 epoch milliseconds(숫자) → new Date(createdAt) 로 표시
+    //   - id 는 불투명 값(문자열일 수 있음) → 비교는 String(id) 로
+    //   - 에러 응답 형태: { error: "메시지" }
+    //
+    // API 베이스(apiBase)는 앱 시작 시 probe 로 정해져 모듈 변수에 저장된다.
+    // 보호 API 가 401 을 주면 onUnauthorized 콜백으로 알려 로그인 화면으로 보낸다.
+    // ========================================
+
+    // probe 로 확정된 API 베이스. "" 면 상대경로(현재 출처).
+    let apiBase = "";
+    function setApiBase(base) { apiBase = base; }
+    function apiUrl(path) { return `${apiBase}/api${path}`; }
+
+    // 401(인증 만료/무효) 발생 시 호출될 핸들러. App 마운트 시 등록한다.
+    let onUnauthorized = null;
+    function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
+
+    function getToken() { return localStorage.getItem(TOKEN_KEY); }
+
+    // 공통 요청 헬퍼.
+    //  - auth:true 면 Bearer 토큰을 붙인다.
+    //  - 4xx/5xx 면 throw (메시지는 { error } 우선).
+    //  - 401 이면 전역 onUnauthorized 를 호출하고 throw.
+    async function request(path, { method = "GET", body, auth = false } = {}) {
+      const headers = {};
+      if (body !== undefined) headers["Content-Type"] = "application/json";
+      if (auth) {
+        const token = getToken();
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      let res;
+      try {
+        res = await fetch(apiUrl(path), {
+          method,
+          headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+      } catch (networkErr) {
+        // 서버 다운/네트워크 단절 등
+        throw new Error("서버에 연결할 수 없어요. 네트워크 상태를 확인해주세요.");
+      }
+
+      let data = null;
+      try { data = await res.json(); } catch (_) { data = null; } // 본문 없음/비-JSON 방어
+
+      if (res.status === 401) {
+        // 인증 만료/무효 → 전역 처리로 로그인 화면 복귀
+        if (onUnauthorized) onUnauthorized();
+        const msg = (data && data.error) ? data.error : "인증이 만료되었어요. 다시 로그인 해주세요.";
+        const err = new Error(msg);
+        err.status = 401;
+        throw err;
+      }
+
+      if (!res.ok) {
+        const msg = (data && data.error) ? data.error : `요청 실패 (HTTP ${res.status})`;
+        const err = new Error(msg);
+        err.status = res.status;
+        throw err;
+      }
+      return data;
+    }
+
+    // --- 인증 API ---
+    // POST /api/auth/signup → { token, user:{ id, email } }
+    function signupApi(email, password) {
+      return request("/auth/signup", { method: "POST", body: { email, password } });
+    }
+    // POST /api/auth/login → { token, user:{ id, email } }
+    function loginApi(email, password) {
+      return request("/auth/login", { method: "POST", body: { email, password } });
+    }
+    // GET /api/auth/me (Bearer) → { user:{ id, email } }
+    function meApi() {
+      return request("/auth/me", { method: "GET", auth: true });
+    }
+
+    // --- 할 일 API (전부 Bearer 필요) ---
+    // GET /api/todos → [{ id, title, done, createdAt }] (최신순)
+    function listTodosApi() {
+      return request("/todos", { method: "GET", auth: true });
+    }
+    // POST /api/todos { title } → { id, title, done, createdAt }
+    function createTodoApi(title) {
+      return request("/todos", { method: "POST", auth: true, body: { title } });
+    }
+    // PATCH /api/todos/:id { done?, title? } → { id, title, done, createdAt }
+    function updateTodoApi(id, patch) {
+      return request(`/todos/${encodeURIComponent(id)}`, { method: "PATCH", auth: true, body: patch });
+    }
+    // DELETE /api/todos/:id → { ok:true }
+    function deleteTodoApi(id) {
+      return request(`/todos/${encodeURIComponent(id)}`, { method: "DELETE", auth: true });
+    }
+
+    // --- API 베이스 자동 감지 ---
+    // 현재 출처의 GET /api/health 를 먼저 시도(200 { ok:true })하고,
+    // 실패하면 localhost 3000~3003 을 순서대로 probe 한다. 살아있는 베이스를 반환.
+    // 다 실패하면 null 반환(→ "백엔드 먼저 실행" 안내 화면).
+    async function probeApiBase() {
+      for (const base of PROBE_BASES) {
+        try {
+          const res = await fetch(`${base}/api/health`, { method: "GET" });
+          if (res.ok) {
+            const data = await res.json().catch(() => null);
+            if (data && data.ok === true) return base;
+            // ok 필드가 없어도 200 이면 살아있다고 본다(서버가 단순 200만 줄 수도 있어 유연하게).
+            if (res.status === 200) return base;
+          }
+        } catch (_) {
+          // 이 후보는 죽음 → 다음 후보로
+        }
+      }
+      return null;
+    }
+
+    // ========================================
+    // 🎨 디자인 시스템 (재사용 UI 프리미티브 — 비즈니스 로직 없음, props 로만 동작)
+    // ========================================
+
+    // --- Button ---
+    function Button({ variant = "primary", size = "md", className = "", disabled = false, loading = false, type = "button", children, ...rest }) {
+      const base =
+        "inline-flex items-center justify-center gap-1.5 font-semibold rounded-xl transition " +
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 " +
+        "disabled:opacity-50 disabled:cursor-not-allowed";
+      const variants = {
+        primary: "bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:ring-indigo-300 shadow-sm shadow-indigo-200",
+        secondary: "bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50 focus-visible:ring-gray-300",
+        ghost: "bg-transparent text-gray-600 hover:bg-gray-100 focus-visible:ring-gray-300",
+        danger: "bg-red-500 text-white hover:bg-red-600 focus-visible:ring-red-300",
+      };
+      const sizes = {
+        sm: "text-sm px-3 py-1.5",
+        md: "text-sm px-4 py-2.5",
+        lg: "text-base px-5 py-3",
+      };
+      return (
+        <button
+          type={type}
+          disabled={disabled || loading}
+          className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+          {...rest}
+        >
+          {loading && (
+            <span
+              aria-hidden="true"
+              className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin"
+            />
+          )}
+          {children}
+        </button>
+      );
+    }
+
+    // --- Input (autofocus 등 DOM 접근 대비해 forwardRef 로 내부 엘리먼트까지 ref 전달) ---
+    const Input = React.forwardRef(function Input(
+      { label, value, onChange, placeholder, error, disabled, type = "text", className = "", id, ...rest },
+      ref
+    ) {
+      return (
+        <div className={className}>
+          {label && (
+            <label htmlFor={id} className="block mb-1.5 text-sm font-semibold text-gray-700">
+              {label}
+            </label>
+          )}
+          <input
+            ref={ref}
+            id={id}
+            type={type}
+            value={value}
+            onChange={onChange}
+            placeholder={placeholder}
+            disabled={disabled}
+            aria-invalid={!!error}
+            className={
+              "w-full px-3.5 py-2.5 rounded-xl text-gray-800 placeholder-gray-400 " +
+              "ring-1 transition focus:outline-none focus:ring-2 disabled:bg-gray-50 disabled:text-gray-400 " +
+              (error
+                ? "ring-red-300 focus:ring-red-400 bg-red-50/40"
+                : "ring-gray-200 focus:ring-indigo-300 bg-white")
+            }
+            {...rest}
+          />
+          {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+        </div>
+      );
+    });
+
+    // --- Card ---
+    function Card({ className = "", children, ...rest }) {
+      return (
+        <div
+          className={`bg-white/90 backdrop-blur rounded-2xl shadow-sm ring-1 ring-black/5 ${className}`}
+          {...rest}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    // --- Spinner (전체 화면 로딩) ---
+    function Spinner({ className = "" }) {
+      return (
+        <span
+          aria-hidden="true"
+          className={`inline-block w-8 h-8 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin ${className}`}
+        />
+      );
+    }
+
+    // ========================================
+    // 🧩 공통 / 레이아웃 컴포넌트
+    // ========================================
+
+    // 전체 화면 안내(부팅/에러/백엔드 미실행 등) — 어떤 경우에도 백지가 안 나오게.
+    function FullScreenNotice({ emoji, title, description, children }) {
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4">
+          <Card className="w-full max-w-md p-8 text-center animate-fade-in-up">
+            {emoji && <div className="text-5xl mb-3" aria-hidden="true">{emoji}</div>}
+            <h2 className="text-lg font-bold text-gray-800">{title}</h2>
+            {description && <p className="mt-2 text-sm text-gray-500 leading-relaxed whitespace-pre-line">{description}</p>}
+            {children && <div className="mt-5">{children}</div>}
+          </Card>
+        </div>
+      );
+    }
+
+    function AppHeader({ email, onLogout }) {
+      return (
+        <header className="sticky top-0 z-30 backdrop-blur bg-white/70 border-b border-white/60">
+          <div className="max-w-2xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xl" aria-hidden="true">✅</span>
+              <span className="font-extrabold text-gray-800">할 일 관리</span>
+            </div>
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="text-xs sm:text-sm text-gray-500 truncate max-w-[10rem] sm:max-w-none" title={email}>
+                {email}
+              </span>
+              <Button variant="secondary" size="sm" onClick={onLogout}>로그아웃</Button>
+            </div>
+          </div>
+        </header>
+      );
+    }
+
+    // ========================================
+    // 📄 페이지 / 기능 컴포넌트 (비즈니스 로직 포함)
+    // ========================================
+
+    // --- 로그인 / 회원가입 화면 (한 화면에서 토글) ---
+    function AuthScreen({ onAuthenticated }) {
+      const [mode, setMode] = useState("login"); // "login" | "signup"
+      const [email, setEmail] = useState("");
+      const [password, setPassword] = useState("");
+      const [fieldErrors, setFieldErrors] = useState({}); // { email, password }
+      const [serverError, setServerError] = useState(""); // 폼 아래 빨간 메시지
+      const [submitting, setSubmitting] = useState(false);
+      const emailRef = useRef(null);
+
+      const isSignup = mode === "signup";
+
+      // 화면 진입/모드 전환 시 이메일 입력에 자동 포커스(forwardRef 덕분에 동작)
+      useEffect(() => {
+        emailRef.current && emailRef.current.focus();
+      }, [mode]);
+
+      // 클라 측 검증 — 즉시 피드백. 통과하면 {} 반환.
+      const validate = () => {
+        const errs = {};
+        if (!email.trim()) errs.email = "이메일을 입력해주세요.";
+        else if (!isValidEmail(email.trim())) errs.email = "올바른 이메일 형식이 아니에요.";
+        if (!password) errs.password = "비밀번호를 입력해주세요.";
+        else if (password.length < 6) errs.password = "비밀번호는 6자 이상이어야 해요.";
+        return errs;
+      };
+
+      const switchMode = (next) => {
+        setMode(next);
+        setFieldErrors({});
+        setServerError("");
+      };
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setServerError("");
+        const errs = validate();
+        setFieldErrors(errs);
+        if (Object.keys(errs).length > 0) return;
+
+        setSubmitting(true);
+        try {
+          const fn = isSignup ? signupApi : loginApi;
+          const result = await fn(email.trim(), password);
+          // 성공: { token, user } → 저장 후 상위로 알림
+          if (!result || !result.token || !result.user) {
+            throw new Error("서버 응답 형식이 올바르지 않아요.");
+          }
+          onAuthenticated(result.token, result.user);
+        } catch (err) {
+          // 서버 에러({error})는 폼 아래 빨간 메시지로
+          setServerError(err.message || "요청을 처리하지 못했어요. 잠시 후 다시 시도해주세요.");
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4 py-10">
+          <div className="w-full max-w-md animate-fade-in-up">
+            {/* 브랜드 */}
+            <div className="text-center mb-6">
+              <div className="text-5xl mb-2" aria-hidden="true">✅</div>
+              <h1 className="text-2xl font-extrabold text-gray-800">할 일 관리</h1>
+              <p className="mt-1.5 text-sm text-gray-500">
+                {isSignup ? "계정을 만들고 할 일을 시작하세요." : "로그인하고 내 할 일을 이어가세요."}
+              </p>
+            </div>
+
+            <Card className="p-6 sm:p-7">
+              {/* 모드 토글 */}
+              <div className="grid grid-cols-2 p-1 mb-5 rounded-xl bg-gray-100" role="tablist" aria-label="로그인 또는 회원가입">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={!isSignup}
+                  onClick={() => switchMode("login")}
+                  className={`py-2 rounded-lg text-sm font-bold transition ${
+                    !isSignup ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  로그인
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isSignup}
+                  onClick={() => switchMode("signup")}
+                  className={`py-2 rounded-lg text-sm font-bold transition ${
+                    isSignup ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  회원가입
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmit} noValidate>
+                <Input
+                  ref={emailRef}
+                  id="auth-email"
+                  type="email"
+                  label="이메일"
+                  value={email}
+                  onChange={(e) => { setEmail(e.target.value); if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: undefined })); if (serverError) setServerError(""); }}
+                  placeholder="you@example.com"
+                  error={fieldErrors.email}
+                  disabled={submitting}
+                  autoComplete="email"
+                  className="mb-4"
+                />
+                <Input
+                  id="auth-password"
+                  type="password"
+                  label="비밀번호"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined })); if (serverError) setServerError(""); }}
+                  placeholder="6자 이상 입력하세요"
+                  error={fieldErrors.password}
+                  disabled={submitting}
+                  autoComplete={isSignup ? "new-password" : "current-password"}
+                />
+
+                {/* 서버 에러 메시지 */}
+                {serverError && (
+                  <p className="mt-3 text-sm text-red-600 bg-red-50 ring-1 ring-red-100 rounded-lg px-3 py-2" role="alert">
+                    {serverError}
+                  </p>
+                )}
+
+                <Button type="submit" size="lg" loading={submitting} className="w-full mt-5">
+                  {submitting ? "처리 중…" : isSignup ? "회원가입" : "로그인"}
+                </Button>
+              </form>
+
+              {/* 하단 전환 안내 */}
+              <p className="mt-4 text-center text-sm text-gray-500">
+                {isSignup ? "이미 계정이 있으신가요? " : "아직 계정이 없으신가요? "}
+                <button
+                  type="button"
+                  onClick={() => switchMode(isSignup ? "login" : "signup")}
+                  className="font-bold text-indigo-600 hover:text-indigo-700"
+                >
+                  {isSignup ? "로그인" : "회원가입"}
+                </button>
+              </p>
+            </Card>
+
+            <p className="mt-4 text-center text-xs text-gray-400">
+              비밀번호는 서버에서 안전하게 암호화되어 저장됩니다.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // --- 할 일 추가 입력창 ---
+    function TodoInput({ onAdd, disabled }) {
+      const [title, setTitle] = useState("");
+      const [adding, setAdding] = useState(false);
+      const inputRef = useRef(null);
+
+      const submit = async (e) => {
+        e.preventDefault();
+        const trimmed = title.trim();
+        if (!trimmed) return; // 빈 제목 막기
+        setAdding(true);
+        try {
+          const ok = await onAdd(trimmed);
+          if (ok) {
+            setTitle("");
+            inputRef.current && inputRef.current.focus(); // 연속 입력 편의
+          }
+        } finally {
+          setAdding(false);
+        }
+      };
+
+      return (
+        <form onSubmit={submit} className="flex items-stretch gap-2">
+          <Input
+            ref={inputRef}
+            id="todo-new"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="할 일을 입력하고 Enter 또는 추가를 눌러보세요"
+            disabled={disabled || adding}
+            aria-label="새 할 일"
+            className="flex-1"
+          />
+          <Button
+            type="submit"
+            size="md"
+            loading={adding}
+            disabled={disabled || title.trim().length === 0}
+            className="shrink-0"
+          >
+            추가
+          </Button>
+        </form>
+      );
+    }
+
+    // --- 필터 탭 + 남은 개수 ---
+    function FilterTabs({ value, onChange, activeCount }) {
+      return (
+        <div className="flex items-center justify-between gap-3">
+          <div className="inline-flex p-1 rounded-xl bg-white/80 ring-1 ring-gray-200" role="tablist" aria-label="할 일 필터">
+            {FILTERS.map((f) => {
+              const active = value === f.key;
+              return (
+                <button
+                  key={f.key}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => onChange(f.key)}
+                  className={`px-3.5 py-1.5 rounded-lg text-sm font-semibold transition ${
+                    active ? "bg-indigo-600 text-white shadow-sm" : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+          <span className="text-xs sm:text-sm text-gray-500">
+            남은 할 일 <span className="font-bold text-indigo-600 tabular-nums">{activeCount}</span>개
+          </span>
+        </div>
+      );
+    }
+
+    // --- 할 일 한 개 ---
+    function TodoItem({ todo, onToggle, onDelete }) {
+      const [busy, setBusy] = useState(false); // 토글/삭제 진행 중 중복 방지
+      const done = !!todo.done;
+
+      const handleToggle = async () => {
+        if (busy) return;
+        setBusy(true);
+        try { await onToggle(todo, !done); } finally { setBusy(false); }
+      };
+
+      const handleDelete = async () => {
+        if (busy) return;
+        setBusy(true);
+        try { await onDelete(todo); }
+        finally { setBusy(false); } // 삭제 성공 시 언마운트되므로 set 은 무시될 수 있음(안전)
+      };
+
+      return (
+        <li className="group flex items-center gap-3 px-4 py-3 animate-fade-in-up">
+          {/* 체크박스(커스텀) */}
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={done}
+            aria-label={done ? "완료 취소" : "완료로 표시"}
+            onClick={handleToggle}
+            disabled={busy}
+            className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition active:scale-90 disabled:opacity-50 ${
+              done
+                ? "bg-indigo-600 text-white ring-2 ring-indigo-600"
+                : "bg-white text-transparent ring-2 ring-gray-300 hover:ring-indigo-400"
+            }`}
+          >
+            <span aria-hidden="true" className="text-sm font-bold">✓</span>
+          </button>
+
+          {/* 제목 — 완료 시 취소선 + 흐리게 */}
+          <span
+            className={`flex-1 min-w-0 break-words text-sm sm:text-base transition ${
+              done ? "line-through text-gray-400" : "text-gray-800"
+            }`}
+          >
+            {todo.title}
+          </span>
+
+          {/* 생성 시각 */}
+          <time
+            className="shrink-0 text-xs text-gray-400 hidden xs:inline tabular-nums"
+            title={new Date(Number(todo.createdAt)).toLocaleString("ko-KR")}
+          >
+            {formatRelativeTime(todo.createdAt)}
+          </time>
+
+          {/* 삭제 */}
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={busy}
+            aria-label="할 일 삭제"
+            className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 transition disabled:opacity-50"
+          >
+            <span aria-hidden="true" className="text-base">🗑️</span>
+          </button>
+        </li>
+      );
+    }
+
+    // --- 빈 상태 ---
+    function TodoEmpty({ filter }) {
+      const map = {
+        all:    { emoji: "🌱", title: "아직 할 일이 없어요", desc: "위 입력창에 첫 할 일을 적어보세요." },
+        active: { emoji: "🎉", title: "진행 중인 할 일이 없어요", desc: "모든 할 일을 끝냈어요. 멋져요!" },
+        done:   { emoji: "📭", title: "완료한 할 일이 없어요", desc: "할 일을 끝내면 여기에 모여요." },
+      };
+      const m = map[filter] || map.all;
+      return (
+        <div className="py-14 text-center">
+          <div className="text-5xl mb-3" aria-hidden="true">{m.emoji}</div>
+          <p className="font-bold text-gray-700">{m.title}</p>
+          <p className="mt-1 text-sm text-gray-500">{m.desc}</p>
+        </div>
+      );
+    }
+
+    // --- 할 일 화면(로그인 후 메인) ---
+    function TodosScreen({ user, onLogout }) {
+      const [todos, setTodos] = useState([]);
+      const [filter, setFilter] = useState("all");
+      const [loading, setLoading] = useState(true);   // 최초 목록 로딩
+      const [loadError, setLoadError] = useState(""); // 목록 로딩 실패
+      const [banner, setBanner] = useState("");       // 일시적 동작 실패 안내(상단 토스트형)
+
+      // 잠깐 떴다 사라지는 상단 배너(낙관적 업데이트 롤백 등 알림용)
+      const showBanner = useCallback((msg) => {
+        setBanner(msg);
+        window.clearTimeout(showBanner._t);
+        showBanner._t = window.setTimeout(() => setBanner(""), 3000);
+      }, []);
+
+      const loadTodos = useCallback(async () => {
+        setLoading(true);
+        setLoadError("");
+        try {
+          const data = await listTodosApi();
+          setTodos(Array.isArray(data) ? data : []);
+        } catch (err) {
+          if (err.status === 401) return; // 401 은 전역 핸들러가 로그인 화면으로 보냄
+          setLoadError(err.message || "할 일을 불러오지 못했어요.");
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => { loadTodos(); }, [loadTodos]);
+
+      // 추가 — 서버 응답(서버가 부여한 id/createdAt)으로 목록 갱신. 성공 시 true 반환.
+      const handleAdd = useCallback(async (title) => {
+        try {
+          const created = await createTodoApi(title);
+          setTodos((prev) => [created, ...prev]); // 최신순(맨 앞)
+          return true;
+        } catch (err) {
+          if (err.status !== 401) showBanner(err.message || "추가하지 못했어요.");
+          return false;
+        }
+      }, [showBanner]);
+
+      // 토글 — 낙관적 업데이트 후 실패 시 롤백.
+      const handleToggle = useCallback(async (todo, nextDone) => {
+        const id = todo.id;
+        setTodos((prev) => prev.map((t) => (String(t.id) === String(id) ? { ...t, done: nextDone } : t)));
+        try {
+          const updated = await updateTodoApi(id, { done: nextDone });
+          // 서버가 돌려준 정식 객체로 동기화(혹시 모를 차이 방지)
+          setTodos((prev) => prev.map((t) => (String(t.id) === String(id) ? { ...t, ...updated } : t)));
+        } catch (err) {
+          // 롤백
+          setTodos((prev) => prev.map((t) => (String(t.id) === String(id) ? { ...t, done: !nextDone } : t)));
+          if (err.status !== 401) showBanner(err.message || "변경하지 못했어요. 되돌렸어요.");
+        }
+      }, [showBanner]);
+
+      // 삭제 — 낙관적 제거 후 실패 시 복구.
+      const handleDelete = useCallback(async (todo) => {
+        const id = todo.id;
+        const snapshot = todos; // 복구용 스냅샷
+        setTodos((prev) => prev.filter((t) => String(t.id) !== String(id)));
+        try {
+          await deleteTodoApi(id);
+        } catch (err) {
+          setTodos(snapshot); // 복구
+          if (err.status !== 401) showBanner(err.message || "삭제하지 못했어요. 되돌렸어요.");
+        }
+      }, [todos, showBanner]);
+
+      // 파생값: 필터 적용 목록 + 남은(진행중) 개수
+      const visibleTodos = useMemo(() => {
+        if (filter === "active") return todos.filter((t) => !t.done);
+        if (filter === "done") return todos.filter((t) => t.done);
+        return todos;
+      }, [todos, filter]);
+
+      const activeCount = useMemo(() => todos.filter((t) => !t.done).length, [todos]);
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          <AppHeader email={user.email} onLogout={onLogout} />
+
+          {/* 일시적 실패 배너 */}
+          {banner && (
+            <div className="sticky top-14 z-20 px-4">
+              <div className="max-w-2xl mx-auto mt-2 text-sm text-amber-800 bg-amber-50 ring-1 ring-amber-200 rounded-xl px-3 py-2 shadow-sm animate-fade-in-up" role="status">
+                ⚠️ {banner}
+              </div>
+            </div>
+          )}
+
+          <main className="flex-1 w-full max-w-2xl mx-auto px-4 py-6 space-y-5">
+            <div>
+              <h2 className="text-xl font-extrabold text-gray-800">오늘의 할 일</h2>
+              <p className="mt-1 text-sm text-gray-500">작은 것부터 하나씩 체크해 나가요.</p>
+            </div>
+
+            {/* 추가 입력창 */}
+            <Card className="p-4">
+              <TodoInput onAdd={handleAdd} disabled={loading} />
+            </Card>
+
+            {/* 필터 + 카운터 */}
+            <FilterTabs value={filter} onChange={setFilter} activeCount={activeCount} />
+
+            {/* 목록 / 로딩 / 에러 / 빈 상태 */}
+            <Card className="overflow-hidden">
+              {loading ? (
+                <div className="py-14 flex flex-col items-center justify-center gap-3">
+                  <Spinner />
+                  <p className="text-sm font-semibold text-gray-500">할 일을 불러오는 중…</p>
+                </div>
+              ) : loadError ? (
+                <div className="py-14 text-center px-4">
+                  <div className="text-5xl mb-3" aria-hidden="true">😢</div>
+                  <p className="font-bold text-gray-700">{loadError}</p>
+                  <div className="mt-4">
+                    <Button variant="secondary" onClick={loadTodos}>다시 시도</Button>
+                  </div>
+                </div>
+              ) : visibleTodos.length === 0 ? (
+                <TodoEmpty filter={filter} />
+              ) : (
+                <ul className="divide-y divide-gray-100">
+                  {visibleTodos.map((todo) => (
+                    <TodoItem
+                      key={todo.id}
+                      todo={todo}
+                      onToggle={handleToggle}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </ul>
+              )}
+            </Card>
+
+            {/* 하단 요약 */}
+            {!loading && !loadError && todos.length > 0 && (
+              <p className="text-center text-xs text-gray-400">
+                전체 {todos.length}개 · 완료 {todos.length - activeCount}개 · 진행중 {activeCount}개
+              </p>
+            )}
+          </main>
+
+          <footer className="text-center py-6 px-4 text-xs text-gray-400">
+            내 할 일은 서버 데이터베이스에 안전하게 저장됩니다 · 오늘도 화이팅 💪
+          </footer>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App (루트 — 부팅/인증 상태 총괄)
+    // ========================================
+    // 부팅 단계:
+    //   1) "probing" : API 베이스 감지 (/api/health)
+    //   2) 실패 시 "no-backend" : "백엔드 먼저 실행" 안내
+    //   3) 성공 + 토큰 있으면 /auth/me 검증 → "ready"(인증됨) 또는 토큰 제거 후 로그인
+    //   4) 토큰 없으면 바로 로그인 화면
+    function App() {
+      const [phase, setPhase] = useState("probing"); // "probing" | "no-backend" | "ready"
+      const [authChecking, setAuthChecking] = useState(true); // /auth/me 검증 중
+      const [user, setUser] = useState(null); // 로그인된 사용자 { id, email }
+
+      // 토큰/유저 저장 + 로그인 상태 진입
+      const handleAuthenticated = useCallback((token, u) => {
+        localStorage.setItem(TOKEN_KEY, token);
+        localStorage.setItem(USER_KEY, JSON.stringify(u));
+        setUser(u);
+      }, []);
+
+      // 로그아웃 — 토큰/유저 제거 후 로그인 화면으로
+      const handleLogout = useCallback(() => {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        setUser(null);
+      }, []);
+
+      // 401 전역 핸들러: 토큰 정리 + 로그인 화면 + 안내. (데이터 레이어에서 호출)
+      useEffect(() => {
+        setUnauthorizedHandler(() => {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(USER_KEY);
+          setUser((prev) => {
+            if (prev) {
+              // 이미 로그인 화면이면 굳이 알리지 않음. 세션 도중 만료된 경우만 안내.
+              window.setTimeout(() => {
+                window.alert("로그인 세션이 만료되었어요. 다시 로그인 해주세요.");
+              }, 0);
+            }
+            return null;
+          });
+        });
+        return () => setUnauthorizedHandler(null);
+      }, []);
+
+      // 부팅: API 베이스 감지 → (토큰 있으면) /auth/me 검증
+      useEffect(() => {
+        let cancelled = false;
+        (async () => {
+          const base = await probeApiBase();
+          if (cancelled) return;
+          if (base === null) {
+            setPhase("no-backend");
+            return;
+          }
+          setApiBase(base);
+          setPhase("ready");
+
+          // 저장된 토큰이 있으면 유효성 검증
+          const token = getToken();
+          if (!token) {
+            setAuthChecking(false);
+            return;
+          }
+          try {
+            const res = await meApi(); // { user }
+            if (cancelled) return;
+            if (res && res.user) {
+              setUser(res.user);
+              localStorage.setItem(USER_KEY, JSON.stringify(res.user));
+            } else {
+              // 형식 이상 → 토큰 제거
+              localStorage.removeItem(TOKEN_KEY);
+              localStorage.removeItem(USER_KEY);
+            }
+          } catch (err) {
+            // 401 등 → 전역 핸들러가 이미 토큰 정리. 여기서는 로그인 화면으로.
+            if (!cancelled) {
+              localStorage.removeItem(TOKEN_KEY);
+              localStorage.removeItem(USER_KEY);
+              setUser(null);
+            }
+          } finally {
+            if (!cancelled) setAuthChecking(false);
+          }
+        })();
+        return () => { cancelled = true; };
+      }, []);
+
+      // --- 렌더 분기 ---
+
+      // 1) API 베이스 감지 중
+      if (phase === "probing") {
+        return (
+          <FullScreenNotice
+            title="앱을 준비하는 중…"
+            description="서버에 연결하고 있어요. 잠시만 기다려 주세요."
+          >
+            <Spinner />
+          </FullScreenNotice>
+        );
+      }
+
+      // 2) 백엔드를 못 찾음 → 안내(백지로 죽지 않게)
+      if (phase === "no-backend") {
+        return (
+          <FullScreenNotice
+            emoji="🔌"
+            title="백엔드(server.js)를 먼저 실행해 주세요"
+            description={
+              "할 일 데이터를 저장할 서버에 연결하지 못했어요.\n" +
+              "프로젝트 폴더에서 server.js 를 실행한 뒤,\n" +
+              "이 페이지를 새로고침 해주세요."
+            }
+          >
+            <Button onClick={() => window.location.reload()}>새로고침</Button>
+          </FullScreenNotice>
+        );
+      }
+
+      // 3) 백엔드 OK + 저장 토큰 검증 중
+      if (authChecking) {
+        return (
+          <FullScreenNotice
+            title="로그인 상태 확인 중…"
+            description="저장된 로그인 정보를 확인하고 있어요."
+          >
+            <Spinner />
+          </FullScreenNotice>
+        );
+      }
+
+      // 4) 인증 안 됨 → 로그인/회원가입
+      if (!user) {
+        return <AuthScreen onAuthenticated={handleAuthenticated} />;
+      }
+
+      // 5) 인증됨 → 할 일 화면
+      return <TodosScreen user={user} onLogout={handleLogout} />;
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
