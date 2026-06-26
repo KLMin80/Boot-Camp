@@ -1,6 +1,9 @@
 # Claude Code local settings
 .claude/
 
+# Playwright MCP browser artifacts (console logs, page snapshots, screenshots)
+.playwright-mcp/
+
 # OS files
 .DS_Store
 Thumbs.db
