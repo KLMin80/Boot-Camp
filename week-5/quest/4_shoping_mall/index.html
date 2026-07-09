@@ -13,6 +13,10 @@
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
 
+  <!-- TossPayments v2 표준 결제위젯 SDK. v2 는 이 URL 이 공식 안정 엔트리(전역 window.TossPayments 노출).
+       head 에서 먼저 로드해 두면 아래 text/babel(=DOMContentLoaded 이후 변환) 이 뜰 때 이미 준비됨. -->
+  <script src="https://js.tosspayments.com/v2/standard"></script>
+
   <style>
     /* Tailwind 로 처리 불가능한 부분만 최소한으로 */
     html { scroll-behavior: smooth; }
@@ -57,7 +61,11 @@
     const STORAGE_KEYS = { token: 'shop.jwt', user: 'shop.user' };
 
     const BRAND = 'HOMME';
-    const ORDER_MESSAGE = '🛒 주문 기능은 준비 중입니다!';
+
+    // TossPayments "클라이언트키"(공개값) — 프론트 노출이 정상/안전하다. 시크릿키는 서버(.env)에만.
+    // ⚠️ 여기엔 test_gck_ (client) 키만. test_gsk_ (secret) 키를 절대 넣지 말 것.
+    // 공식 문서용 공용 테스트키라 동작하지만, 결제 orderId 는 서버가 crypto.randomUUID 로 고유 생성한다.
+    const TOSS_CLIENT_KEY = 'test_gck_docs_Ovk5rk1EwkEbP0W43n07xlzm';
 
     // ========================================
     // API 레이어 — apiFetch / ApiError
@@ -127,6 +135,18 @@
 
     // 가격 포맷 (정수 원 → "12,000원")
     const formatKRW = (n) => `${Number(n || 0).toLocaleString('ko-KR')}원`;
+
+    // 날짜 포맷 (epoch ms → "2026년 7월 9일 오후 3:20")
+    // ⚠️ 서버는 createdAt/paidAt 을 epoch ms "숫자"로 준다(ISO 문자열 아님). new Date(number) 로 받는다.
+    const formatDateTime = (ms) => {
+      if (!ms && ms !== 0) return '—';
+      const d = new Date(Number(ms));
+      if (Number.isNaN(d.getTime())) return '—';
+      return d.toLocaleString('ko-KR', {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+      });
+    };
 
     // ========================================
     // 🎨 디자인 시스템 — 순수 프리젠테이셔널 (비즈니스 로직 없음)
@@ -638,6 +658,18 @@
                   홈
                 </Link>
 
+                {/* 마이페이지 (로그인 상태에서만) */}
+                {isAuthenticated && (
+                  <Link
+                    to="/mypage"
+                    className={`hidden sm:inline-flex px-3 py-2 text-sm font-medium transition-colors ${
+                      path === '/mypage' ? 'text-neutral-900' : 'text-neutral-500 hover:text-neutral-900'
+                    }`}
+                  >
+                    마이페이지
+                  </Link>
+                )}
+
                 {/* 장바구니 (수량 배지) */}
                 <Link
                   to="/cart"
@@ -684,8 +716,12 @@
                           <p className="px-4 py-2 text-xs text-neutral-500 truncate border-b border-neutral-100" title={user?.email}>
                             {user?.email}
                           </p>
-                          <button onClick={handleLogout}
+                          <button onClick={() => { setMenuOpen(false); navigate('/mypage'); }}
                                   className="w-full text-left px-4 py-2.5 text-sm text-neutral-700 hover:bg-neutral-50">
+                            마이페이지
+                          </button>
+                          <button onClick={handleLogout}
+                                  className="w-full text-left px-4 py-2.5 text-sm text-neutral-700 hover:bg-neutral-50 border-t border-neutral-100">
                             로그아웃
                           </button>
                         </div>
@@ -716,7 +752,7 @@
           <div className="max-w-6xl mx-auto px-4 py-10 text-center">
             <p className="text-lg font-bold tracking-[0.2em] text-neutral-900">{BRAND}</p>
             <p className="mt-2 text-xs text-neutral-400 tracking-wide">
-              미니멀 남성 셀렉트샵 · 데모 앱 (결제·배송 기능 없음)
+              미니멀 남성 셀렉트샵 · TossPayments 테스트 결제 연동 (실제 청구 없음)
             </p>
           </div>
         </footer>
@@ -1183,7 +1219,7 @@
           show(`'${item.name}' 삭제했어요.`, { tone: 'info' });
         }, '삭제에 실패했어요.');
 
-      const handleOrder = () => { alert(ORDER_MESSAGE); };
+      const handleOrder = () => { navigate('/checkout'); };
 
       // 부트 검증 중 또는 리다이렉트 직전: 로딩만 노출
       if (bootChecking || !isAuthenticated) {
@@ -1282,11 +1318,593 @@
                     주문하기
                   </Button>
                   <p className="mt-3 text-[0.7rem] text-center text-neutral-400 leading-relaxed">
-                    데모 앱입니다. 실제 결제는 진행되지 않아요.
+                    TossPayments <strong className="font-semibold text-neutral-500">테스트 결제</strong>로 진행돼요.
+                    실제 카드 승인·청구는 발생하지 않습니다.
                   </p>
                 </Card>
               </div>
             </div>
+          )}
+        </div>
+      );
+    }
+
+    // ---- 결제 페이지 (#/checkout) ----
+    //   흐름: prepare(서버가 금액 확정) → Toss v2 위젯 렌더(1회) → "결제하기"(requestPayment).
+    //   requestPayment 성공 시 Toss 가 successUrl(실제 경로 /success)로 리다이렉트한다.
+    function CheckoutPage() {
+      const { user, isAuthenticated, bootChecking } = useAuth();
+      const { cart } = useCart();
+      const { navigate } = useRouter();
+      const { show } = useToast();
+
+      // 렌더는 반드시 1회만 (이 앱은 StrictMode 미사용이지만 ref 로 이중 실행을 확실히 가드).
+      const startedRef = useRef(false);
+      const widgetsRef = useRef(null);
+      const orderRef = useRef(null); // prepare 결과 { orderId, orderName, amount }
+
+      const [phase, setPhase] = useState('loading'); // loading | ready | paying | empty | error
+      const [errMsg, setErrMsg] = useState('');
+      const [order, setOrder] = useState(null); // 표시용 스냅샷
+
+      // 비로그인 접근 차단 (CartPage 와 동일 패턴)
+      useEffect(() => {
+        if (!bootChecking && !isAuthenticated) navigate('/login');
+      }, [bootChecking, isAuthenticated, navigate]);
+
+      // prepare + 위젯 렌더 (1회)
+      useEffect(() => {
+        if (bootChecking || !isAuthenticated) return;
+        if (startedRef.current) return;
+        startedRef.current = true;
+
+        (async () => {
+          // 1) 서버가 장바구니 합계로 금액 확정 (위변조 방지의 기준값)
+          let prep;
+          try {
+            prep = await apiFetch('/payments/prepare', { method: 'POST' });
+          } catch (err) {
+            if (err.status === 401) return;                 // 세션만료 → 위 useEffect 가 로그인으로
+            if (err.status === 400) { setPhase('empty'); return; } // 빈 장바구니
+            setErrMsg(err.message || '결제 준비에 실패했어요.'); setPhase('error'); return;
+          }
+          orderRef.current = prep;
+          setOrder(prep);
+
+          // 2) Toss v2 결제위젯 렌더 (setAmount → renderPaymentMethods → renderAgreement 순서 필수)
+          if (typeof TossPayments === 'undefined') {
+            setErrMsg('결제 모듈(TossPayments)을 불러오지 못했어요. 네트워크 확인 후 새로고침해 주세요.');
+            setPhase('error'); return;
+          }
+          try {
+            const toss = TossPayments(TOSS_CLIENT_KEY);
+            const widgets = toss.widgets({ customerKey: TossPayments.ANONYMOUS }); // 비회원(익명) 결제
+            await widgets.setAmount({ currency: 'KRW', value: prep.amount });
+            await widgets.renderPaymentMethods({ selector: '#payment-method', variantKey: 'DEFAULT' });
+            await widgets.renderAgreement({ selector: '#agreement', variantKey: 'AGREEMENT' });
+            widgetsRef.current = widgets;
+            setPhase('ready');
+          } catch (err) {
+            setErrMsg('결제 수단을 불러오지 못했어요. 잠시 후 새로고침해 주세요.');
+            setPhase('error');
+          }
+        })();
+      }, [bootChecking, isAuthenticated]);
+
+      const handlePay = async () => {
+        const w = widgetsRef.current;
+        const o = orderRef.current;
+        if (!w || !o) return;
+        setPhase('paying');
+        try {
+          await w.requestPayment({
+            orderId: o.orderId,
+            orderName: o.orderName,
+            successUrl: window.location.origin + '/success', // 해시 아닌 실제 경로 (SPA 폴백이 서빙)
+            failUrl: window.location.origin + '/fail',
+            customerEmail: user && user.email,
+          });
+          // 성공 시 Toss 가 successUrl 로 리다이렉트하므로 아래는 실행되지 않는다.
+        } catch (err) {
+          setPhase('ready'); // 위젯 유지 → 다시 시도 가능
+          const code = err && err.code;
+          if (code === 'USER_CANCEL') {
+            show('결제를 취소했어요.', { tone: 'info' });
+          } else if (code === 'INVALID_CARD_COMPANY') {
+            show('지원하지 않는 카드예요. 다른 결제수단을 선택해 주세요.', { tone: 'error' });
+          } else {
+            show((err && err.message) || '결제 요청 중 문제가 발생했어요.', { tone: 'error' });
+          }
+        }
+      };
+
+      // 부트 검증 중 / 리다이렉트 직전
+      if (bootChecking || !isAuthenticated) {
+        return (
+          <div className="max-w-3xl mx-auto px-4 py-20 flex justify-center">
+            <Spinner className="h-7 w-7 text-neutral-400" />
+          </div>
+        );
+      }
+
+      if (phase === 'empty') {
+        return (
+          <div className="max-w-3xl mx-auto px-4 py-8 sm:py-12">
+            <StatusBox
+              icon={
+                <svg className="w-14 h-14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l3-8H6.4M7 13L5.4 5M7 13l-2 5h12M9 19a1 1 0 11-2 0 1 1 0 012 0zm9 0a1 1 0 11-2 0 1 1 0 012 0z" />
+                </svg>
+              }
+              title="결제할 상품이 없어요"
+              description="장바구니가 비어 있어요. 먼저 상품을 담아 주세요."
+              action={<Link to="/"><Button variant="primary">쇼핑 계속하기</Button></Link>}
+            />
+          </div>
+        );
+      }
+
+      if (phase === 'error') {
+        return (
+          <div className="max-w-3xl mx-auto px-4 py-8 sm:py-12">
+            <StatusBox
+              icon={
+                <svg className="w-12 h-12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M12 8v4m0 4h.01" />
+                </svg>
+              }
+              title="결제를 시작하지 못했어요"
+              description={errMsg}
+              action={
+                <div className="flex gap-2">
+                  <Button variant="secondary" onClick={() => window.location.reload()}>다시 시도</Button>
+                  <Link to="/cart"><Button variant="ghost">장바구니로</Button></Link>
+                </div>
+              }
+            />
+          </div>
+        );
+      }
+
+      const amount = (order && order.amount) != null ? order.amount : cart.totalPrice;
+
+      // loading / ready / paying — 위젯 마운트 지점(#payment-method, #agreement)은 항상 렌더한다
+      // (effect 가 렌더될 때 이미 DOM 에 존재해야 renderPaymentMethods 가 selector 를 찾는다).
+      return (
+        <div className="max-w-5xl mx-auto px-4 py-8 sm:py-12">
+          <div className="mb-6 sm:mb-8">
+            <p className="text-xs tracking-[0.3em] text-neutral-400 uppercase mb-2">Checkout</p>
+            <h1 className="text-2xl font-bold tracking-tight text-neutral-900">결제하기</h1>
+          </div>
+
+          <div className="grid lg:grid-cols-3 gap-6 lg:gap-8 items-start">
+            {/* 결제수단 + 약관 위젯 */}
+            <div className="lg:col-span-2 relative min-h-[16rem]">
+              {phase === 'loading' && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-neutral-50/80">
+                  <Spinner className="h-7 w-7 text-neutral-400" />
+                  <p className="mt-3 text-sm text-neutral-500">결제 수단을 불러오는 중…</p>
+                </div>
+              )}
+              <Card className="p-2 sm:p-3">
+                <div id="payment-method" />
+                <div id="agreement" />
+              </Card>
+            </div>
+
+            {/* 주문 요약 + 결제 버튼 */}
+            <div className="lg:col-span-1">
+              <Card className="p-5 sm:p-6 lg:sticky lg:top-24">
+                <h2 className="text-sm font-semibold text-neutral-900 mb-4 tracking-wide">주문 요약</h2>
+                <dl className="space-y-2.5 text-sm">
+                  <div className="flex justify-between gap-3 text-neutral-600">
+                    <dt className="flex-shrink-0">주문명</dt>
+                    <dd className="text-right truncate" title={order && order.orderName}>
+                      {order ? order.orderName : '—'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between text-neutral-600">
+                    <dt>배송비</dt>
+                    <dd className="text-neutral-400">무료</dd>
+                  </div>
+                </dl>
+                <div className="my-4 border-t border-neutral-200" />
+                <div className="flex justify-between items-baseline">
+                  <span className="text-sm font-semibold text-neutral-900">총 결제금액</span>
+                  <span className="text-xl font-bold text-neutral-900 tabular-nums">{formatKRW(amount)}</span>
+                </div>
+                <Button
+                  variant="primary" size="lg" className="w-full mt-6"
+                  onClick={handlePay}
+                  loading={phase === 'paying'}
+                  disabled={phase !== 'ready'}
+                >
+                  {formatKRW(amount)} 결제하기
+                </Button>
+                <p className="mt-3 text-[0.7rem] text-center text-neutral-400 leading-relaxed">
+                  TossPayments <strong className="font-semibold text-neutral-500">테스트 모드</strong>예요.
+                  실제 카드 승인·청구는 발생하지 않습니다.
+                </p>
+                <div className="mt-4 text-center">
+                  <Link to="/cart" className="text-xs text-neutral-400 hover:text-neutral-700">← 장바구니로 돌아가기</Link>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---- 결제 결과 페이지 (실제 경로 /success · /fail) ----
+    //   Toss 는 해시가 아닌 실제 경로로 리다이렉트하므로 파라미터는 location.search 에 온다.
+    //   /success: paymentKey/orderId/amount 를 읽어 서버 confirm 호출(승인 확정).
+    //   /fail:    code/message 표시.
+    function PaymentResultPage({ mode }) {
+      const { refresh } = useCart();
+      const confirmedRef = useRef(false); // confirm 은 1회만
+      const [result, setResult] = useState(
+        mode === 'fail' ? { phase: 'fail' } : { phase: 'confirming' }
+      );
+
+      useEffect(() => {
+        if (confirmedRef.current) return;
+        confirmedRef.current = true;
+
+        const params = new URLSearchParams(window.location.search);
+
+        if (mode === 'fail') {
+          setResult({
+            phase: 'fail',
+            code: params.get('code'),
+            message: params.get('message') || '결제가 취소되었거나 실패했어요.',
+            orderId: params.get('orderId'),
+          });
+          return;
+        }
+
+        // success: 서버 confirm
+        const paymentKey = params.get('paymentKey');
+        const orderId = params.get('orderId');
+        const amount = params.get('amount');
+        if (!paymentKey || !orderId || !amount) {
+          setResult({ phase: 'fail', message: '결제 결과 정보를 확인할 수 없어요. 주문 내역을 확인해 주세요.' });
+          return;
+        }
+
+        (async () => {
+          try {
+            const data = await apiFetch('/payments/confirm', {
+              method: 'POST',
+              body: { paymentKey, orderId, amount: Number(amount) },
+            });
+            // confirm 성공 → URL 의 민감 파라미터 제거(재confirm/노출 방지). pathname(/success)은 유지.
+            window.history.replaceState({}, document.title, window.location.pathname);
+            refresh(); // 서버가 비운 장바구니를 헤더 배지에 반영
+            setResult({ phase: 'success', order: data.order });
+          } catch (err) {
+            let message = (err && err.message) || '결제 승인에 실패했어요.';
+            if (err && err.status === 401) {
+              message = '세션이 만료됐어요. 다시 로그인 후 주문 내역을 확인해 주세요.';
+            }
+            const code = err && err.payload && err.payload.code;
+            setResult({ phase: 'fail', message, code });
+          }
+        })();
+      }, [mode, refresh]);
+
+      // 이 화면은 해시 라우터 바깥(실제 경로 /success·/fail)이라 navigate() 대신 전체 이동으로 홈 해시 라우트에 진입한다.
+      const goHome = () => { window.location.href = window.location.origin + '/#/'; };
+      const goCart = () => { window.location.href = window.location.origin + '/#/cart'; };
+      const goMyPage = () => { window.location.href = window.location.origin + '/#/mypage'; };
+
+      if (result.phase === 'confirming') {
+        return (
+          <div className="max-w-md mx-auto px-4 py-20 flex flex-col items-center text-center">
+            <Spinner className="h-8 w-8 text-neutral-400" />
+            <h1 className="mt-5 text-lg font-semibold text-neutral-900">결제를 확인하고 있어요</h1>
+            <p className="mt-2 text-sm text-neutral-500">잠시만 기다려 주세요. 창을 닫지 말아 주세요.</p>
+          </div>
+        );
+      }
+
+      if (result.phase === 'success') {
+        const o = result.order || {};
+        return (
+          <div className="max-w-md mx-auto px-4 py-12 sm:py-16">
+            <Card className="p-8 text-center">
+              <div className="mx-auto w-14 h-14 rounded-full bg-neutral-900 flex items-center justify-center">
+                <svg className="w-7 h-7 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h1 className="mt-5 text-xl font-bold tracking-tight text-neutral-900">결제가 완료되었어요</h1>
+              <p className="mt-2 text-sm text-neutral-500">주문이 정상적으로 접수되었습니다.</p>
+
+              <dl className="mt-6 text-sm border-t border-neutral-200">
+                <div className="flex justify-between gap-3 py-2.5 border-b border-neutral-100">
+                  <dt className="text-neutral-500 flex-shrink-0">주문명</dt>
+                  <dd className="font-medium text-neutral-900 truncate" title={o.orderName}>{o.orderName || '—'}</dd>
+                </div>
+                <div className="flex justify-between py-2.5 border-b border-neutral-100">
+                  <dt className="text-neutral-500">결제금액</dt>
+                  <dd className="font-bold text-neutral-900 tabular-nums">{formatKRW(o.amount)}</dd>
+                </div>
+                {o.method && (
+                  <div className="flex justify-between py-2.5 border-b border-neutral-100">
+                    <dt className="text-neutral-500">결제수단</dt>
+                    <dd className="font-medium text-neutral-900">{o.method}</dd>
+                  </div>
+                )}
+                <div className="flex justify-between gap-3 py-2.5">
+                  <dt className="text-neutral-500 flex-shrink-0">주문번호</dt>
+                  <dd className="font-mono text-[0.7rem] text-neutral-500 truncate self-center" title={o.orderId}>{o.orderId || '—'}</dd>
+                </div>
+              </dl>
+
+              <div className="mt-7 space-y-2">
+                <Button variant="primary" size="lg" className="w-full" onClick={goMyPage}>주문 내역 보기</Button>
+                <Button variant="secondary" className="w-full" onClick={goHome}>쇼핑 계속하기</Button>
+              </div>
+              <p className="mt-3 text-[0.7rem] text-neutral-400">TossPayments 테스트 결제 — 실제 청구는 없습니다.</p>
+            </Card>
+          </div>
+        );
+      }
+
+      // 실패
+      return (
+        <div className="max-w-md mx-auto px-4 py-12 sm:py-16">
+          <Card className="p-8 text-center">
+            <div className="mx-auto w-14 h-14 rounded-full bg-red-50 border border-red-200 flex items-center justify-center">
+              <svg className="w-7 h-7 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+            <h1 className="mt-5 text-xl font-bold tracking-tight text-neutral-900">결제를 완료하지 못했어요</h1>
+            <p className="mt-2 text-sm text-neutral-600 leading-relaxed">{result.message}</p>
+            {result.code && <p className="mt-1 text-xs text-neutral-400">오류코드: {result.code}</p>}
+            <div className="mt-7 flex gap-2">
+              <Button variant="secondary" className="flex-1" onClick={goCart}>장바구니로</Button>
+              <Button variant="primary" className="flex-1" onClick={goHome}>홈으로</Button>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 👤 마이페이지 — 주문 · 결제 내역 (GET /api/orders, Bearer)
+    //   서버가 본인 주문만(WHERE user_id) 돌려주므로 프론트에서 따로 필터하지 않는다.
+    //   'pending'(결제 중단) 주문은 서버가 제외한다 → 여기 오는 건 paid/failed 뿐.
+    // ========================================
+
+    // 주문 상태 배지 — Tailwind CDN JIT 대응: 클래스는 런타임 조립 말고 완전한 문자열로 정적 매핑.
+    const ORDER_STATUS = {
+      paid:   { label: '결제완료', cls: 'bg-neutral-900 text-white border-neutral-900' },
+      failed: { label: '결제실패', cls: 'bg-white text-red-600 border-red-300' },
+    };
+
+    function OrderStatusBadge({ status }) {
+      const s = ORDER_STATUS[status] || {
+        label: status || '알 수 없음',
+        cls: 'bg-neutral-100 text-neutral-600 border-neutral-200',
+      };
+      return (
+        <span className={`inline-flex items-center px-2.5 py-1 text-[0.7rem] font-semibold tracking-wide border ${s.cls}`}>
+          {s.label}
+        </span>
+      );
+    }
+
+    // 요약 통계 한 칸
+    function SummaryStat({ label, value }) {
+      return (
+        <div className="px-5 py-4">
+          <dt className="text-xs text-neutral-500 tracking-wide">{label}</dt>
+          <dd className="mt-1.5 text-xl font-bold text-neutral-900 tabular-nums tracking-tight">{value}</dd>
+        </div>
+      );
+    }
+
+    // 주문 1건 — 상품 목록은 접었다 펼 수 있게(스냅샷은 결제 시점 그대로).
+    function OrderCard({ order }) {
+      const [open, setOpen] = useState(false);
+      const items = Array.isArray(order.items) ? order.items : [];
+      const isPaid = order.status === 'paid';
+      const when = isPaid ? (order.paidAt || order.createdAt) : order.createdAt;
+
+      return (
+        <Card>
+          <div className="flex items-center justify-between gap-3 px-5 py-3 bg-neutral-50 border-b border-neutral-200">
+            <p className="text-xs text-neutral-500">{formatDateTime(when)}</p>
+            <OrderStatusBadge status={order.status} />
+          </div>
+
+          <div className="px-5 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-neutral-900 truncate" title={order.orderName}>
+                  {order.orderName}
+                </h3>
+                <p className="mt-1 text-xs text-neutral-400">
+                  상품 {order.itemCount != null ? order.itemCount : items.length}개
+                  {order.method && <span> · {order.method}</span>}
+                </p>
+              </div>
+              <p className={`flex-shrink-0 text-base font-bold tabular-nums ${
+                isPaid ? 'text-neutral-900' : 'text-neutral-400 line-through'
+              }`}>
+                {formatKRW(order.amount)}
+              </p>
+            </div>
+
+            {items.length > 0 && (
+              <React.Fragment>
+                <button
+                  onClick={() => setOpen((v) => !v)}
+                  aria-expanded={open}
+                  className="mt-3 inline-flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
+                >
+                  주문 상품 {open ? '접기' : `${items.length}건 보기`}
+                  <svg className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`}
+                       viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {open && (
+                  <ul className="mt-3 border-t border-neutral-100 shop-fade-in">
+                    {items.map((it, i) => (
+                      <li key={`${order.orderId}-${it.productId != null ? it.productId : i}`}
+                          className="flex items-center gap-3 py-2.5 border-b border-neutral-100 last:border-b-0">
+                        <span className="flex-1 min-w-0 text-sm text-neutral-700 truncate" title={it.name}>
+                          {it.name}
+                        </span>
+                        <span className="flex-shrink-0 text-xs text-neutral-400 tabular-nums">
+                          {formatKRW(it.price)} × {it.quantity}
+                        </span>
+                        <span className="flex-shrink-0 w-24 text-right text-sm font-medium text-neutral-900 tabular-nums">
+                          {formatKRW(it.lineTotal)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </React.Fragment>
+            )}
+
+            <p className="mt-3 pt-3 border-t border-neutral-100 font-mono text-[0.65rem] text-neutral-400 truncate"
+               title={order.orderId}>
+              주문번호 {order.orderId}
+            </p>
+          </div>
+        </Card>
+      );
+    }
+
+    function MyPage() {
+      const { user, isAuthenticated, bootChecking, logout } = useAuth();
+      const { navigate } = useRouter();
+      const { show } = useToast();
+
+      const [state, setState] = useState({ phase: 'loading', orders: [], summary: null, error: null });
+
+      // 비로그인 접근 차단: CartPage 와 동일하게 부트 토큰검증이 끝난 뒤에 판단한다.
+      useEffect(() => {
+        if (!bootChecking && !isAuthenticated) navigate('/login');
+      }, [bootChecking, isAuthenticated, navigate]);
+
+      const load = useCallback(async () => {
+        setState((s) => ({ ...s, phase: 'loading', error: null }));
+        try {
+          const data = await apiFetch('/orders');
+          setState({
+            phase: 'ready',
+            orders: Array.isArray(data && data.orders) ? data.orders : [],
+            summary: (data && data.summary) || null,
+            error: null,
+          });
+        } catch (err) {
+          // 401 → apiFetch 가 세션을 비웠고, 위 useEffect 가 로그인 화면으로 보낸다. 에러 화면 불필요.
+          if (err.status === 401) return;
+          setState({
+            phase: 'error', orders: [], summary: null,
+            error: err.message || '주문 내역을 불러오지 못했어요.',
+          });
+        }
+      }, []);
+
+      useEffect(() => {
+        if (!bootChecking && isAuthenticated) load();
+      }, [bootChecking, isAuthenticated, load]);
+
+      const handleLogout = () => {
+        logout();
+        show('로그아웃되었어요.', { tone: 'info' });
+        navigate('/');
+      };
+
+      // 부트 검증 중 또는 리다이렉트 직전
+      if (bootChecking || !isAuthenticated) {
+        return (
+          <div className="max-w-3xl mx-auto px-4 py-20 flex justify-center">
+            <Spinner className="h-7 w-7 text-neutral-400" />
+          </div>
+        );
+      }
+
+      const { phase, orders, summary, error } = state;
+
+      return (
+        <div className="max-w-3xl mx-auto px-4 py-8 sm:py-12">
+          <div className="mb-6 sm:mb-8">
+            <p className="text-xs tracking-[0.3em] text-neutral-400 uppercase mb-2">My Page</p>
+            <h1 className="text-2xl font-bold tracking-tight text-neutral-900">마이페이지</h1>
+          </div>
+
+          {/* 계정 + 결제 요약 */}
+          <Card className="mb-8">
+            <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-neutral-200">
+              <div className="min-w-0">
+                <p className="text-[0.7rem] text-neutral-400 tracking-wide">로그인 계정</p>
+                <p className="mt-0.5 text-sm font-medium text-neutral-900 truncate" title={user && user.email}>
+                  {user && user.email}
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={handleLogout}>로그아웃</Button>
+            </div>
+            <dl className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-neutral-200">
+              <SummaryStat label="결제 완료" value={`${(summary && summary.paidCount) || 0}건`} />
+              <SummaryStat label="총 결제금액" value={formatKRW(summary && summary.totalPaid)} />
+              <SummaryStat label="구매 상품" value={`${(summary && summary.totalItems) || 0}개`} />
+            </dl>
+          </Card>
+
+          {/* 주문 내역 */}
+          <h2 className="text-sm font-semibold text-neutral-900 tracking-wide mb-3">
+            주문 · 결제 내역
+            {phase === 'ready' && orders.length > 0 && (
+              <span className="ml-2 font-medium text-neutral-400">{orders.length}건</span>
+            )}
+          </h2>
+
+          {phase === 'loading' ? (
+            <div className="py-20 flex justify-center">
+              <Spinner className="h-7 w-7 text-neutral-400" />
+            </div>
+          ) : phase === 'error' ? (
+            <StatusBox
+              icon={
+                <svg className="w-12 h-12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" /><path strokeLinecap="round" d="M12 8v4m0 4h.01" />
+                </svg>
+              }
+              title="주문 내역을 불러오지 못했어요"
+              description={error}
+              action={<Button onClick={load}>다시 시도</Button>}
+            />
+          ) : orders.length === 0 ? (
+            <StatusBox
+              icon={
+                <svg className="w-14 h-14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+              }
+              title="아직 주문 내역이 없어요"
+              description="마음에 드는 상품을 담고 첫 주문을 해보세요."
+              action={<Link to="/"><Button variant="primary">쇼핑하러 가기</Button></Link>}
+            />
+          ) : (
+            <div className="space-y-4">
+              {orders.map((o) => <OrderCard key={o.orderId} order={o} />)}
+            </div>
+          )}
+
+          {phase === 'ready' && orders.length > 0 && (
+            <p className="mt-8 text-center text-[0.7rem] text-neutral-400 leading-relaxed">
+              결제창까지 갔다가 완료하지 않은 주문은 내역에 표시되지 않아요.<br />
+              TossPayments 테스트 결제 — 실제 청구는 없습니다.
+            </p>
           )}
         </div>
       );
@@ -1322,6 +1940,12 @@
         return () => { alive = false; };
       }, []);
 
+      // TossPayments 는 successUrl/failUrl 로 "실제 경로"(/success·/fail)로 리다이렉트한다.
+      // 해시 라우터보다 "먼저" pathname 을 보고 결제 결과 화면으로 분기한다(파라미터는 location.search 에 옴).
+      const realPath = window.location.pathname;
+      const paymentMode =
+        realPath === '/success' ? 'success' : realPath === '/fail' ? 'fail' : null;
+
       return (
         <div className="min-h-screen flex flex-col">
           {/* 백엔드 미감지 시 경고 배너 (정적 서버로 열었을 때 대표적 실패) */}
@@ -1330,12 +1954,18 @@
           <Header />
 
           <main className="flex-1">
-            <Routes fallback={<NotFoundPage />}>
-              <Route path="/"       element={<ProductListPage />} />
-              <Route path="/login"  element={<AuthPage mode="login" />} />
-              <Route path="/signup" element={<AuthPage mode="signup" />} />
-              <Route path="/cart"   element={<CartPage />} />
-            </Routes>
+            {paymentMode ? (
+              <PaymentResultPage mode={paymentMode} />
+            ) : (
+              <Routes fallback={<NotFoundPage />}>
+                <Route path="/"         element={<ProductListPage />} />
+                <Route path="/login"    element={<AuthPage mode="login" />} />
+                <Route path="/signup"   element={<AuthPage mode="signup" />} />
+                <Route path="/cart"     element={<CartPage />} />
+                <Route path="/checkout" element={<CheckoutPage />} />
+                <Route path="/mypage"   element={<MyPage />} />
+              </Routes>
+            )}
           </main>
 
           <Footer />

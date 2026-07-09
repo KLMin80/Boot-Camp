@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# secrets / environment (NEVER commit — contains DB password, JWT secret, Toss secret key)
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

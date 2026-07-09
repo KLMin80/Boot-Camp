@@ -6,7 +6,12 @@
 //   - 접속 URL(DB_URL)·JWT_SECRET 은 오직 .env 에서만 읽으며 절대 로그/응답에 노출하지 않음.
 //   - 인증: JWT Bearer 토큰. 상품 목록은 공개(인증 불필요), 장바구니는 전부 Bearer 보호.
 //     장바구니는 WHERE id=$1 AND user_id=$2 로 본인 항목만 매칭 → 남의 항목은 404(존재 누출 없음).
-//   - 결제/주문 엔드포인트는 없음(프론트가 alert 만 띄움).
+//   - 결제: TossPayments v2 결제위젯 prepare→confirm 플로우.
+//       · POST /api/payments/prepare  : 서버가 장바구니 합계로 주문(pending)을 확정(orderId/amount 고정).
+//       · POST /api/payments/confirm  : successUrl 리다이렉트로 받은 paymentKey/orderId/amount 검증 후
+//                                       Toss 승인 API 호출 → 성공 시 주문 paid + 장바구니 비우기.
+//     TOSS_SECRET_KEY 는 오직 .env 에서만 읽으며(서버 전용) 절대 로그/응답/커밋 파일에 노출하지 않음.
+//     successUrl/failUrl 은 해시가 아닌 실제 경로(/success·/fail)로 오므로 SPA 폴백으로 index.html 서빙.
 // ============================================================================
 
 const http = require('http');
@@ -75,6 +80,15 @@ const JWT_SECRET = ensureJwtSecret();
 const JWT_EXPIRES_IN = '7d';
 
 // ---------------------------------------------------------------------------
+// 1.7) TossPayments 시크릿 키 (서버 전용) — 오직 .env 에서만 읽는다.
+//    ⚠️ 절대 로그/응답/커밋되는 파일(server.js 포함)에 값을 넣지 않는다.
+//    없어도 부팅은 막지 않는다(상품/장바구니는 이 키 없이 동작). 결제 승인(confirm) 시에만 필수.
+//    프론트에 노출되는 "클라이언트키"는 공개값이라 index.html 에 직접 둔다(여기 시크릿키와 다름).
+// ---------------------------------------------------------------------------
+const TOSS_SECRET_KEY = (process.env.TOSS_SECRET_KEY || '').trim();
+const TOSS_CONFIRM_URL = 'https://api.tosspayments.com/v1/payments/confirm';
+
+// ---------------------------------------------------------------------------
 // 1.6) 테이블 네임스페이스 (공유 Supabase DB 충돌 방지)
 //   이 Supabase 프로젝트는 부트캠프 퀘스트들이 공유하는 단일 postgres DB 다.
 //   범용 이름(products/users/carts)은 다른 퀘스트와 충돌한다 — CREATE TABLE IF NOT EXISTS
@@ -87,6 +101,7 @@ const JWT_EXPIRES_IN = '7d';
 const T_USERS = 'shop_users';
 const T_PRODUCTS = 'shop_products';
 const T_CART = 'shop_cart_items';
+const T_ORDERS = 'shop_orders';
 
 // ---------------------------------------------------------------------------
 // 2) PG 풀 — Supabase 풀러는 SSL 필수
@@ -158,6 +173,29 @@ async function initDB() {
     `);
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_shop_cart_items_user_id ON ${T_CART}(user_id)`
+    );
+    // 주문(결제) 테이블 — TossPayments prepare→confirm 의 단일 진실 소스.
+    //   order_id 는 앱이 부여하는 고유값(UNIQUE), amount 는 prepare 시 서버가 확정(정수 원).
+    //   status: 'pending'(준비) → 'paid'(승인 완료) | 'failed'(승인 실패/금액 불일치).
+    //   items_snapshot 은 결제 시점 장바구니 스냅샷(JSONB). payment_key 는 승인 성공 후 저장.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${T_ORDERS} (
+        id             BIGSERIAL PRIMARY KEY,
+        order_id       TEXT NOT NULL UNIQUE,
+        user_id        BIGINT NOT NULL REFERENCES ${T_USERS}(id) ON DELETE CASCADE,
+        order_name     TEXT NOT NULL,
+        amount         INTEGER NOT NULL CHECK (amount >= 0),
+        status         TEXT NOT NULL DEFAULT 'pending',
+        item_count     INTEGER NOT NULL DEFAULT 0,
+        items_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+        payment_key    TEXT,
+        method         TEXT,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        paid_at        TIMESTAMPTZ
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_shop_orders_user_id ON ${T_ORDERS}(user_id)`
     );
 
     // --- 상품 시드 (테이블이 비어 있을 때만) ---
@@ -276,6 +314,31 @@ function buildCart(rows) {
   return { items, totalQuantity, totalPrice };
 }
 
+// 주문명 — "첫 상품명" 또는 "첫 상품명 외 N건". Toss orderName 100자 제한 방어 truncation.
+function buildOrderName(items) {
+  const first = String((items[0] && items[0].name) || '주문 상품');
+  const base = items.length > 1 ? `${first} 외 ${items.length - 1}건` : first;
+  return base.length > 90 ? `${base.slice(0, 90)}…` : base;
+}
+
+// shop_orders 행 → API 객체(camelCase). 결제 요약만 반환(payment_key 등 민감치 않은 값 위주).
+//   createdAt/paidAt 은 다른 매핑과 동일하게 epoch ms 숫자 계약을 지킨다.
+//   items 는 결제 시점 스냅샷(JSONB) — node-pg 가 이미 JS 배열로 파싱해 준다(JSON.parse 금지).
+//   해당 컬럼을 SELECT 하지 않은 호출부에서는 빈 배열이 된다.
+function mapOrder(row) {
+  return {
+    orderId: row.order_id,
+    orderName: row.order_name,
+    amount: row.amount,                 // INTEGER → number
+    status: row.status,
+    method: row.method || null,
+    itemCount: row.item_count != null ? row.item_count : undefined,
+    items: Array.isArray(row.items_snapshot) ? row.items_snapshot : [],
+    createdAt: row.created_at ? row.created_at.getTime() : undefined,
+    paidAt: row.paid_at ? row.paid_at.getTime() : undefined,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 4.6) JWT 발급/검증
 // ---------------------------------------------------------------------------
@@ -310,6 +373,12 @@ function authenticate(req) {
 // ---------------------------------------------------------------------------
 const STATIC_ALLOWLIST = new Set(['index.html']);
 
+// SPA 폴백 경로: TossPayments 는 successUrl/failUrl 로 "실제 경로"(해시 아님)로 리다이렉트한다
+//   (예: /success?paymentKey=...&orderId=...&amount=...). 이 경로들도 index.html 을 서빙해야
+//   프론트가 결과 화면을 띄우고 confirm 을 호출할 수 있다. 쿼리스트링은 서버가 pathname 만
+//   보므로 브라우저 URL 에 그대로 보존된다. 읽는 파일은 항상 INDEX_HTML_PATH 하나뿐(안전 유지).
+const SPA_FALLBACK_PATHS = new Set(['/success', '/fail']);
+
 // ⚠️ Vercel(@vercel/nft) 파일 트레이싱 대비: index.html 경로를 "리터럴"로 고정한다.
 //    런타임에 변수 경로로만 읽으면 nft 가 정적 분석을 못 해 함수 번들에서 index.html 이
 //    빠지고 배포 환경에서 GET / 가 404 가 된다. allowlist 가 index.html 단일이므로
@@ -317,8 +386,11 @@ const STATIC_ALLOWLIST = new Set(['index.html']);
 const INDEX_HTML_PATH = path.join(__dirname, 'index.html');
 
 function serveStatic(pathname, res) {
-  // '/' → index.html 로 매핑, 그 외엔 basename 만 추출(트래버설 방지)
-  const requested = pathname === '/' ? 'index.html' : path.basename(decodeURIComponent(pathname));
+  // '/' 와 SPA 폴백 경로(/success·/fail) → index.html. 그 외엔 basename 만 추출(트래버설 방지).
+  const requested =
+    (pathname === '/' || SPA_FALLBACK_PATHS.has(pathname))
+      ? 'index.html'
+      : path.basename(decodeURIComponent(pathname));
 
   if (!STATIC_ALLOWLIST.has(requested)) {
     return sendJSON(res, 404, { error: 'Not Found' });
@@ -550,6 +622,146 @@ async function deleteCartItem(_req, res, authUser, cartItemId) {
 }
 
 // ---------------------------------------------------------------------------
+// 6.7) API 핸들러 — 결제 (TossPayments 결제위젯: prepare → confirm)
+//   [prepare] 서버가 "장바구니 합계"로 주문 금액을 확정하고 pending 주문을 만든다.
+//             → 이후 confirm 은 클라가 보낸 amount 를 신뢰하지 않고 이 저장 금액과 대조한다.
+//   [confirm] successUrl 리다이렉트로 받은 paymentKey/orderId/amount 를 검증한 뒤
+//             Toss 승인 API 를 호출한다. 승인 성공 시에만 결제가 실제로 완료된다.
+//   ⚠️ orderId 는 전역 공용 테스트키(_docs_) 충돌을 피하려 매번 crypto.randomUUID() 로 고유하게.
+// ---------------------------------------------------------------------------
+
+// POST /api/payments/prepare (Bearer) → 201 { orderId, amount, orderName }
+async function preparePayment(_req, res, authUser) {
+  const cart = await fetchCart(authUser.id);
+  if (cart.items.length === 0) {
+    return sendJSON(res, 400, { error: '장바구니가 비어 있어 결제를 진행할 수 없습니다.' });
+  }
+
+  const amount = cart.totalPrice;                 // 서버가 확정하는 결제 금액(정수 원)
+  const orderName = buildOrderName(cart.items);
+  const itemCount = cart.totalQuantity;
+  const orderId = `shop_${crypto.randomUUID()}`;  // 고유 orderId (공용 테스트키 충돌 방지)
+  const snapshot = cart.items.map((it) => ({
+    productId: it.productId, name: it.name, price: it.price,
+    quantity: it.quantity, lineTotal: it.lineTotal,
+  }));
+
+  // items_snapshot 은 JSONB — node-pg 는 JS 배열을 PG 배열로 오해하므로 반드시 JSON.stringify + ::jsonb.
+  await pool.query(
+    `INSERT INTO ${T_ORDERS} (order_id, user_id, order_name, amount, status, item_count, items_snapshot)
+     VALUES ($1, $2, $3, $4, 'pending', $5, $6::jsonb)`,
+    [orderId, authUser.id, orderName, amount, itemCount, JSON.stringify(snapshot)]
+  );
+
+  sendJSON(res, 201, { orderId, amount, orderName });
+}
+
+// POST /api/payments/confirm (Bearer) { paymentKey, orderId, amount } → 200 { status, order }
+async function confirmPayment(req, res, authUser) {
+  const body = await readJSONBody(req);
+  const paymentKey = typeof body.paymentKey === 'string' ? body.paymentKey.trim() : '';
+  const orderId = typeof body.orderId === 'string' ? body.orderId.trim() : '';
+  const amount = parsePositiveInt(body.amount);
+
+  if (!paymentKey || !orderId || amount === null) {
+    return sendJSON(res, 400, { error: '결제 정보(paymentKey/orderId/amount)가 올바르지 않습니다.' });
+  }
+
+  // 주문은 order_id + user_id 로만 조회 → 남의 주문은 매칭 자체가 안 돼 confirm 불가(404).
+  const found = await pool.query(
+    `SELECT * FROM ${T_ORDERS} WHERE order_id = $1 AND user_id = $2`,
+    [orderId, authUser.id]
+  );
+  if (found.rows.length === 0) {
+    return sendJSON(res, 404, { error: '주문을 찾을 수 없습니다.' });
+  }
+  const order = found.rows[0];
+
+  // 이미 승인 완료된 주문의 재confirm(새로고침/중복요청) → 멱등 응답(중복 승인·중복 청구 방지).
+  if (order.status === 'paid') {
+    return sendJSON(res, 200, { status: 'paid', alreadyProcessed: true, order: mapOrder(order) });
+  }
+
+  // ⚠️ 금액 위변조 방지 — 클라가 보낸 amount 를 신뢰하지 않고 서버 저장 금액과 대조. 불일치면 거부.
+  if (Number(amount) !== Number(order.amount)) {
+    await pool.query(`UPDATE ${T_ORDERS} SET status = 'failed' WHERE id = $1`, [order.id]);
+    return sendJSON(res, 400, { error: '결제 금액이 주문 금액과 일치하지 않습니다.' });
+  }
+
+  if (!TOSS_SECRET_KEY) {
+    console.error('[toss] TOSS_SECRET_KEY 미설정 — .env(로컬) 또는 배포 환경변수에 등록 필요');
+    return sendJSON(res, 500, { error: '서버에 결제 시크릿 키가 설정되지 않았습니다.' });
+  }
+
+  // Toss 승인 API 호출 — 금액은 반드시 "서버 저장액(order.amount)"으로 보낸다(클라값 아님).
+  //   인증: Basic base64(secretKey + ':')  (Node 20.6+ 전역 fetch 사용)
+  const encoded = Buffer.from(`${TOSS_SECRET_KEY}:`).toString('base64');
+  let tossRes, tossData;
+  try {
+    tossRes = await fetch(TOSS_CONFIRM_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${encoded}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paymentKey, orderId, amount: order.amount }),
+    });
+    tossData = await tossRes.json().catch(() => ({}));
+  } catch (err) {
+    console.error('[toss confirm] 네트워크 오류:', err.message);
+    return sendJSON(res, 502, { error: '결제 승인 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.' });
+  }
+
+  if (!tossRes.ok) {
+    // Toss 승인 실패(카드사 거절/이미 처리됨 등) → 주문 failed 표시 후 원인 메시지 반환.
+    await pool.query(`UPDATE ${T_ORDERS} SET status = 'failed' WHERE id = $1`, [order.id]);
+    const msg = (tossData && tossData.message) || '결제 승인에 실패했습니다.';
+    return sendJSON(res, 400, { error: msg, code: tossData && tossData.code });
+  }
+
+  // 승인 성공 → paid 표시 + paymentKey/method 저장 + 해당 사용자 장바구니 비우기.
+  const method = (tossData && tossData.method) || null;
+  const updated = await pool.query(
+    `UPDATE ${T_ORDERS}
+        SET status = 'paid', payment_key = $1, method = $2, paid_at = now()
+      WHERE id = $3
+      RETURNING *`,
+    [paymentKey, method, order.id]
+  );
+  await pool.query(`DELETE FROM ${T_CART} WHERE user_id = $1`, [authUser.id]);
+
+  sendJSON(res, 200, { status: 'paid', order: mapOrder(updated.rows[0]) });
+}
+
+// ---------------------------------------------------------------------------
+// 6.8) API 핸들러 — 주문 내역 (마이페이지, Bearer 보호)
+//   WHERE user_id = $1 로 본인 주문만 조회한다(남의 주문은 결과에 아예 안 들어옴).
+//   ⚠️ 'pending' 은 제외한다: /payments/prepare 는 결제창에 들어갈 때마다 pending 행을 만들어서,
+//      결제를 중단하면 그대로 남는다. 마이페이지는 "실제 결제 시도"(paid/failed)만 보여준다.
+//   summary 는 paid 주문만 집계한다(실패 주문이 총 결제액에 섞이면 안 됨).
+//   payment_key 는 절대 SELECT/응답하지 않는다(결제 식별자 = 민감값).
+// ---------------------------------------------------------------------------
+async function listOrders(_req, res, authUser) {
+  const { rows } = await pool.query(
+    `SELECT order_id, order_name, amount, status, method, item_count,
+            items_snapshot, created_at, paid_at
+       FROM ${T_ORDERS}
+      WHERE user_id = $1 AND status <> 'pending'
+      ORDER BY created_at DESC, id DESC`,
+    [authUser.id]
+  );
+
+  const orders = rows.map(mapOrder);
+  const paid = orders.filter((o) => o.status === 'paid');
+
+  const summary = {
+    paidCount: paid.length,
+    totalPaid: paid.reduce((sum, o) => sum + o.amount, 0),
+    totalItems: paid.reduce((sum, o) => sum + (o.itemCount || 0), 0),
+    lastPaidAt: paid.length > 0 ? (paid[0].paidAt || paid[0].createdAt) : null,
+  };
+
+  sendJSON(res, 200, { orders, summary });
+}
+
+// ---------------------------------------------------------------------------
 // 7) API 라우터 — /api/* 매칭 후 위 핸들러로 분기
 //    라우팅/입력 검증을 먼저 수행해 DB 와 무관한 응답(404/405/400/401)은
 //    DB 연결 상태와 관계없이 즉시 반환한다. DB 가 실제로 필요한 핸들러를
@@ -629,6 +841,30 @@ async function handleApi(req, res, pathname) {
     return ensureDB().then(() => deleteCartItem(req, res, authUser, id));
   }
 
+  // --- 결제: /api/payments/prepare (Bearer) — 주문 확정(pending) ---
+  if (pathname === '/api/payments/prepare') {
+    if (method !== 'POST') return sendJSON(res, 405, { error: 'Method Not Allowed' });
+    const authUser = requireAuth(req, res);
+    if (!authUser) return; // 401 이미 응답됨
+    return ensureDB().then(() => preparePayment(req, res, authUser));
+  }
+
+  // --- 결제: /api/payments/confirm (Bearer) — Toss 승인 + paid 처리 ---
+  if (pathname === '/api/payments/confirm') {
+    if (method !== 'POST') return sendJSON(res, 405, { error: 'Method Not Allowed' });
+    const authUser = requireAuth(req, res);
+    if (!authUser) return; // 401 이미 응답됨
+    return ensureDB().then(() => confirmPayment(req, res, authUser));
+  }
+
+  // --- 마이페이지: /api/orders (Bearer) — 내 주문/결제 내역 ---
+  if (pathname === '/api/orders') {
+    if (method !== 'GET') return sendJSON(res, 405, { error: 'Method Not Allowed' });
+    const authUser = requireAuth(req, res);
+    if (!authUser) return; // 401 이미 응답됨
+    return ensureDB().then(() => listOrders(req, res, authUser));
+  }
+
   return sendJSON(res, 404, { error: 'API Not Found' });
 }
 
@@ -695,6 +931,10 @@ function start(startPort = PORT, triesLeft = MAX_PORT_TRIES) {
     const url = `http://localhost:${startPort}`;
     console.log(`[server] 남성의류 쇼핑몰 백엔드 실행 → ${url}`);
     console.log(`[안내] Live Server 로 열지 말고 위 주소(${url})로 접속하세요.`);
+    if (!TOSS_SECRET_KEY) {
+      console.warn('[toss] 경고: TOSS_SECRET_KEY 가 없어 결제 승인(confirm)이 실패합니다. ' +
+        '.env(로컬) 또는 배포 플랫폼 환경변수에 등록하세요.');
+    }
     // 기동 직후 DB 연결 확인 (실패해도 서버는 떠 있고, 요청 시 재시도)
     ensureDB()
       .then(() => console.log('[db] Supabase Postgres 연결 및 스키마 준비 완료'))

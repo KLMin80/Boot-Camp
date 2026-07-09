@@ -1,0 +1,15 @@
+{
+  "name": "coffe-bean-mall",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MERIDIAN 커피빈몰 - 정적 서빙 + 이메일/비밀번호 JWT 인증 백엔드",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1"
+  }
+}
