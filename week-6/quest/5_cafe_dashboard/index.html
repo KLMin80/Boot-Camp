@@ -1,0 +1,1934 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>딥로스트 · 사장님 대시보드</title>
+  <!-- 인라인 파비콘. 없으면 브라우저가 /favicon.ico 를 찾다가 404 를 콘솔에 남긴다. -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☕</text></svg>" />
+
+  <!-- ⚠️ 모든 CDN은 버전을 명시적으로 고정한다.
+       @babel/standalone 은 반드시 7.x. 8.x 를 쓰면 type="text/babel" 인라인 변환이 깨져 화면이 백지가 된다. -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            // 딥로스트: 다크 로스팅 브라운/차콜 베이스
+            roast: {
+              950: '#120d0a', 900: '#19120d', 850: '#20170f', 800: '#281d14',
+              750: '#31241a', 700: '#3d2d20', 600: '#523c2a', 500: '#6d5138', 400: '#8f7150'
+            },
+            // 따뜻한 앰버 포인트는 tailwind 기본 amber 사용, 그린 액센트는 sage
+            sage: { 700: '#4a6633', 600: '#5c7a3f', 500: '#6f9350', 400: '#88ab68', 300: '#a6c48a' }
+          },
+          fontFamily: {
+            sans: ['-apple-system','BlinkMacSystemFont','"Segoe UI"','"Malgun Gothic"','"Apple SD Gothic Neo"','"Noto Sans KR"','Roboto','sans-serif'],
+            mono: ['ui-monospace','"Cascadia Mono"','Consolas','monospace']
+          }
+        }
+      }
+    };
+  </script>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <style>
+    /* Tailwind JIT 가 준비되기 전에도 어두운 배경을 보장 (백지/흰 플래시 방지) */
+    html, body { background: #120d0a; color: #e8ddce; }
+    * { -webkit-font-smoothing: antialiased; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #120d0a; }
+    ::-webkit-scrollbar-thumb { background: #3d2d20; border-radius: 8px; border: 2px solid #120d0a; }
+    ::-webkit-scrollbar-thumb:hover { background: #523c2a; }
+    @keyframes dr-shimmer { 0% { background-position: -700px 0; } 100% { background-position: 700px 0; } }
+    .dr-shimmer { background: linear-gradient(90deg, #241a12 25%, #33261b 37%, #241a12 63%); background-size: 700px 100%; animation: dr-shimmer 1.4s infinite linear; }
+    @keyframes dr-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .dr-fade { animation: dr-fade .35s ease both; }
+    @keyframes dr-spin { to { transform: rotate(360deg); } }
+    .dr-spin { animation: dr-spin .7s linear infinite; }
+  </style>
+</head>
+<body class="bg-roast-950 text-stone-200 font-sans">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+  // 최상위 함수/const 가 window 전역이 되는 것을 피하기 위해 전체를 IIFE 로 감싼다.
+  // (외부 SDK 가 스니핑하는 흔한 전역명과의 충돌 방지)
+  (function () {
+    'use strict';
+    const { useState, useEffect, useRef, useMemo, useCallback, useContext, createContext } = React;
+
+    // ========================================
+    // 상수 · 유틸 · 포맷터
+    // ========================================
+    const API_BASE = '/api';                 // 상대경로 — 같은 오리진의 server.js 가 응답
+    const TOKEN_KEY = 'cafe_dash_token';
+
+    const nf = new Intl.NumberFormat('ko-KR');
+    function cx() { return Array.prototype.filter.call(arguments, Boolean).join(' '); }
+    function isNum(v) { return typeof v === 'number' && isFinite(v); }
+    // 서버가 null 을 줄 수 있는 필드 방어 — .toFixed() 를 바로 부르지 않는다
+    function fmtInt(v) { return isNum(v) ? nf.format(Math.round(v)) : '—'; }
+    // 재고·발주 수량은 numeric(10,2) 라 소수가 온다. 반올림하면 2.2kg 이 "2kg" 이 되어
+    // 정작 안전재고 하회 품목의 수치가 틀리게 보인다. 소수 2자리까지, 뒤 0은 떼고 표시한다.
+    const qf = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
+    function fmtQty(v) { return isNum(v) ? qf.format(v) : '—'; }
+    function fmtWon(v) { return isNum(v) ? nf.format(Math.round(v)) + '원' : '—'; }
+    function fmtPct(v, d) { if (!isNum(v)) return '—'; const s = v > 0 ? '+' : ''; return s + v.toFixed(d == null ? 1 : d) + '%'; }
+    function fmtKpi(v, unit) {
+      if (!isNum(v)) return '—';
+      if (unit === '원') return fmtWon(v);
+      if (unit === '점') return v.toFixed(1) + '점';
+      if (unit === '%') return v.toFixed(1) + '%';
+      return fmtInt(v) + (unit || '');
+    }
+    function fmtDateMD(iso) { return typeof iso === 'string' && iso.length >= 10 ? iso.slice(5).replace('-', '.') : (iso || '—'); }
+    // 매장 기준(Asia/Seoul) 오늘 'YYYY-MM-DD'.
+    // new Date().toISOString() 을 쓰면 UTC 라서, 한국 시간 오전 9시 이전에는 어제 날짜가 나온다.
+    function todaySeoul() {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date());
+    }
+    function timeAgo(ms) {
+      if (!isNum(ms)) return '';
+      const d = new Date(ms);
+      return d.toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit', month: 'numeric', day: 'numeric' });
+    }
+
+    // 동적 클래스는 Tailwind JIT 가 못 잡으므로 완전한 문자열을 정적 매핑에 미리 적어둔다
+    const ALERT_STYLE = {
+      danger: { wrap: 'border-red-500/40 bg-red-500/10',   dot: 'bg-red-500',   badge: 'bg-red-500/15 text-red-300 ring-red-400/30',   label: '긴급' },
+      warn:   { wrap: 'border-amber-500/40 bg-amber-500/10', dot: 'bg-amber-400', badge: 'bg-amber-500/15 text-amber-300 ring-amber-400/30', label: '주의' },
+      info:   { wrap: 'border-sky-500/40 bg-sky-500/10',    dot: 'bg-sky-400',   badge: 'bg-sky-500/15 text-sky-300 ring-sky-400/30',   label: '정보' },
+      ok:     { wrap: 'border-sage-500/30 bg-sage-500/5',   dot: 'bg-sage-500',  badge: 'bg-sage-500/15 text-sage-300 ring-sage-400/25', label: '정상' }
+    };
+    const BADGE_TONE = {
+      gray:  'bg-stone-500/15 text-stone-300 ring-stone-400/20',
+      amber: 'bg-amber-500/15 text-amber-300 ring-amber-400/25',
+      green: 'bg-sage-500/20 text-sage-300 ring-sage-400/25',
+      red:   'bg-red-500/15 text-red-300 ring-red-400/25',
+      blue:  'bg-sky-500/15 text-sky-300 ring-sky-400/25',
+      roast: 'bg-roast-700/50 text-amber-200 ring-amber-500/20'
+    };
+    const BTN_VARIANT = {
+      primary:   'bg-amber-500 hover:bg-amber-400 text-roast-950 font-semibold shadow shadow-amber-900/30',
+      secondary: 'bg-roast-700 hover:bg-roast-600 text-stone-100 ring-1 ring-roast-600',
+      outline:   'bg-transparent ring-1 ring-roast-600 hover:bg-roast-800 text-stone-200',
+      ghost:     'bg-transparent hover:bg-roast-800 text-stone-300',
+      danger:    'bg-red-600 hover:bg-red-500 text-white font-semibold'
+    };
+    const BTN_SIZE = { sm: 'px-2.5 py-1.5 text-xs', md: 'px-3.5 py-2 text-sm', lg: 'px-5 py-2.5 text-[15px]' };
+
+    // Notion 할일/발주 상태 색 (스키마의 정확한 한글 값)
+    const TODO_STATUS = { '할 일': 'gray', '진행중': 'amber', '완료': 'green' };
+    const TODO_PRIORITY = { '높음': 'red', '보통': 'amber', '낮음': 'gray' };
+    const NOTION_ORDER_STATUS = { '발주필요': 'red', '발주완료': 'amber', '배송중': 'blue', '입고완료': 'green' };
+    // cafe_purchase_orders(DB) 상태는 Notion 과 다르다 — 스키마 체크 제약: 발주완료/배송중/입고완료/취소
+    const PO_STATUS = { '발주완료': 'amber', '배송중': 'blue', '입고완료': 'green', '취소': 'gray' };
+
+    const NAV = [
+      { to: '#/', path: '/', label: '대시보드', icon: '📊' },
+      { to: '#/notion', path: '/notion', label: '할일·발주', icon: '✅' },
+      { to: '#/data', path: '/data', label: '데이터', icon: '🗂️' }
+    ];
+
+    // ========================================
+    // 훅: 해시 라우팅 · 비동기 로더
+    // ========================================
+    function currentHashPath() {
+      const h = window.location.hash || '#/';
+      const p = h.replace(/^#/, '');
+      return p === '' ? '/' : p;
+    }
+    function useHashRoute() {
+      const [path, setPath] = useState(currentHashPath());
+      useEffect(function () {
+        function onHash() { setPath(currentHashPath()); window.scrollTo(0, 0); }
+        window.addEventListener('hashchange', onHash);
+        return function () { window.removeEventListener('hashchange', onHash); };
+      }, []);
+      return path;
+    }
+    function navigate(to) { window.location.hash = to; }
+
+    // fn 은 Promise 를 반환. reload() 로 재요청. deps 변경 시 자동 재요청.
+    function useAsync(fn, deps) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [tick, setTick] = useState(0);
+      const fnRef = useRef(fn); fnRef.current = fn;
+      useEffect(function () {
+        let alive = true;
+        setLoading(true); setError(null);
+        Promise.resolve().then(function () { return fnRef.current(); })
+          .then(function (d) { if (alive) { setData(d); setLoading(false); } })
+          .catch(function (e) { if (alive) { setError((e && e.message) || '요청에 실패했습니다.'); setLoading(false); } });
+        return function () { alive = false; };
+      }, (deps || []).concat(tick));
+      const reload = useCallback(function () { setTick(function (t) { return t + 1; }); }, []);
+      return { data: data, loading: loading, error: error, reload: reload };
+    }
+
+    // ========================================
+    // 🎨 디자인 시스템 컴포넌트
+    // ========================================
+    function Spinner(props) {
+      const s = props.size || 16;
+      return <span className="dr-spin inline-block rounded-full border-2 border-current border-t-transparent align-[-2px]"
+                   style={{ width: s, height: s }} aria-hidden="true" />;
+    }
+
+    function Skeleton(props) {
+      return <div className={cx('dr-shimmer rounded-lg', props.className)} style={props.style} />;
+    }
+
+    function Card(props) {
+      return (
+        <section className={cx('rounded-2xl bg-roast-900/80 ring-1 ring-roast-700/60 shadow-lg shadow-black/30', props.className)}>
+          {(props.title || props.right || props.eyebrow) && (
+            <header className="flex items-start justify-between gap-3 px-4 sm:px-5 pt-4 pb-3 border-b border-roast-800/80">
+              <div className="min-w-0">
+                {props.eyebrow && <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-400/80 mb-0.5">{props.eyebrow}</div>}
+                {props.title && <h3 className="text-[15px] font-semibold text-stone-100 tracking-tight truncate">{props.title}</h3>}
+                {props.subtitle && <p className="text-xs text-stone-400 mt-0.5">{props.subtitle}</p>}
+              </div>
+              {props.right && <div className="shrink-0">{props.right}</div>}
+            </header>
+          )}
+          <div className={cx('px-4 sm:px-5', props.pad === false ? '' : 'py-4', props.bodyClass)}>{props.children}</div>
+        </section>
+      );
+    }
+
+    function Button(props) {
+      const variant = BTN_VARIANT[props.variant] || BTN_VARIANT.secondary;
+      const size = BTN_SIZE[props.size] || BTN_SIZE.md;
+      return (
+        <button
+          type={props.type || 'button'}
+          onClick={props.onClick}
+          disabled={props.disabled}
+          aria-label={props['aria-label']}
+          className={cx('inline-flex items-center justify-center gap-1.5 rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60 disabled:opacity-50 disabled:cursor-not-allowed', variant, size, props.className)}>
+          {props.loading && <Spinner size={14} />}
+          {props.children}
+        </button>
+      );
+    }
+
+    function Badge(props) {
+      const tone = BADGE_TONE[props.tone] || BADGE_TONE.gray;
+      return <span className={cx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset whitespace-nowrap', tone, props.className)}>{props.children}</span>;
+    }
+
+    function Field(props) {
+      return (
+        <label className={cx('block', props.className)}>
+          {props.label && <span className="mb-1 block text-xs font-medium text-stone-300">{props.label}</span>}
+          <input
+            ref={props.inputRef}
+            type={props.type || 'text'}
+            value={props.value}
+            onChange={props.onChange}
+            onKeyDown={props.onKeyDown}
+            placeholder={props.placeholder}
+            disabled={props.disabled}
+            inputMode={props.inputMode}
+            autoComplete={props.autoComplete}
+            step={props.step}
+            className={cx('w-full rounded-xl bg-roast-950/70 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 ring-1 ring-inset transition-colors focus:outline-none focus:ring-2',
+              props.error ? 'ring-red-500/60 focus:ring-red-400' : 'ring-roast-700 focus:ring-amber-400/70')} />
+          {props.error && <span className="mt-1 block text-xs text-red-400">{props.error}</span>}
+        </label>
+      );
+    }
+
+    function Select(props) {
+      return (
+        <label className={cx('block', props.className)}>
+          {props.label && <span className="mb-1 block text-xs font-medium text-stone-300">{props.label}</span>}
+          <select value={props.value} onChange={props.onChange} disabled={props.disabled}
+            className="w-full rounded-xl bg-roast-950/70 px-3 py-2 text-sm text-stone-100 ring-1 ring-inset ring-roast-700 focus:outline-none focus:ring-2 focus:ring-amber-400/70">
+            {(props.options || []).map(function (o) {
+              const val = typeof o === 'object' ? o.value : o;
+              const lab = typeof o === 'object' ? o.label : o;
+              return <option key={val} value={val}>{lab}</option>;
+            })}
+          </select>
+        </label>
+      );
+    }
+
+    function Modal(props) {
+      useEffect(function () {
+        if (!props.open) return;
+        function onKey(e) { if (e.key === 'Escape' && props.onClose) props.onClose(); }
+        document.addEventListener('keydown', onKey);
+        const prev = document.body.style.overflow; document.body.style.overflow = 'hidden';
+        return function () { document.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
+      }, [props.open]);
+      if (!props.open) return null;
+      const sizeCls = props.size === 'lg' ? 'max-w-2xl' : props.size === 'sm' ? 'max-w-sm' : 'max-w-lg';
+      return (
+        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto p-4 sm:p-6">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={props.onClose} />
+          <div className={cx('dr-fade relative z-10 my-6 w-full rounded-2xl bg-roast-900 ring-1 ring-roast-700 shadow-2xl', sizeCls)}>
+            <header className="flex items-center justify-between gap-3 border-b border-roast-800 px-5 py-3.5">
+              <h3 className="text-[15px] font-semibold text-stone-100">{props.title}</h3>
+              <button onClick={props.onClose} aria-label="닫기" className="rounded-lg p-1 text-stone-400 hover:bg-roast-800 hover:text-stone-200">✕</button>
+            </header>
+            <div className="px-5 py-4">{props.children}</div>
+            {props.footer && <footer className="flex justify-end gap-2 border-t border-roast-800 px-5 py-3.5">{props.footer}</footer>}
+          </div>
+        </div>
+      );
+    }
+
+    function EmptyState(props) {
+      return (
+        <div className="flex flex-col items-center justify-center gap-1 py-10 text-center">
+          <div className="text-3xl opacity-70">{props.icon || '🗒️'}</div>
+          <p className="text-sm text-stone-300">{props.title || '데이터가 없습니다.'}</p>
+          {props.hint && <p className="text-xs text-stone-500">{props.hint}</p>}
+        </div>
+      );
+    }
+
+    function ErrorState(props) {
+      return (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="font-semibold">불러오지 못했습니다</div>
+          <div className="mt-0.5 text-red-300/90">{props.message || '알 수 없는 오류'}</div>
+          {props.onRetry && <div className="mt-2"><Button size="sm" variant="outline" onClick={props.onRetry}>다시 시도</Button></div>}
+        </div>
+      );
+    }
+
+    // 증감 표시 (▲▼) — deltaPct 가 null 이어도 방어
+    function Delta(props) {
+      const v = props.value;
+      if (!isNum(v)) return <span className="text-xs text-stone-500">— 비교 없음</span>;
+      const up = v > 0, flat = v === 0;
+      const cls = flat ? 'text-stone-400' : up ? 'text-sage-300' : 'text-red-400';
+      const arrow = flat ? '–' : up ? '▲' : '▼';
+      return <span className={cx('inline-flex items-center gap-0.5 text-xs font-semibold', cls)}>{arrow} {fmtPct(Math.abs(v))}</span>;
+    }
+
+    // ========================================
+    // 🔔 토스트
+    // ========================================
+    const ToastCtx = createContext(function () {});
+    function useToast() { return useContext(ToastCtx); }
+    function ToastProvider(props) {
+      const [toasts, setToasts] = useState([]);
+      const push = useCallback(function (msg, tone) {
+        const id = Math.random().toString(36).slice(2);
+        setToasts(function (t) { return t.concat([{ id: id, msg: msg, tone: tone || 'info' }]); });
+        setTimeout(function () { setToasts(function (t) { return t.filter(function (x) { return x.id !== id; }); }); }, 3600);
+      }, []);
+      const toneCls = { info: 'bg-roast-800 ring-roast-600 text-stone-100', ok: 'bg-sage-700/90 ring-sage-500 text-white', err: 'bg-red-600/90 ring-red-400 text-white' };
+      return (
+        <ToastCtx.Provider value={push}>
+          {props.children}
+          <div className="fixed right-3 top-3 z-[90] flex w-[min(92vw,360px)] flex-col gap-2">
+            {toasts.map(function (t) {
+              return <div key={t.id} className={cx('dr-fade rounded-xl px-3.5 py-2.5 text-sm shadow-lg ring-1', toneCls[t.tone] || toneCls.info)}>{t.msg}</div>;
+            })}
+          </div>
+        </ToastCtx.Provider>
+      );
+    }
+
+    // ========================================
+    // 🔐 인증 — 헬스체크 · 세션복구 · 로그인/가입 (Provider 가 소유)
+    // ========================================
+    const AuthCtx = createContext(null);
+    function useAuth() { return useContext(AuthCtx); }
+
+    function AuthProvider(props) {
+      const [booting, setBooting] = useState(true);
+      const [health, setHealth] = useState(null);
+      const [healthError, setHealthError] = useState(false);
+      const [user, setUser] = useState(null);
+
+      const boot = useCallback(function () {
+        setBooting(true); setHealthError(false);
+        let alive = true;
+        (async function () {
+          let h = null;
+          try {
+            const res = await fetch(API_BASE + '/health', { cache: 'no-store' });
+            if (!res.ok) throw new Error('health ' + res.status);
+            h = await res.json();
+          } catch (e) {
+            if (alive) { setHealth(null); setHealthError(true); setBooting(false); }
+            return;
+          }
+          if (!alive) return;
+          setHealth(h);
+          const token = localStorage.getItem(TOKEN_KEY);
+          if (token) {
+            try {
+              const r = await fetch(API_BASE + '/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+              if (r.status === 401) { localStorage.removeItem(TOKEN_KEY); if (alive) setUser(null); }
+              else if (r.ok) { const d = await r.json(); if (alive) setUser(d.user); }
+            } catch (e) { /* 네트워크 오류: 토큰 보존, 이번 세션만 비로그인 */ }
+          }
+          if (alive) setBooting(false);
+        })();
+        return function () { alive = false; };
+      }, []);
+
+      useEffect(function () { return boot(); }, [boot]);
+
+      // 로그인/가입 (토큰 발급 전)
+      const authSubmit = useCallback(async function (mode, body) {
+        const path = mode === 'login' ? '/auth/login' : '/auth/register';
+        const res = await fetch(API_BASE + path, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        });
+        let d = null; try { d = await res.json(); } catch (e) {}
+        if (!res.ok) throw new Error((d && d.error) || '요청에 실패했습니다.');
+        localStorage.setItem(TOKEN_KEY, d.token);
+        setUser(d.user);
+        return d;
+      }, []);
+
+      const logout = useCallback(function () {
+        localStorage.removeItem(TOKEN_KEY);
+        setUser(null);
+        navigate('#/');
+      }, []);
+
+      // 인증 포함 fetch — 401 이면 토큰 제거 후 로그아웃
+      const api = useMemo(function () {
+        async function call(method, path, bodyObj) {
+          const token = localStorage.getItem(TOKEN_KEY);
+          const res = await fetch(API_BASE + path, {
+            method: method,
+            headers: Object.assign({ 'Content-Type': 'application/json' }, token ? { Authorization: 'Bearer ' + token } : {}),
+            body: bodyObj != null ? JSON.stringify(bodyObj) : undefined
+          });
+          if (res.status === 401) {
+            localStorage.removeItem(TOKEN_KEY); setUser(null);
+            throw new Error('세션이 만료되었습니다. 다시 로그인해 주세요.');
+          }
+          let d = null; try { d = await res.json(); } catch (e) {}
+          if (!res.ok) throw new Error((d && d.error) || ('요청 실패 (' + res.status + ')'));
+          return d;
+        }
+        return {
+          get: function (p) { return call('GET', p); },
+          post: function (p, b) { return call('POST', p, b); },
+          patch: function (p, b) { return call('PATCH', p, b); },
+          put: function (p, b) { return call('PUT', p, b); },
+          del: function (p) { return call('DELETE', p); }
+        };
+      }, []);
+
+      const value = { booting: booting, health: health, healthError: healthError, user: user, api: api, authSubmit: authSubmit, logout: logout, retryBoot: boot };
+      return <AuthCtx.Provider value={value}>{props.children}</AuthCtx.Provider>;
+    }
+
+    function Brand(props) {
+      return (
+        <div className={cx('flex items-center gap-2.5', props.className)}>
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 text-lg shadow-inner">☕</div>
+          <div className="leading-none">
+            <div className="text-[15px] font-bold tracking-tight text-stone-50">딥로스트</div>
+            <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-amber-500/80">DEEP ROAST</div>
+          </div>
+        </div>
+      );
+    }
+
+    function BootSplash() {
+      return (
+        <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-center">
+          <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-2xl">☕</div>
+          <div className="flex items-center gap-2 text-stone-300"><Spinner size={16} /> 대시보드를 준비하는 중…</div>
+        </div>
+      );
+    }
+
+    function HealthErrorScreen() {
+      const auth = useAuth();
+      return (
+        <div className="flex min-h-screen items-center justify-center p-5">
+          <Card className="w-full max-w-md dr-fade">
+            <div className="text-center">
+              <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-red-500/15 text-2xl ring-1 ring-red-500/30">🔌</div>
+              <h2 className="text-lg font-bold text-stone-50">서버에 연결하지 못했습니다</h2>
+              <p className="mt-2 text-sm leading-relaxed text-stone-300">
+                이 대시보드는 <b className="text-amber-300">API 서버(server.js)</b> 위에서 동작합니다.
+                <br />Live Server 로 열면 <code className="rounded bg-roast-800 px-1 py-0.5 text-amber-200">/api</code> 요청이 404 가 됩니다.
+              </p>
+              <div className="mt-4 rounded-xl bg-roast-950/70 p-3 text-left text-sm ring-1 ring-roast-700">
+                <div className="text-xs font-semibold text-stone-400">이렇게 실행하세요</div>
+                <pre className="mt-1 overflow-x-auto font-mono text-[13px] text-sage-300">npm start</pre>
+                <div className="mt-1 text-xs text-stone-400">→ 그다음 <code className="text-amber-200">http://localhost:3000</code> 로 접속</div>
+              </div>
+              <div className="mt-4"><Button variant="primary" onClick={auth.retryBoot}>다시 연결</Button></div>
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    function AuthScreen() {
+      const auth = useAuth();
+      const [mode, setMode] = useState('login');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [name, setName] = useState('');
+      const [error, setError] = useState(null);
+      const [submitting, setSubmitting] = useState(false);
+      const emailRef = useRef(null);
+
+      useEffect(function () { setError(null); const t = setTimeout(function () { if (emailRef.current) emailRef.current.focus(); }, 60); return function () { clearTimeout(t); }; }, [mode]);
+
+      async function onSubmit(e) {
+        if (e) e.preventDefault();
+        setError(null);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('올바른 이메일을 입력해 주세요.'); return; }
+        if (password.length < 6) { setError('비밀번호는 6자 이상이어야 합니다.'); return; }
+        if (mode === 'register' && name.trim().length < 1) { setError('이름을 입력해 주세요.'); return; }
+        setSubmitting(true);
+        try {
+          const body = mode === 'login' ? { email: email, password: password } : { email: email, password: password, name: name.trim() };
+          await auth.authSubmit(mode, body);
+        } catch (err) { setError(err.message); setSubmitting(false); }
+      }
+
+      return (
+        <div className="flex min-h-screen items-center justify-center p-4 sm:p-6">
+          <div className="dr-fade w-full max-w-md">
+            <div className="mb-6 text-center">
+              <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-3xl shadow-lg shadow-amber-900/40">☕</div>
+              <h1 className="mt-4 text-2xl font-bold tracking-tight text-stone-50">딥로스트 사장님 대시보드</h1>
+              <p className="mt-1.5 text-sm text-stone-400">깊게 볶고, 깊게 몰입한다 — 사장님 전용 공간입니다.</p>
+            </div>
+            <Card>
+              <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-roast-950/70 p-1 ring-1 ring-roast-700">
+                {[['login', '로그인'], ['register', '가입']].map(function (m) {
+                  const active = mode === m[0];
+                  return <button key={m[0]} onClick={function () { setMode(m[0]); }}
+                    className={cx('rounded-lg py-2 text-sm font-semibold transition-colors', active ? 'bg-amber-500 text-roast-950' : 'text-stone-300 hover:text-stone-100')}>{m[1]}</button>;
+                })}
+              </div>
+
+              <form onSubmit={onSubmit} className="space-y-3">
+                {mode === 'register' && (
+                  <Field label="이름" value={name} onChange={function (e) { setName(e.target.value); }} placeholder="예) 김로스트" disabled={submitting} />
+                )}
+                <Field label="이메일" type="email" inputRef={emailRef} value={email} autoComplete="username"
+                  onChange={function (e) { setEmail(e.target.value); }} placeholder="owner@deeproast.kr" disabled={submitting} />
+                <Field label="비밀번호" type="password" value={password} autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  onChange={function (e) { setPassword(e.target.value); }} placeholder="••••••••" disabled={submitting} />
+
+                {error && <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
+
+                <Button type="submit" variant="primary" size="lg" className="w-full" loading={submitting} disabled={submitting}>
+                  {mode === 'login' ? '로그인' : '가입하기'}
+                </Button>
+              </form>
+
+              {mode === 'register' && (
+                <p className="mt-3 text-center text-xs leading-relaxed text-stone-500">
+                  가입은 <b className="text-stone-400">사장님 계정(허용된 이메일)</b>만 가능합니다.<br />허용되지 않은 이메일은 가입이 거절됩니다.
+                </p>
+              )}
+            </Card>
+            <p className="mt-5 text-center text-[11px] text-stone-600">© 딥로스트 · 용인 수지구청역점</p>
+          </div>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🧩 레이아웃 — 헤더 · 셸
+    // ========================================
+    function Header(props) {
+      const auth = useAuth();
+      const path = props.path;
+      const initial = (auth.user && auth.user.name ? auth.user.name : (auth.user && auth.user.email) || '?').slice(0, 1).toUpperCase();
+      return (
+        <header className="sticky top-0 z-40 border-b border-roast-800/80 bg-roast-950/85 backdrop-blur">
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-3 py-2.5 sm:px-5">
+            <a href="#/" className="shrink-0"><Brand /></a>
+            <nav className="hidden items-center gap-1 sm:flex" aria-label="주요 메뉴">
+              {NAV.map(function (n) {
+                const active = path === n.path;
+                return <a key={n.to} href={n.to}
+                  className={cx('rounded-xl px-3 py-2 text-sm font-medium transition-colors', active ? 'bg-roast-800 text-amber-300 ring-1 ring-roast-600' : 'text-stone-300 hover:bg-roast-800/60 hover:text-stone-100')}>
+                  <span className="mr-1">{n.icon}</span>{n.label}</a>;
+              })}
+            </nav>
+            <div className="flex items-center gap-2">
+              <div className="hidden items-center gap-2 md:flex">
+                <div className="grid h-8 w-8 place-items-center rounded-full bg-sage-600 text-sm font-bold text-white">{initial}</div>
+                <div className="leading-tight">
+                  <div className="text-xs font-semibold text-stone-200">{(auth.user && auth.user.name) || '사장님'}</div>
+                  <div className="text-[10px] text-stone-500">{auth.user && auth.user.email}</div>
+                </div>
+              </div>
+              <Button size="sm" variant="outline" onClick={auth.logout}>로그아웃</Button>
+            </div>
+          </div>
+          {/* 모바일 하단 탭 */}
+          <nav className="flex items-stretch gap-1 border-t border-roast-800/70 px-2 py-1.5 sm:hidden" aria-label="주요 메뉴(모바일)">
+            {NAV.map(function (n) {
+              const active = path === n.path;
+              return <a key={n.to} href={n.to}
+                className={cx('flex flex-1 flex-col items-center rounded-lg py-1.5 text-[11px] font-medium', active ? 'bg-roast-800 text-amber-300' : 'text-stone-400')}>
+                <span className="text-base leading-none">{n.icon}</span><span className="mt-0.5">{n.label}</span></a>;
+            })}
+          </nav>
+        </header>
+      );
+    }
+
+    function Footer() {
+      const auth = useAuth();
+      const range = auth.health && auth.health.dataRange;
+      return (
+        <footer className="mx-auto max-w-7xl px-4 py-8 text-center text-[11px] text-stone-600">
+          <div>딥로스트 사장님 대시보드 · 데이터 기준 {range ? (range.from + ' ~ ' + range.to) : '—'}</div>
+          <div className="mt-1">“깊게 볶고, 깊게 몰입한다.”</div>
+        </footer>
+      );
+    }
+
+    function Shell() {
+      const path = useHashRoute();
+      let page;
+      if (path === '/notion') page = <NotionPage />;
+      else if (path === '/data') page = <DataPage />;
+      else if (path === '/') page = <DashboardPage />;
+      else page = <div className="py-20 text-center text-stone-400">페이지를 찾을 수 없습니다. <a className="text-amber-300 underline" href="#/">대시보드로</a></div>;
+      return (
+        <div className="min-h-screen">
+          <Header path={path} />
+          <main className="mx-auto max-w-7xl px-3 py-5 sm:px-5 sm:py-7">{page}</main>
+          <Footer />
+        </div>
+      );
+    }
+
+    // ========================================
+    // 🚀 App — 게이트: 헬스에러 → 부팅 → 로그인 → 셸
+    // ========================================
+    function App() {
+      const auth = useAuth();
+      if (auth.healthError) return <HealthErrorScreen />;
+      if (auth.booting) return <BootSplash />;
+      if (!auth.user) return <AuthScreen />;
+      return <Shell />;
+    }
+
+    function Root() {
+      return <ToastProvider><AuthProvider><App /></AuthProvider></ToastProvider>;
+    }
+
+    // 페이지 컴포넌트(DashboardPage / NotionPage / DataPage)와 그 하위는
+    // 아래 마커 위치에 함수 선언으로 이어붙인다. 함수 선언은 호이스팅되므로 Shell 이 먼저 참조해도 안전.
+
+    // ========================================
+    // 📄 #/ 대시보드 — 컴포저
+    // ========================================
+    function SectionHeader(props) {
+      return (
+        <div className="mb-2.5 flex items-end justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-400/80">{props.eyebrow}</div>
+            <h2 className="text-lg font-bold tracking-tight text-stone-50">{props.title}</h2>
+          </div>
+          {props.right}
+        </div>
+      );
+    }
+
+    function DashboardPage() {
+      const auth = useAuth();
+      const api = auth.api;
+      const summary = useAsync(function () { return api.get('/dashboard/summary'); }, []);
+      const charts = useAsync(function () { return api.get('/dashboard/charts'); }, []);
+      return (
+        <div className="space-y-7 dr-fade">
+          <BriefingCard />
+          <WeatherPredictRow />
+          <section>
+            <SectionHeader eyebrow="한눈에 보기" title="핵심 지표"
+              right={summary.data ? <span className="text-xs text-stone-500">기준일 {fmtDateMD(summary.data.asOf)}</span> : null} />
+            <KpiGrid state={summary} />
+          </section>
+          <AlertsCard state={summary} />
+          <section>
+            <SectionHeader eyebrow="추이 분석" title="매출·방문객 차트" />
+            <ChartsGrid state={charts} />
+          </section>
+          <NewsRow />
+        </div>
+      );
+    }
+
+    // ========================================
+    // ⭐ 오늘의 카페 브리핑 (GET /briefing) — 스켈레톤 · ?refresh=1
+    // ========================================
+    function BriefingSkeleton() {
+      return (
+        <div className="space-y-4">
+          <Skeleton className="h-8 w-3/4" />
+          <Skeleton className="h-4 w-1/2" />
+          <div className="grid gap-3 md:grid-cols-2">
+            {[0, 1, 2, 3].map(function (i) {
+              return (
+                <div key={i} className="rounded-xl bg-roast-950/50 p-3 ring-1 ring-roast-800">
+                  <Skeleton className="mb-2 h-4 w-1/3" />
+                  <Skeleton className="mb-1.5 h-3 w-full" />
+                  <Skeleton className="mb-1.5 h-3 w-11/12" />
+                  <Skeleton className="h-3 w-2/3" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    function BriefingCard() {
+      const auth = useAuth();
+      const [refreshNonce, setRefreshNonce] = useState(0);
+      const [done, setDone] = useState({});
+      const st = useAsync(function () {
+        return auth.api.get('/briefing' + (refreshNonce > 0 ? '?refresh=1' : ''));
+      }, [refreshNonce]);
+      const refreshing = st.loading && refreshNonce > 0;
+
+      function onRefresh() { setDone({}); setRefreshNonce(function (n) { return n + 1; }); }
+      function toggle(i) { setDone(function (d) { const n = Object.assign({}, d); n[i] = !n[i]; return n; }); }
+
+      const d = st.data;
+      const failed = d && typeof d.headline === 'string' && d.headline.indexOf('실패') >= 0;
+
+      const right = (
+        <div className="flex items-center gap-2">
+          {d && d.cached && !refreshing && <Badge tone="gray">캐시됨</Badge>}
+          <Button size="sm" variant="outline" onClick={onRefresh} loading={refreshing} disabled={st.loading} aria-label="브리핑 새로고침">
+            {refreshing ? '생성 중' : '↻ 새로고침'}
+          </Button>
+        </div>
+      );
+
+      return (
+        <Card eyebrow="⭐ 오늘의 카페 브리핑" title="사장님, 오늘은 이렇게 준비하세요" right={right}
+          className="relative overflow-hidden">
+          <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-amber-500/10 blur-3xl" />
+          {st.loading && !refreshing ? (
+            <BriefingSkeleton />
+          ) : st.error ? (
+            <ErrorState message={st.error} onRetry={onRefresh} />
+          ) : d ? (
+            <div className="relative space-y-4">
+              {failed && (
+                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                  AI 브리핑 생성에는 실패했지만, 아래 날씨·예측·지표는 정상 데이터입니다.
+                </div>
+              )}
+              <h3 className="text-xl font-bold leading-snug tracking-tight text-stone-50 sm:text-2xl">
+                {d.headline || '오늘의 브리핑'}
+              </h3>
+
+              {refreshing ? <BriefingSkeleton /> : (
+                <React.Fragment>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {(d.sections || []).map(function (s, i) {
+                      return (
+                        <div key={i} className="rounded-xl bg-roast-950/50 p-3.5 ring-1 ring-roast-800">
+                          <div className="mb-1.5 text-sm font-semibold text-amber-200">{s.title}</div>
+                          <p className="text-[13px] leading-relaxed text-stone-300 whitespace-pre-line">{s.body}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {Array.isArray(d.actions) && d.actions.length > 0 && (
+                    <div className="rounded-xl border border-sage-500/30 bg-sage-500/5 p-3.5">
+                      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-sage-300">✅ 오늘 조치할 것</div>
+                      <ul className="space-y-1.5">
+                        {d.actions.map(function (a, i) {
+                          const checked = !!done[i];
+                          return (
+                            <li key={i}>
+                              <button onClick={function () { toggle(i); }} className="flex w-full items-start gap-2.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-roast-800/40">
+                                <span className={cx('mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md ring-1 transition-colors', checked ? 'bg-sage-500 text-roast-950 ring-sage-400' : 'bg-roast-900 text-transparent ring-roast-600')}>✓</span>
+                                <span className={cx('text-sm', checked ? 'text-stone-500 line-through' : 'text-stone-200')}>{a}</span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-roast-800 pt-2.5 text-[11px] text-stone-500">
+                    {d.model && <span>모델 {d.model}</span>}
+                    {isNum(d.generatedAt) && <span>· 생성 {timeAgo(d.generatedAt)}</span>}
+                    <span>· {d.cached ? '10분 캐시 응답' : '방금 생성'}</span>
+                  </div>
+                </React.Fragment>
+              )}
+            </div>
+          ) : (
+            <EmptyState icon="☕" title="브리핑이 아직 없습니다." />
+          )}
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 🌦️ 날씨 + 내일 손님수 예측 (baseline vs AI 나란히)
+    // ========================================
+    function WeatherPredictRow() {
+      const auth = useAuth();
+      const weather = useAsync(function () { return auth.api.get('/weather'); }, []);
+      const predict = useAsync(function () { return auth.api.get('/predict/visitors'); }, []);
+      return (
+        <section>
+          <SectionHeader eyebrow="오늘의 날씨" title="날씨 · 내일 손님 예측" />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <WeatherCard state={weather} />
+            <PredictCard state={predict} />
+          </div>
+        </section>
+      );
+    }
+
+    function WeatherCard(props) {
+      const st = props.state;
+      const d = st.data;
+      const cur = d && d.current;
+      return (
+        <Card title="현재 날씨" eyebrow="Open-Meteo">
+          {st.loading ? (
+            <div className="space-y-3"><Skeleton className="h-16 w-full" /><div className="grid grid-cols-3 gap-2">{[0, 1, 2].map(function (i) { return <Skeleton key={i} className="h-20 w-full" />; })}</div></div>
+          ) : st.error ? <ErrorState message={st.error} onRetry={st.reload} /> : d ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-gradient-to-br from-roast-800/60 to-roast-900 p-4 ring-1 ring-roast-700">
+                <div>
+                  <div className="text-4xl font-bold text-stone-50">{cur && isNum(cur.temp) ? cur.temp.toFixed(1) + '°' : '—'}</div>
+                  <div className="mt-1 text-sm text-stone-300">{cur ? cur.desc : ''}</div>
+                  {cur && isNum(cur.precipitation) && cur.precipitation > 0 && (
+                    <div className="mt-0.5 text-xs text-sky-300">강수 {cur.precipitation}mm</div>
+                  )}
+                </div>
+                <div className="text-6xl leading-none">{(cur && cur.icon) || '🌡️'}</div>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {(d.daily || []).slice(0, 3).map(function (day, i) {
+                  return (
+                    <div key={i} className="rounded-xl bg-roast-950/50 p-2.5 text-center ring-1 ring-roast-800">
+                      <div className="text-xs font-semibold text-stone-300">{i === 0 ? '오늘' : day.dayName}</div>
+                      <div className="my-1 text-2xl">{day.icon}</div>
+                      <div className="text-xs">
+                        <span className="font-semibold text-red-300">{isNum(day.tempMax) ? Math.round(day.tempMax) + '°' : '—'}</span>
+                        <span className="text-stone-500"> / {isNum(day.tempMin) ? Math.round(day.tempMin) + '°' : '—'}</span>
+                      </div>
+                      {isNum(day.precipProb) && <div className="mt-0.5 text-[10px] text-sky-400">💧{day.precipProb}%</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : <EmptyState icon="🌦️" title="날씨 정보 없음" />}
+        </Card>
+      );
+    }
+
+    function PredictCard(props) {
+      const st = props.state;
+      const d = st.data;
+      const base = d && d.baseline;
+      const pred = d && d.prediction;
+      const confTone = pred && (pred.confidence === '높음' || pred.confidence === '상') ? 'green' : pred && (pred.confidence === '낮음' || pred.confidence === '하') ? 'red' : 'amber';
+      return (
+        <Card title={d ? ('내일(' + fmtDateMD(d.targetDate) + ' ' + (d.dayName || '') + ') 손님 예측') : '내일 손님 예측'} eyebrow="Baseline + AI 보정">
+          {st.loading ? (
+            <div className="space-y-3"><div className="grid grid-cols-2 gap-3"><Skeleton className="h-24" /><Skeleton className="h-24" /></div><Skeleton className="h-16 w-full" /></div>
+          ) : st.error ? <ErrorState message={st.error} onRetry={st.reload} /> : d ? (
+            <div className="space-y-3.5">
+              <div className="grid grid-cols-2 gap-3">
+                {/* baseline (DB 실적) */}
+                <div className="rounded-xl bg-roast-950/50 p-3 ring-1 ring-roast-800">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-stone-400">실적 기반 (DB)</div>
+                  <div className="mt-1 text-2xl font-bold text-stone-100">{base && isNum(base.avgVisitors) ? Math.round(base.avgVisitors) : '—'}<span className="text-sm font-normal text-stone-400">명</span></div>
+                  <div className="mt-0.5 text-xs text-stone-500">± {base && isNum(base.stdVisitors) ? base.stdVisitors.toFixed(1) : '—'} · n={base ? base.n : '—'}</div>
+                  <div className="mt-1 text-[10px] text-stone-600">{base && base.source}</div>
+                </div>
+                {/* AI 보정 예측 */}
+                <div className="rounded-xl bg-amber-500/10 p-3 ring-1 ring-amber-500/30">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-300">AI 보정 예측</div>
+                    {pred && <Badge tone={confTone}>신뢰도 {pred.confidence}</Badge>}
+                  </div>
+                  <div className="mt-1 text-2xl font-bold text-amber-200">{pred && isNum(pred.expected) ? pred.expected : '—'}<span className="text-sm font-normal text-amber-300/70">명</span></div>
+                  <div className="mt-0.5 text-xs text-amber-300/80">{pred && isNum(pred.low) ? pred.low : '—'} ~ {pred && isNum(pred.high) ? pred.high : '—'}명</div>
+                  {pred && isNum(pred.vsBaselinePct) && <div className="mt-1"><Delta value={pred.vsBaselinePct} /> <span className="text-[10px] text-stone-500">vs 실적</span></div>}
+                </div>
+              </div>
+
+              {d.reasoning && <p className="text-[13px] leading-relaxed text-stone-300">💡 {d.reasoning}</p>}
+
+              {Array.isArray(d.factors) && d.factors.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {d.factors.map(function (f, i) {
+                    const pos = f.effect === '+' || f.effect === '상향';
+                    return <Badge key={i} tone={pos ? 'green' : 'red'}>{pos ? '▲' : '▼'} {f.name}{f.weight ? ' · ' + f.weight : ''}</Badge>;
+                  })}
+                </div>
+              )}
+
+              {/* caveat 는 항상 노출 */}
+              {d.caveat && (
+                <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-200/90">
+                  ⚠️ {d.caveat}
+                </div>
+              )}
+            </div>
+          ) : <EmptyState icon="🔮" title="예측 정보 없음" />}
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 📇 KPI 카드 6개 + 🔔 알림 리스트 (GET /dashboard/summary)
+    // ========================================
+    const KPI_ORDER = ['revenue', 'visitors', 'avgTicket', 'membershipMrr', 'grossMargin', 'inventoryAlerts'];
+    const KPI_ICON = { revenue: '💰', visitors: '🧑‍💻', avgTicket: '🧾', membershipMrr: '🔁', grossMargin: '📈', inventoryAlerts: '📦' };
+    const CMP_LABEL = { vsLastWeek: '전주 동요일', vsDowAvg: '요일 평균', vsDayTypeAvg: '유형 평균', vsPrevMonth: '전월' };
+    const CMP_ORDER = ['vsLastWeek', 'vsDowAvg', 'vsDayTypeAvg', 'vsPrevMonth'];
+
+    function KpiCard(props) {
+      const k = props.kpi;
+      if (!k) return <div className="rounded-2xl bg-roast-900/80 p-4 ring-1 ring-roast-700/60"><Skeleton className="h-24 w-full" /></div>;
+      // 평일/주말은 다른 사업 — 전주 동요일·요일 평균 등 존재하는 비교를 모두 표시
+      const cmps = CMP_ORDER.filter(function (key) { return k[key] && isNum(k[key].deltaPct); });
+      return (
+        <div className="flex flex-col rounded-2xl bg-roast-900/80 p-4 ring-1 ring-roast-700/60 shadow-lg shadow-black/20">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-stone-400">{k.label}</span>
+            <span className="text-base opacity-80">{props.icon}</span>
+          </div>
+          <div className="mt-2 text-2xl font-bold tracking-tight text-stone-50">{fmtKpi(k.value, k.unit)}</div>
+          {k.sub && <div className="mt-1 text-[11px] text-stone-500">{k.sub}</div>}
+          {cmps.length > 0 && (
+            <div className="mt-2 space-y-1 border-t border-roast-800 pt-2">
+              {cmps.map(function (key) {
+                const c = k[key];
+                return (
+                  <div key={key} className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-stone-500">{CMP_LABEL[key]}</span>
+                    <span className="flex items-center gap-1.5">
+                      <Delta value={c.deltaPct} />
+                      <span className="text-[10px] text-stone-600">{fmtKpi(c.prev, k.unit)}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function KpiGrid(props) {
+      const st = props.state;
+      if (st.loading) {
+        return (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            {[0, 1, 2, 3, 4, 5].map(function (i) { return <Skeleton key={i} className="h-[110px]" />; })}
+          </div>
+        );
+      }
+      if (st.error) return <ErrorState message={st.error} onRetry={st.reload} />;
+      const kpis = (st.data && st.data.kpis) || {};
+      return (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          {KPI_ORDER.map(function (key) { return <KpiCard key={key} kpi={kpis[key]} icon={KPI_ICON[key]} />; })}
+        </div>
+      );
+    }
+
+    function AlertsCard(props) {
+      const st = props.state;
+      const alerts = (st.data && st.data.alerts) || [];
+      return (
+        <Card eyebrow="확인 필요" title="알림" right={!st.loading && !st.error ? <Badge tone="roast">{alerts.length}건</Badge> : null}>
+          {st.loading ? (
+            <div className="space-y-2">{[0, 1, 2].map(function (i) { return <Skeleton key={i} className="h-14 w-full" />; })}</div>
+          ) : st.error ? <ErrorState message={st.error} onRetry={st.reload} /> : alerts.length === 0 ? (
+            <EmptyState icon="✅" title="지금은 특별한 알림이 없습니다." hint="모든 지표가 정상 범위입니다." />
+          ) : (
+            <ul className="space-y-2">
+              {alerts.map(function (a, i) {
+                const s = ALERT_STYLE[a.level] || ALERT_STYLE.info;
+                return (
+                  <li key={i} className={cx('flex items-start gap-3 rounded-xl border px-3.5 py-3', s.wrap)}>
+                    <span className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', s.dot)} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={cx('rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset', s.badge)}>{s.label}</span>
+                        <span className="truncate text-sm font-semibold text-stone-100">{a.title}</span>
+                      </div>
+                      {a.detail && <p className="mt-1 text-xs leading-relaxed text-stone-300">{a.detail}</p>}
+                    </div>
+                    {a.level === 'ok' ? (
+                      <span className="shrink-0 self-center text-[11px] font-medium text-sage-400">조치 불필요</span>
+                    ) : a.action ? (
+                      <a href="#/notion" className="shrink-0 self-center rounded-lg bg-roast-800 px-2.5 py-1.5 text-xs font-medium text-amber-200 ring-1 ring-roast-600 hover:bg-roast-700">
+                        {a.action} →
+                      </a>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Card>
+      );
+    }
+
+    // ========================================
+    // 📈 차트 4개 (Chart.js) — cleanup 에서 destroy() 필수 (리렌더 중첩 방지)
+    // ========================================
+    // 다크 테마 전역 기본값 (모듈 로드시 1회)
+    if (window.Chart) {
+      const C = window.Chart;
+      C.defaults.color = '#b9a894';
+      C.defaults.borderColor = 'rgba(255,255,255,0.06)';
+      C.defaults.font.family = "-apple-system, 'Malgun Gothic', 'Noto Sans KR', sans-serif";
+      C.defaults.font.size = 11;
+      C.defaults.maintainAspectRatio = false;
+      C.defaults.plugins.legend.labels.usePointStyle = true;
+      C.defaults.plugins.legend.labels.boxWidth = 8;
+      C.defaults.plugins.legend.labels.padding = 12;
+      C.defaults.plugins.tooltip.backgroundColor = 'rgba(18,13,10,0.95)';
+      C.defaults.plugins.tooltip.borderColor = 'rgba(240,169,43,0.35)';
+      C.defaults.plugins.tooltip.borderWidth = 1;
+      C.defaults.plugins.tooltip.padding = 10;
+      C.defaults.plugins.tooltip.cornerRadius = 8;
+    }
+    const CH = { amber: '#f0a92b', amberFill: 'rgba(240,169,43,0.18)', sage: '#8fb063', sageFill: 'rgba(143,176,99,0.22)', blue: '#6fa8c7', rust: '#d1734a', grid: 'rgba(255,255,255,0.055)' };
+    const CAT_COLOR = { '커피': '#f0a92b', '논커피': '#6fa8c7', '음료': '#6fa8c7', '구움과자': '#8fb063', '디저트': '#8fb063', '세트': '#d1734a', '베이커리': '#8fb063' };
+    function wanCallback(v) { return isNum(v) ? (v >= 10000 ? (Math.round(v / 1000) / 10) + '만' : nf.format(v)) : v; }
+
+    // build() 는 Chart 설정 객체를 반환. deps 변경 시 재생성하며 이전 차트를 destroy 한다.
+    function useChart(build, deps) {
+      const ref = useRef(null);
+      useEffect(function () {
+        if (!ref.current || !window.Chart) return;
+        let chart;
+        try { const cfg = build(); if (cfg) chart = new window.Chart(ref.current, cfg); }
+        catch (e) { /* 렌더 실패해도 앱은 죽지 않게 */ }
+        return function () { if (chart) chart.destroy(); };
+      }, deps || []);
+      return ref;
+    }
+
+    function ChartFrame(props) {
+      if (!props.rows || props.rows.length === 0) return <div className="grid h-56 place-items-center"><EmptyState icon="📉" title="데이터가 없습니다." /></div>;
+      return <div className="relative h-60 sm:h-64"><canvas ref={props.canvasRef} /></div>;
+    }
+
+    // 막대에 ±표준편차 오차막대를 그리는 커스텀 플러그인 (dataset._err 배열을 읽음)
+    const errorBarsPlugin = {
+      id: 'errorBars',
+      afterDatasetsDraw: function (chart) {
+        const ctx = chart.ctx;
+        chart.data.datasets.forEach(function (ds, di) {
+          if (!ds._err) return;
+          const meta = chart.getDatasetMeta(di);
+          const yScale = chart.scales[ds.yAxisID || 'y'];
+          if (!meta || meta.hidden || !yScale) return;
+          ctx.save();
+          ctx.strokeStyle = 'rgba(232,221,206,0.8)';
+          ctx.lineWidth = 1.5;
+          meta.data.forEach(function (el, i) {
+            const err = ds._err[i], val = ds.data[i];
+            if (!isNum(err) || !isNum(val) || err <= 0) return;
+            const x = el.x;
+            const yTop = yScale.getPixelForValue(val + err);
+            const yBot = yScale.getPixelForValue(Math.max(0, val - err));
+            ctx.beginPath();
+            ctx.moveTo(x, yTop); ctx.lineTo(x, yBot);
+            ctx.moveTo(x - 4, yTop); ctx.lineTo(x + 4, yTop);
+            ctx.moveTo(x - 4, yBot); ctx.lineTo(x + 4, yBot);
+            ctx.stroke();
+          });
+          ctx.restore();
+        });
+      }
+    };
+
+    // ④ 월별 평일 vs 주말 일평균 매출 (선) + 총매출(막대, 보조).
+    //    총매출만 보면 6월<5월 이라 오해하지만 평일 일평균은 3개월 연속 성장 — 그 오해를 막는 차트.
+    function MonthlyTrendChart(props) {
+      const rows = props.rows || [];
+      const ref = useChart(function () {
+        return {
+          type: 'bar',
+          data: {
+            labels: rows.map(function (r) { return String(r.month).slice(5).replace(/^0/, '') + '월'; }),
+            datasets: [
+              { type: 'bar', label: '총매출(보조)', data: rows.map(function (r) { return r.totalRevenue; }), backgroundColor: 'rgba(184,168,148,0.16)', borderColor: 'rgba(184,168,148,0.3)', borderWidth: 1, yAxisID: 'y1', order: 3, barPercentage: 0.5, categoryPercentage: 0.7 },
+              { type: 'line', label: '평일 일평균', data: rows.map(function (r) { return r.weekdayAvgRevenue; }), borderColor: CH.amber, backgroundColor: CH.amber, yAxisID: 'y', tension: 0.3, borderWidth: 3, pointRadius: 4, pointBackgroundColor: CH.amber, order: 1 },
+              { type: 'line', label: '주말 일평균', data: rows.map(function (r) { return r.weekendAvgRevenue; }), borderColor: CH.sage, backgroundColor: CH.sage, yAxisID: 'y', tension: 0.3, borderWidth: 3, pointRadius: 4, pointBackgroundColor: CH.sage, borderDash: [5, 3], order: 1 }
+            ]
+          },
+          options: {
+            interaction: { mode: 'index', intersect: false },
+            plugins: { tooltip: { callbacks: { label: function (ctx) { return ctx.dataset.label + ': ' + fmtWon(ctx.parsed.y); } } } },
+            scales: {
+              y: { position: 'left', beginAtZero: true, grid: { color: CH.grid }, ticks: { callback: wanCallback }, title: { display: true, text: '일평균 매출', color: '#9a8672' } },
+              y1: { position: 'right', beginAtZero: true, grid: { display: false }, ticks: { callback: wanCallback, color: 'rgba(184,168,148,0.55)' }, title: { display: true, text: '월 총매출', color: 'rgba(184,168,148,0.55)' } },
+              x: { grid: { display: false } }
+            }
+          }
+        };
+      }, [rows]);
+      return <ChartFrame rows={rows} canvasRef={ref} />;
+    }
+
+    // ② 요일별 방문자(막대 + ±표준편차 오차막대) + 매출(선, 보조축). 일~토 7개.
+    function DayOfWeekChart(props) {
+      const rows = props.rows || [];
+      const ref = useChart(function () {
+        return {
+          type: 'bar',
+          data: {
+            labels: rows.map(function (r) { return r.dayName; }),
+            datasets: [
+              { type: 'bar', label: '평균 방문자', data: rows.map(function (r) { return r.avgVisitors; }), _err: rows.map(function (r) { return isNum(r.stdVisitors) ? r.stdVisitors : 0; }), backgroundColor: CH.amber, borderRadius: 6, barPercentage: 0.62, yAxisID: 'y', order: 2 },
+              { type: 'line', label: '평균 매출', data: rows.map(function (r) { return r.avgRevenue; }), borderColor: CH.sage, backgroundColor: CH.sage, yAxisID: 'y1', tension: 0.3, borderWidth: 2, pointRadius: 3, pointBackgroundColor: CH.sage, order: 1 }
+            ]
+          },
+          options: {
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) {
+                    const r = rows[ctx.dataIndex];
+                    if (ctx.dataset.type === 'bar') return '방문자 평균 ' + Math.round(r.avgVisitors) + '명 (±' + (isNum(r.stdVisitors) ? r.stdVisitors.toFixed(1) : '0') + ', n=' + r.n + ')';
+                    return '매출 평균 ' + fmtWon(r.avgRevenue);
+                  }
+                }
+              }
+            },
+            scales: {
+              y: { position: 'left', beginAtZero: true, grid: { color: CH.grid }, title: { display: true, text: '방문자(명)', color: '#9a8672' } },
+              y1: { position: 'right', beginAtZero: true, grid: { display: false }, ticks: { callback: wanCallback, color: CH.sage }, title: { display: true, text: '매출', color: '#9a8672' } },
+              x: { grid: { display: false } }
+            }
+          },
+          plugins: [errorBarsPlugin]
+        };
+      }, [rows]);
+      return <ChartFrame rows={rows} canvasRef={ref} />;
+    }
+
+    // ① 시간대별 손님 파도 — 평일·주말 2라인. 주말 미영업시간(8·9·20시)은 null → 선을 끊는다(spanGaps:false).
+    function HourlyChart(props) {
+      const rows = props.rows || [];
+      const ref = useChart(function () {
+        return {
+          type: 'line',
+          data: {
+            labels: rows.map(function (r) { return r.hour + '시'; }),
+            datasets: [
+              { label: '평일', data: rows.map(function (r) { return r.weekday; }), borderColor: CH.amber, backgroundColor: CH.amberFill, fill: true, tension: 0.4, pointRadius: 2, pointBackgroundColor: CH.amber, borderWidth: 2, spanGaps: false },
+              { label: '주말', data: rows.map(function (r) { return r.weekend; }), borderColor: CH.blue, backgroundColor: 'rgba(111,168,199,0.14)', fill: true, tension: 0.4, pointRadius: 2, pointBackgroundColor: CH.blue, borderWidth: 2, spanGaps: false }
+            ]
+          },
+          options: {
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { labels: { usePointStyle: true } },
+              tooltip: { callbacks: { label: function (ctx) { return ctx.dataset.label + ' ' + (isNum(ctx.parsed.y) ? ctx.parsed.y.toFixed(1) + '명' : '휴무'); } } }
+            },
+            scales: { y: { beginAtZero: true, grid: { color: CH.grid } }, x: { grid: { display: false } } }
+          }
+        };
+      }, [rows]);
+      return (
+        <React.Fragment>
+          <ChartFrame rows={rows} canvasRef={ref} />
+          {rows.length > 0 && <div className="mt-1.5 text-[11px] text-stone-500">· 주말은 10~19시 영업 — 8·9·20시 휴무 구간은 선을 끊었습니다.</div>}
+        </React.Fragment>
+      );
+    }
+
+    function MenuPerfChart(props) {
+      const rows = props.rows || [];
+      const ref = useChart(function () {
+        const byCat = {};
+        rows.forEach(function (r) { (byCat[r.category] = byCat[r.category] || []).push(r); });
+        const datasets = Object.keys(byCat).map(function (cat) {
+          const col = CAT_COLOR[cat] || CH.amber;
+          return {
+            label: cat,
+            data: byCat[cat].map(function (r) {
+              const rr = isNum(r.revenue) ? Math.max(6, Math.min(26, Math.sqrt(r.revenue) / 110)) : 8;
+              return { x: r.qty, y: r.marginRate, r: rr, _name: r.name, _rev: r.revenue };
+            }),
+            backgroundColor: col + 'cc', borderColor: col
+          };
+        });
+        return {
+          type: 'bubble',
+          data: { datasets: datasets },
+          options: {
+            plugins: {
+              tooltip: { callbacks: { label: function (ctx) { const d = ctx.raw; return d._name + ' · 판매 ' + fmtInt(d.x) + ' · 마진 ' + (isNum(d.y) ? d.y.toFixed(1) : '—') + '% · ' + fmtWon(d._rev); } } }
+            },
+            scales: {
+              x: { title: { display: true, text: '판매량 (잔/개)', color: '#9a8672' }, beginAtZero: true, grid: { color: CH.grid }, ticks: { callback: wanCallback } },
+              y: { title: { display: true, text: '마진율 %', color: '#9a8672' }, grid: { color: CH.grid }, ticks: { callback: function (v) { return v + '%'; } } }
+            }
+          }
+        };
+      }, [rows]);
+      return <ChartFrame rows={rows} canvasRef={ref} />;
+    }
+
+    function ChartsGrid(props) {
+      const st = props.state;
+      if (st.loading) return <div className="grid gap-4 lg:grid-cols-2">{[0, 1, 2, 3].map(function (i) { return <Skeleton key={i} className="h-80" />; })}</div>;
+      if (st.error) return <ErrorState message={st.error} onRetry={st.reload} />;
+      const c = st.data || {};
+      return (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card title="시간대별 손님 파도" subtitle="평일 8~20시 · 주말 10~19시"><HourlyChart rows={c.hourly} /></Card>
+          <Card title="요일별 방문자·매출" subtitle="막대=방문자(±표준편차) · 선=매출"><DayOfWeekChart rows={c.byDayOfWeek} /></Card>
+          <Card title="메뉴 매트릭스" subtitle="x=판매량 · y=마진율 · 크기=매출 · 색=카테고리"><MenuPerfChart rows={c.menuPerf} /></Card>
+          <Card title="월별 평일 vs 주말 일평균" subtitle="선=일평균 매출 · 막대=총매출(보조)"><MonthlyTrendChart rows={c.monthlyTrend} /></Card>
+        </div>
+      );
+    }
+
+    // ========================================
+    // 📰 뉴스 카드 (GET /news)
+    // ========================================
+    function NewsRow() {
+      const auth = useAuth();
+      const st = useAsync(function () { return auth.api.get('/news'); }, []);
+      const items = (st.data && st.data.items) || [];
+      return (
+        <section>
+          <SectionHeader eyebrow="시장 동향" title="알아둘 뉴스"
+            right={st.data && isNum(st.data.generatedAt) ? <span className="text-xs text-stone-500">업데이트 {timeAgo(st.data.generatedAt)}</span> : null} />
+          {st.loading ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map(function (i) { return <Skeleton key={i} className="h-40" />; })}</div>
+          ) : st.error ? <ErrorState message={st.error} onRetry={st.reload} /> : items.length === 0 ? (
+            <Card><EmptyState icon="📰" title="표시할 뉴스가 없습니다." /></Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {items.map(function (it, i) {
+                return (
+                  <article key={i} className="flex flex-col rounded-2xl bg-roast-900/80 p-4 ring-1 ring-roast-700/60 shadow-lg shadow-black/20">
+                    <h3 className="text-[15px] font-semibold leading-snug text-stone-50">{it.title}</h3>
+                    {it.summary && <p className="mt-1.5 text-[13px] leading-relaxed text-stone-300">{it.summary}</p>}
+                    {it.impact && (
+                      <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-400/80">카페에 미치는 영향</div>
+                        <p className="mt-0.5 text-xs leading-relaxed text-amber-100/90">{it.impact}</p>
+                      </div>
+                    )}
+                    <div className="mt-3 flex items-center justify-between border-t border-roast-800 pt-2.5">
+                      <span className="text-[11px] text-stone-500">{it.source || '출처'}</span>
+                      {it.url && (
+                        <a href={it.url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-amber-300 hover:text-amber-200">
+                          원문 보기 ↗
+                        </a>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      );
+    }
+
+    // ========================================
+    // 📄 #/notion — 할일 & 발주 (Notion 양방향, 미연결 시 안내 카드)
+    // ========================================
+    const TODO_STATUS_CYCLE = ['할 일', '진행중', '완료'];
+    const TODO_PRIORITY_OPTS = ['높음', '보통', '낮음'];
+    const TODO_CATEGORY_OPTS = ['운영', '발주', '마케팅', '설비', '멤버십'];
+    const NOTION_ORDER_STATUS_OPTS = ['발주필요', '발주완료', '배송중', '입고완료'];
+    const ORDER_UNIT_OPTS = ['kg', 'L', 'ea'];
+
+    function NotionPage() {
+      const auth = useAuth();
+      const status = useAsync(function () { return auth.api.get('/notion/status'); }, []);
+      const configured = status.data && status.data.configured;
+      return (
+        <div className="space-y-6 dr-fade">
+          <SectionHeader eyebrow="Notion 연동" title="할일 · 발주 메모"
+            right={!status.loading && !status.error ? <Badge tone={configured ? 'green' : 'gray'}>{configured ? '연결됨' : '미연결'}</Badge> : null} />
+          {status.loading ? (
+            <Card><div className="space-y-2">{[0, 1, 2].map(function (i) { return <Skeleton key={i} className="h-12 w-full" />; })}</div></Card>
+          ) : status.error ? (
+            <Card><ErrorState message={status.error} onRetry={status.reload} /></Card>
+          ) : configured ? (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <TodosPanel />
+              <OrdersPanel />
+            </div>
+          ) : (
+            <NotionSetupCard status={status.data} />
+          )}
+        </div>
+      );
+    }
+
+    function NotionSetupCard(props) {
+      const s = props.status || {};
+      const setup = s.setup || s;
+      const steps = setup.steps || [];
+      const parentUrl = setup.parentPageUrl || s.parentPageUrl;
+      return (
+        <Card className="mx-auto max-w-2xl">
+          <div className="text-center">
+            <div className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-sky-500/15 text-3xl ring-1 ring-sky-500/30">🔗</div>
+            <h2 className="text-lg font-bold text-stone-50">아직 Notion과 연결되지 않았습니다</h2>
+            <p className="mt-1.5 text-sm leading-relaxed text-stone-300">
+              할일·발주 메모는 Notion과 양방향으로 동기화됩니다. 아래 3단계를 마치고 서버를 재시작하면 이 화면에서 바로 관리할 수 있어요.
+              <br /><span className="text-xs text-stone-500">(연결 전에도 대시보드의 다른 화면은 정상 동작합니다.)</span>
+            </p>
+          </div>
+          <ol className="mt-5 space-y-3">
+            {steps.map(function (step, i) {
+              return (
+                <li key={i} className="flex gap-3 rounded-xl bg-roast-950/50 p-3.5 ring-1 ring-roast-800">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-amber-500 text-sm font-bold text-roast-950">{i + 1}</span>
+                  <span className="self-center text-[13px] leading-relaxed text-stone-200 break-words">{step}</span>
+                </li>
+              );
+            })}
+          </ol>
+          {parentUrl && (
+            <div className="mt-5 text-center">
+              <a href={parentUrl} target="_blank" rel="noopener noreferrer">
+                <Button variant="primary">Notion 페이지 열기 ↗</Button>
+              </a>
+            </div>
+          )}
+        </Card>
+      );
+    }
+
+    // 상태 순환 토글 버튼 (할 일 → 진행중 → 완료)
+    function TodoStatusToggle(props) {
+      const cur = props.value;
+      const idx = TODO_STATUS_CYCLE.indexOf(cur);
+      const next = TODO_STATUS_CYCLE[(idx + 1) % TODO_STATUS_CYCLE.length];
+      return (
+        <button onClick={function () { props.onChange(next); }} disabled={props.busy}
+          className="inline-flex items-center gap-1 rounded-lg bg-roast-800 px-2 py-1 text-[11px] font-medium text-stone-200 ring-1 ring-roast-600 hover:bg-roast-700 disabled:opacity-50">
+          {props.busy ? <Spinner size={11} /> : <Badge tone={TODO_STATUS[cur] || 'gray'}>{cur}</Badge>}
+          <span className="text-stone-500">→ {next}</span>
+        </button>
+      );
+    }
+
+    function TodosPanel() {
+      const auth = useAuth();
+      const toast = useToast();
+      const st = useAsync(function () { return auth.api.get('/notion/todos'); }, []);
+      const [busyId, setBusyId] = useState(null);
+      const [showAdd, setShowAdd] = useState(false);
+      const items = (st.data && st.data.items) || [];
+
+      async function changeStatus(id, status) {
+        setBusyId(id);
+        try { await auth.api.patch('/notion/todos/' + id, { status: status }); st.reload(); toast('상태를 변경했습니다.', 'ok'); }
+        catch (e) { toast(e.message, 'err'); }
+        finally { setBusyId(null); }
+      }
+
+      return (
+        <Card eyebrow="To-do" title="카페 할일" right={<Button size="sm" variant="primary" onClick={function () { setShowAdd(true); }}>+ 새 할일</Button>}>
+          {st.loading ? (
+            <div className="space-y-2">{[0, 1, 2].map(function (i) { return <Skeleton key={i} className="h-16 w-full" />; })}</div>
+          ) : st.error ? <ErrorState message={st.error} onRetry={st.reload} /> : items.length === 0 ? (
+            <EmptyState icon="📝" title="등록된 할일이 없습니다." hint="오른쪽 위 ‘새 할일’로 추가하세요." />
+          ) : (
+            <ul className="space-y-2.5">
+              {items.map(function (t) {
+                return (
+                  <li key={t.id} className="rounded-xl bg-roast-950/50 p-3 ring-1 ring-roast-800">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className={cx('text-sm font-semibold', t.status === '완료' ? 'text-stone-500 line-through' : 'text-stone-100')}>{t.title}</div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          {t.priority && <Badge tone={TODO_PRIORITY[t.priority] || 'gray'}>{t.priority}</Badge>}
+                          {t.category && <Badge tone="roast">{t.category}</Badge>}
+                          {t.due && <span className="text-[11px] text-stone-500">📅 {fmtDateMD(t.due)}</span>}
+                        </div>
+                        {t.memo && <p className="mt-1.5 text-xs leading-relaxed text-stone-400">{t.memo}</p>}
+                      </div>
+                      {t.url && <a href={t.url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-stone-500 hover:text-amber-300" aria-label="Notion에서 열기">↗</a>}
+                    </div>
+                    <div className="mt-2"><TodoStatusToggle value={t.status} busy={busyId === t.id} onChange={function (s) { changeStatus(t.id, s); }} /></div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <TodoAddModal open={showAdd} onClose={function () { setShowAdd(false); }} onCreated={function () { setShowAdd(false); st.reload(); toast('할일을 추가했습니다.', 'ok'); }} />
+        </Card>
+      );
+    }
+
+    function TodoAddModal(props) {
+      const auth = useAuth();
+      const toast = useToast();
+      const [f, setF] = useState({ title: '', priority: '보통', category: '운영', due: '', memo: '' });
+      const [busy, setBusy] = useState(false);
+      function upd(k, v) { setF(function (p) { const n = Object.assign({}, p); n[k] = v; return n; }); }
+      useEffect(function () { if (props.open) { setF({ title: '', priority: '보통', category: '운영', due: '', memo: '' }); setBusy(false); } }, [props.open]);
+      async function submit() {
+        if (!f.title.trim()) { toast('할일 제목을 입력하세요.', 'err'); return; }
+        setBusy(true);
+        try { await auth.api.post('/notion/todos', { title: f.title.trim(), status: '할 일', priority: f.priority, category: f.category, due: f.due || undefined, memo: f.memo || undefined }); props.onCreated(); }
+        catch (e) { toast(e.message, 'err'); setBusy(false); }
+      }
+      return (
+        <Modal open={props.open} onClose={props.onClose} title="새 할일 추가"
+          footer={<React.Fragment><Button variant="ghost" onClick={props.onClose}>취소</Button><Button variant="primary" onClick={submit} loading={busy} disabled={busy}>추가</Button></React.Fragment>}>
+          <div className="space-y-3">
+            <Field label="할일" value={f.title} onChange={function (e) { upd('title', e.target.value); }} placeholder="예) 케냐 생두 발주 확인" />
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="우선순위" value={f.priority} onChange={function (e) { upd('priority', e.target.value); }} options={TODO_PRIORITY_OPTS} />
+              <Select label="분류" value={f.category} onChange={function (e) { upd('category', e.target.value); }} options={TODO_CATEGORY_OPTS} />
+            </div>
+            <Field label="마감일" type="date" value={f.due} onChange={function (e) { upd('due', e.target.value); }} />
+            <Field label="메모" value={f.memo} onChange={function (e) { upd('memo', e.target.value); }} placeholder="선택 사항" />
+          </div>
+        </Modal>
+      );
+    }
+
+    function OrdersPanel() {
+      const auth = useAuth();
+      const toast = useToast();
+      const st = useAsync(function () { return auth.api.get('/notion/orders'); }, []);
+      const [busyId, setBusyId] = useState(null);
+      const [syncing, setSyncing] = useState(false);
+      const [showAdd, setShowAdd] = useState(false);
+      const items = (st.data && st.data.items) || [];
+
+      async function changeStatus(id, status) {
+        setBusyId(id);
+        try { await auth.api.patch('/notion/orders/' + id, { status: status }); st.reload(); toast('발주 상태를 변경했습니다.', 'ok'); }
+        catch (e) { toast(e.message, 'err'); }
+        finally { setBusyId(null); }
+      }
+      async function syncFromInventory() {
+        setSyncing(true);
+        try {
+          const r = await auth.api.post('/notion/orders/sync-from-inventory', {});
+          const created = (r && r.created) || []; const skipped = (r && r.skipped) || [];
+          st.reload();
+          toast('발주 메모 ' + created.length + '건 생성, ' + skipped.length + '건 건너뜀', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+        finally { setSyncing(false); }
+      }
+
+      return (
+        <Card eyebrow="발주" title="발주 메모"
+          right={<div className="flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={syncFromInventory} loading={syncing} disabled={syncing}>재고에서 생성</Button>
+            <Button size="sm" variant="primary" onClick={function () { setShowAdd(true); }}>+ 새 메모</Button>
+          </div>}>
+          {st.loading ? (
+            <div className="space-y-2">{[0, 1, 2].map(function (i) { return <Skeleton key={i} className="h-16 w-full" />; })}</div>
+          ) : st.error ? <ErrorState message={st.error} onRetry={st.reload} /> : items.length === 0 ? (
+            <EmptyState icon="📦" title="발주 메모가 없습니다." hint="‘재고에서 생성’으로 안전재고 하회 품목을 불러올 수 있어요." />
+          ) : (
+            <ul className="space-y-2.5">
+              {items.map(function (o) {
+                return (
+                  <li key={o.id} className="rounded-xl bg-roast-950/50 p-3 ring-1 ring-roast-800">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-stone-100">{o.item}</div>
+                        <div className="mt-1 text-xs text-stone-400">
+                          {o.supplier && <span>🏢 {o.supplier}</span>}
+                          {isNum(o.qty) && <span className="ml-2">📦 {fmtQty(o.qty)}{o.unit}</span>}
+                          {isNum(o.amount) && <span className="ml-2">💵 {fmtWon(o.amount)}</span>}
+                        </div>
+                        {o.due && <div className="mt-0.5 text-[11px] text-stone-500">📅 발주예정 {fmtDateMD(o.due)}</div>}
+                        {o.memo && <p className="mt-1 text-xs text-stone-400">{o.memo}</p>}
+                      </div>
+                      {o.url && <a href={o.url} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs text-stone-500 hover:text-amber-300" aria-label="Notion에서 열기">↗</a>}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Badge tone={NOTION_ORDER_STATUS[o.status] || 'gray'}>{o.status}</Badge>
+                      <div className="flex items-center gap-1">
+                        {busyId === o.id && <Spinner size={12} />}
+                        <select value={o.status} disabled={busyId === o.id} onChange={function (e) { changeStatus(o.id, e.target.value); }}
+                          className="rounded-lg bg-roast-800 px-2 py-1 text-[11px] text-stone-200 ring-1 ring-roast-600 focus:outline-none focus:ring-1 focus:ring-amber-400">
+                          {NOTION_ORDER_STATUS_OPTS.map(function (s) { return <option key={s} value={s}>{s}</option>; })}
+                        </select>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <OrderAddModal open={showAdd} onClose={function () { setShowAdd(false); }} onCreated={function () { setShowAdd(false); st.reload(); toast('발주 메모를 추가했습니다.', 'ok'); }} />
+        </Card>
+      );
+    }
+
+    function OrderAddModal(props) {
+      const auth = useAuth();
+      const toast = useToast();
+      const [f, setF] = useState({ item: '', supplier: '', qty: '', unit: 'kg', amount: '', due: '', memo: '' });
+      const [busy, setBusy] = useState(false);
+      function upd(k, v) { setF(function (p) { const n = Object.assign({}, p); n[k] = v; return n; }); }
+      useEffect(function () { if (props.open) { setF({ item: '', supplier: '', qty: '', unit: 'kg', amount: '', due: '', memo: '' }); setBusy(false); } }, [props.open]);
+      async function submit() {
+        if (!f.item.trim()) { toast('품목명을 입력하세요.', 'err'); return; }
+        setBusy(true);
+        try {
+          await auth.api.post('/notion/orders', {
+            item: f.item.trim(), status: '발주필요', supplier: f.supplier || undefined,
+            qty: f.qty !== '' ? Number(f.qty) : undefined, unit: f.unit,
+            amount: f.amount !== '' ? Number(f.amount) : undefined, due: f.due || undefined, memo: f.memo || undefined
+          });
+          props.onCreated();
+        } catch (e) { toast(e.message, 'err'); setBusy(false); }
+      }
+      return (
+        <Modal open={props.open} onClose={props.onClose} title="새 발주 메모"
+          footer={<React.Fragment><Button variant="ghost" onClick={props.onClose}>취소</Button><Button variant="primary" onClick={submit} loading={busy} disabled={busy}>추가</Button></React.Fragment>}>
+          <div className="space-y-3">
+            <Field label="품목" value={f.item} onChange={function (e) { upd('item', e.target.value); }} placeholder="예) 케냐 AA 생두" />
+            <Field label="공급처" value={f.supplier} onChange={function (e) { upd('supplier', e.target.value); }} placeholder="예) 딥로스트 로스터리" />
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="수량" type="number" inputMode="decimal" value={f.qty} onChange={function (e) { upd('qty', e.target.value); }} placeholder="6" />
+              <Select label="단위" value={f.unit} onChange={function (e) { upd('unit', e.target.value); }} options={ORDER_UNIT_OPTS} />
+              <Field label="예상금액(원)" type="number" inputMode="numeric" value={f.amount} onChange={function (e) { upd('amount', e.target.value); }} placeholder="192000" />
+            </div>
+            <Field label="발주예정일" type="date" value={f.due} onChange={function (e) { upd('due', e.target.value); }} />
+            <Field label="메모" value={f.memo} onChange={function (e) { upd('memo', e.target.value); }} placeholder="선택 사항" />
+          </div>
+        </Modal>
+      );
+    }
+
+    // ========================================
+    // 📄 #/data — 데이터 관리 (메뉴/재고/발주/멤버십)
+    // ========================================
+    const MENU_CATEGORY_OPTS = ['커피', '논커피', '구움과자', '세트'];
+    const PO_STATUS_OPTS = ['발주완료', '배송중', '입고완료', '취소'];
+    function marginRateOf(price, cost) { return isNum(price) && price > 0 && isNum(cost) ? ((price - cost) / price) * 100 : null; }
+
+    function DataPage() {
+      const [tab, setTab] = useState('menu');
+      const TABS = [['menu', '메뉴'], ['inventory', '재고'], ['orders', '발주'], ['memberships', '멤버십']];
+      return (
+        <div className="space-y-5 dr-fade">
+          <SectionHeader eyebrow="데이터 관리" title="메뉴 · 재고 · 발주 · 멤버십" />
+          <div className="inline-flex gap-1 overflow-x-auto rounded-xl bg-roast-900 p-1 ring-1 ring-roast-700">
+            {TABS.map(function (t) {
+              const active = tab === t[0];
+              return <button key={t[0]} onClick={function () { setTab(t[0]); }}
+                className={cx('whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-colors', active ? 'bg-amber-500 text-roast-950' : 'text-stone-300 hover:text-stone-100')}>{t[1]}</button>;
+            })}
+          </div>
+          {tab === 'menu' ? <MenuTab /> : tab === 'inventory' ? <InventoryTab /> : tab === 'orders' ? <PurchaseOrdersTab /> : <MembershipsTab />}
+        </div>
+      );
+    }
+
+    function TableShell(props) {
+      return (
+        <Card pad={false}>
+          {props.toolbar && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-roast-800 px-4 py-3 sm:px-5">{props.toolbar}</div>}
+          <div className="overflow-x-auto">
+            <table className={cx('w-full text-sm', props.minW || 'min-w-[600px]')}>{props.children}</table>
+          </div>
+        </Card>
+      );
+    }
+    function Th(props) { return <th className={cx('px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-stone-400', props.className)}>{props.children}</th>; }
+    function Td(props) { return <td className={cx('px-3 py-2.5 align-middle text-stone-200', props.className)}>{props.children}</td>; }
+    function LoadingRows(props) {
+      return <tbody>{[0, 1, 2, 3].map(function (i) { return <tr key={i} className="border-t border-roast-800"><td colSpan={props.cols} className="px-3 py-3"><Skeleton className="h-5 w-full" /></td></tr>; })}</tbody>;
+    }
+
+    function MenuTab() {
+      const auth = useAuth();
+      const toast = useToast();
+      const st = useAsync(function () { return auth.api.get('/menu'); }, []);
+      const [editing, setEditing] = useState(null); // null | {} (new) | row
+      const [delTarget, setDelTarget] = useState(null);
+      const [delBusy, setDelBusy] = useState(false);
+      const rows = st.data || [];
+
+      async function doDelete() {
+        if (!delTarget) return;
+        setDelBusy(true);
+        try { await auth.api.del('/menu/' + delTarget.id); setDelTarget(null); st.reload(); toast('메뉴를 삭제했습니다.', 'ok'); }
+        catch (e) { toast(e.message, 'err'); }  // 409 서버 메시지를 그대로 노출
+        finally { setDelBusy(false); }
+      }
+
+      return (
+        <React.Fragment>
+          <TableShell minW="min-w-[640px]"
+            toolbar={<React.Fragment>
+              <span className="text-sm font-semibold text-stone-200">메뉴 {rows.length}개</span>
+              <Button size="sm" variant="primary" onClick={function () { setEditing({}); }}>+ 메뉴 추가</Button>
+            </React.Fragment>}>
+            <thead><tr className="bg-roast-950/40">
+              <Th>메뉴</Th><Th>분류</Th><Th className="text-right">판매가</Th><Th className="text-right">원가</Th><Th className="text-right">마진율</Th><Th className="text-right">관리</Th>
+            </tr></thead>
+            {st.loading ? <LoadingRows cols={6} /> : (
+              <tbody>
+                {rows.length === 0 ? <tr><td colSpan={6}><EmptyState icon="☕" title="메뉴가 없습니다." /></td></tr> : rows.map(function (m) {
+                  const mr = marginRateOf(m.price, m.cost);
+                  return (
+                    <tr key={m.id} className="border-t border-roast-800 hover:bg-roast-800/30">
+                      <Td className="font-medium text-stone-100">{m.name} {m.isSignature && <Badge tone="amber" className="ml-1">시그니처</Badge>}</Td>
+                      <Td><Badge tone="roast">{m.category}</Badge></Td>
+                      <Td className="text-right tabular-nums">{fmtWon(m.price)}</Td>
+                      <Td className="text-right tabular-nums text-stone-400">{fmtWon(m.cost)}</Td>
+                      <Td className="text-right tabular-nums font-semibold text-sage-300">{isNum(mr) ? mr.toFixed(1) + '%' : '—'}</Td>
+                      <Td className="text-right">
+                        <div className="inline-flex gap-1">
+                          <Button size="sm" variant="ghost" onClick={function () { setEditing(m); }}>수정</Button>
+                          <Button size="sm" variant="ghost" className="text-red-300" onClick={function () { setDelTarget(m); }}>삭제</Button>
+                        </div>
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            )}
+          </TableShell>
+          {st.error && <div className="mt-3"><ErrorState message={st.error} onRetry={st.reload} /></div>}
+
+          <MenuFormModal open={!!editing} row={editing} onClose={function () { setEditing(null); }}
+            onSaved={function () { setEditing(null); st.reload(); toast('저장했습니다.', 'ok'); }} />
+
+          <Modal open={!!delTarget} onClose={function () { setDelTarget(null); }} size="sm" title="메뉴 삭제"
+            footer={<React.Fragment><Button variant="ghost" onClick={function () { setDelTarget(null); }}>취소</Button><Button variant="danger" onClick={doDelete} loading={delBusy} disabled={delBusy}>삭제</Button></React.Fragment>}>
+            <p className="text-sm text-stone-300"><b className="text-stone-100">{delTarget && delTarget.name}</b> 메뉴를 삭제할까요?</p>
+            <p className="mt-1 text-xs text-stone-500">판매 이력이 있으면 서버가 삭제를 거절할 수 있습니다.</p>
+          </Modal>
+        </React.Fragment>
+      );
+    }
+
+    function MenuFormModal(props) {
+      const auth = useAuth();
+      const toast = useToast();
+      const isEdit = props.row && props.row.id != null;
+      const [f, setF] = useState({ name: '', category: '커피', price: '', cost: '', isSignature: false });
+      const [busy, setBusy] = useState(false);
+      function upd(k, v) { setF(function (p) { const n = Object.assign({}, p); n[k] = v; return n; }); }
+      useEffect(function () {
+        if (props.open) {
+          const r = props.row || {};
+          setF({ name: r.name || '', category: r.category || '커피', price: r.price != null ? String(r.price) : '', cost: r.cost != null ? String(r.cost) : '', isSignature: !!r.isSignature });
+          setBusy(false);
+        }
+      }, [props.open]);
+      async function submit() {
+        if (!f.name.trim()) { toast('메뉴 이름을 입력하세요.', 'err'); return; }
+        const price = Number(f.price), cost = Number(f.cost);
+        if (!isNum(price) || price < 0) { toast('판매가를 올바르게 입력하세요.', 'err'); return; }
+        if (!isNum(cost) || cost < 0) { toast('원가를 올바르게 입력하세요.', 'err'); return; }
+        setBusy(true);
+        const body = { name: f.name.trim(), category: f.category, price: price, cost: cost, isSignature: f.isSignature };
+        try {
+          if (isEdit) await auth.api.patch('/menu/' + props.row.id, body);
+          else await auth.api.post('/menu', body);
+          props.onSaved();
+        } catch (e) { toast(e.message, 'err'); setBusy(false); }
+      }
+      return (
+        <Modal open={props.open} onClose={props.onClose} title={isEdit ? '메뉴 수정' : '메뉴 추가'}
+          footer={<React.Fragment><Button variant="ghost" onClick={props.onClose}>취소</Button><Button variant="primary" onClick={submit} loading={busy} disabled={busy}>저장</Button></React.Fragment>}>
+          <div className="space-y-3">
+            <Field label="메뉴 이름" value={f.name} onChange={function (e) { upd('name', e.target.value); }} placeholder="예) 시그니처 라떼" />
+            <Select label="분류" value={f.category} onChange={function (e) { upd('category', e.target.value); }} options={MENU_CATEGORY_OPTS} />
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="판매가(원)" type="number" inputMode="numeric" value={f.price} onChange={function (e) { upd('price', e.target.value); }} placeholder="5800" />
+              <Field label="원가(원)" type="number" inputMode="numeric" value={f.cost} onChange={function (e) { upd('cost', e.target.value); }} placeholder="1900" />
+            </div>
+            <label className="flex items-center gap-2 text-sm text-stone-200">
+              <input type="checkbox" checked={f.isSignature} onChange={function (e) { upd('isSignature', e.target.checked); }} className="h-4 w-4 rounded accent-amber-500" />
+              시그니처 메뉴로 표시
+            </label>
+          </div>
+        </Modal>
+      );
+    }
+
+    function InventoryTab() {
+      const auth = useAuth();
+      const st = useAsync(function () { return auth.api.get('/inventory'); }, []);
+      const rows = st.data || [];
+      const lowCount = rows.filter(function (r) { return !!r.shortage; }).length;
+      return (
+        <React.Fragment>
+          <TableShell minW="min-w-[760px]"
+            toolbar={<React.Fragment>
+              <span className="text-sm font-semibold text-stone-200">재고 {rows.length}품목</span>
+              {lowCount > 0 && <Badge tone="red">안전재고 하회 {lowCount}건</Badge>}
+            </React.Fragment>}>
+            <thead><tr className="bg-roast-950/40">
+              <Th>품목</Th><Th>분류</Th><Th className="text-right">현재고</Th><Th className="text-right">안전재고</Th><Th className="text-right">단가</Th><Th>공급처</Th><Th className="text-right">관리</Th>
+            </tr></thead>
+            {st.loading ? <LoadingRows cols={7} /> : (
+              <tbody>
+                {rows.length === 0 ? <tr><td colSpan={7}><EmptyState icon="📦" title="재고 데이터가 없습니다." /></td></tr>
+                  : rows.map(function (r) { return <InventoryRow key={r.id} row={r} onSaved={st.reload} />; })}
+              </tbody>
+            )}
+          </TableShell>
+          {st.error && <div className="mt-3"><ErrorState message={st.error} onRetry={st.reload} /></div>}
+        </React.Fragment>
+      );
+    }
+
+    function InventoryRow(props) {
+      const auth = useAuth();
+      const toast = useToast();
+      const row = props.row;
+      const [edit, setEdit] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [f, setF] = useState({ currentStock: '', safetyStock: '', unitCost: '', supplier: '' });
+      const low = !!row.shortage;
+      function upd(k, v) { setF(function (p) { const n = Object.assign({}, p); n[k] = v; return n; }); }
+      function begin() {
+        setF({ currentStock: String(row.currentStock), safetyStock: String(row.safetyStock), unitCost: String(row.unitCost), supplier: row.supplier || '' });
+        setEdit(true);
+      }
+      async function save() {
+        const cs = Number(f.currentStock), ss = Number(f.safetyStock), uc = Number(f.unitCost);
+        if (!isNum(cs) || cs < 0 || !isNum(ss) || ss < 0 || !isNum(uc) || uc < 0) { toast('재고·단가는 0 이상의 숫자여야 합니다.', 'err'); return; }
+        setBusy(true);
+        try {
+          await auth.api.patch('/inventory/' + row.id, { currentStock: cs, safetyStock: ss, unitCost: uc, supplier: f.supplier });
+          setEdit(false); props.onSaved(); toast(row.itemName + ' 재고를 저장했습니다.', 'ok');
+        } catch (e) { toast(e.message, 'err'); } finally { setBusy(false); }
+      }
+      const cellInput = 'w-20 rounded-lg bg-roast-950 px-2 py-1 text-right text-sm text-stone-100 ring-1 ring-roast-600 focus:outline-none focus:ring-amber-400';
+      return (
+        <tr className={cx('border-t border-roast-800', low ? 'bg-red-500/10' : 'hover:bg-roast-800/30')}>
+          <Td className="font-medium text-stone-100">
+            {low && <span className="mr-1 inline-block h-2 w-2 rounded-full bg-red-500 align-middle" />}
+            {row.itemName} {low && <Badge tone="red" className="ml-1">부족</Badge>}
+          </Td>
+          <Td><span className="text-xs text-stone-400">{row.category}</span></Td>
+          {edit ? (
+            <React.Fragment>
+              <Td className="text-right"><input className={cellInput} type="number" step="0.01" value={f.currentStock} onChange={function (e) { upd('currentStock', e.target.value); }} /></Td>
+              <Td className="text-right"><input className={cellInput} type="number" step="0.01" value={f.safetyStock} onChange={function (e) { upd('safetyStock', e.target.value); }} /></Td>
+              <Td className="text-right"><input className={cellInput} type="number" value={f.unitCost} onChange={function (e) { upd('unitCost', e.target.value); }} /></Td>
+              <Td><input className="w-32 rounded-lg bg-roast-950 px-2 py-1 text-sm text-stone-100 ring-1 ring-roast-600 focus:outline-none focus:ring-amber-400" value={f.supplier} onChange={function (e) { upd('supplier', e.target.value); }} /></Td>
+              <Td className="text-right">
+                <div className="inline-flex gap-1">
+                  <Button size="sm" variant="primary" onClick={save} loading={busy} disabled={busy}>저장</Button>
+                  <Button size="sm" variant="ghost" onClick={function () { setEdit(false); }} disabled={busy}>취소</Button>
+                </div>
+              </Td>
+            </React.Fragment>
+          ) : (
+            <React.Fragment>
+              <Td className={cx('text-right tabular-nums font-semibold', low ? 'text-red-300' : 'text-stone-100')}>{fmtQty(row.currentStock)}<span className="text-xs text-stone-500">{row.unit}</span></Td>
+              <Td className="text-right tabular-nums text-stone-400">{fmtQty(row.safetyStock)}<span className="text-xs">{row.unit}</span></Td>
+              <Td className="text-right tabular-nums text-stone-300">{fmtWon(row.unitCost)}</Td>
+              <Td className="text-xs text-stone-300">{row.supplier}</Td>
+              <Td className="text-right"><Button size="sm" variant="ghost" onClick={begin}>수정</Button></Td>
+            </React.Fragment>
+          )}
+        </tr>
+      );
+    }
+
+    function PurchaseOrdersTab() {
+      const auth = useAuth();
+      const toast = useToast();
+      const st = useAsync(function () { return auth.api.get('/purchase-orders'); }, []);
+      const [busyId, setBusyId] = useState(null);
+      const [showAdd, setShowAdd] = useState(false);
+      const rows = st.data || [];
+      async function changeStatus(id, status) {
+        setBusyId(id);
+        try { await auth.api.patch('/purchase-orders/' + id, { status: status }); st.reload(); toast('발주 상태를 변경했습니다.', 'ok'); }
+        catch (e) { toast(e.message, 'err'); } finally { setBusyId(null); }
+      }
+      return (
+        <React.Fragment>
+          <TableShell minW="min-w-[820px]"
+            toolbar={<React.Fragment>
+              <span className="text-sm font-semibold text-stone-200">발주 {rows.length}건</span>
+              <Button size="sm" variant="primary" onClick={function () { setShowAdd(true); }}>+ 발주 추가</Button>
+            </React.Fragment>}>
+            <thead><tr className="bg-roast-950/40">
+              <Th>발주일</Th><Th>품목</Th><Th className="text-right">수량</Th><Th className="text-right">단가</Th><Th className="text-right">총액</Th><Th>공급처</Th><Th>상태</Th><Th>입고예정</Th>
+            </tr></thead>
+            {st.loading ? <LoadingRows cols={8} /> : (
+              <tbody>
+                {rows.length === 0 ? <tr><td colSpan={8}><EmptyState icon="🧾" title="발주 내역이 없습니다." /></td></tr> : rows.map(function (o) {
+                  return (
+                    <tr key={o.id} className="border-t border-roast-800 hover:bg-roast-800/30">
+                      <Td className="text-xs text-stone-400">{fmtDateMD(o.orderDate)}</Td>
+                      <Td className="font-medium text-stone-100">{o.itemName}</Td>
+                      <Td className="text-right tabular-nums">{fmtQty(o.qty)}</Td>
+                      <Td className="text-right tabular-nums text-stone-400">{fmtWon(o.unitPrice)}</Td>
+                      <Td className="text-right tabular-nums font-semibold">{fmtWon(o.totalCost)}</Td>
+                      <Td className="text-xs text-stone-300">{o.supplier}</Td>
+                      <Td>
+                        <div className="flex items-center gap-1.5">
+                          {busyId === o.id && <Spinner size={12} />}
+                          <select value={o.status} disabled={busyId === o.id} onChange={function (e) { changeStatus(o.id, e.target.value); }}
+                            className="rounded-lg bg-roast-800 px-2 py-1 text-[11px] text-stone-200 ring-1 ring-roast-600 focus:outline-none focus:ring-1 focus:ring-amber-400">
+                            {PO_STATUS_OPTS.map(function (s) { return <option key={s} value={s}>{s}</option>; })}
+                          </select>
+                        </div>
+                      </Td>
+                      <Td className="text-xs text-stone-400">{o.expectedDate ? fmtDateMD(o.expectedDate) : '—'}</Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            )}
+          </TableShell>
+          {st.error && <div className="mt-3"><ErrorState message={st.error} onRetry={st.reload} /></div>}
+          <PurchaseOrderAddModal open={showAdd} onClose={function () { setShowAdd(false); }} onSaved={function () { setShowAdd(false); st.reload(); toast('발주를 추가했습니다.', 'ok'); }} />
+        </React.Fragment>
+      );
+    }
+
+    function PurchaseOrderAddModal(props) {
+      const auth = useAuth();
+      const toast = useToast();
+      const today = todaySeoul();
+      // 서버는 camelCase 키만 읽는다. snake_case 로 보내면 조용히 400 이 난다.
+      const EMPTY = { orderDate: today, itemName: '', supplier: '', qty: '', unitPrice: '', expectedDate: '', status: '발주완료' };
+      const [f, setF] = useState(EMPTY);
+      const [busy, setBusy] = useState(false);
+      function upd(k, v) { setF(function (p) { const n = Object.assign({}, p); n[k] = v; return n; }); }
+      useEffect(function () { if (props.open) { setF(EMPTY); setBusy(false); } }, [props.open]);
+      async function submit() {
+        if (!f.itemName.trim()) { toast('품목명을 입력하세요.', 'err'); return; }
+        if (!f.supplier.trim()) { toast('공급처를 입력하세요.', 'err'); return; }
+        const qty = Number(f.qty), up = Number(f.unitPrice);
+        if (!isNum(qty) || qty <= 0 || !isNum(up) || up < 0) { toast('수량·단가를 올바르게 입력하세요.', 'err'); return; }
+        setBusy(true);
+        try {
+          await auth.api.post('/purchase-orders', {
+            orderDate: f.orderDate, itemName: f.itemName.trim(), supplier: f.supplier.trim(),
+            qty: qty, unitPrice: up, totalCost: Math.round(qty * up), status: f.status,
+            expectedDate: f.expectedDate || undefined
+          });
+          props.onSaved();
+        } catch (e) { toast(e.message, 'err'); setBusy(false); }
+      }
+      return (
+        <Modal open={props.open} onClose={props.onClose} title="발주 추가"
+          footer={<React.Fragment><Button variant="ghost" onClick={props.onClose}>취소</Button><Button variant="primary" onClick={submit} loading={busy} disabled={busy}>추가</Button></React.Fragment>}>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="발주일" type="date" value={f.orderDate} onChange={function (e) { upd('orderDate', e.target.value); }} />
+              <Field label="입고예정일" type="date" value={f.expectedDate} onChange={function (e) { upd('expectedDate', e.target.value); }} />
+            </div>
+            <Field label="품목" value={f.itemName} onChange={function (e) { upd('itemName', e.target.value); }} placeholder="예) 우유" />
+            <Field label="공급처" value={f.supplier} onChange={function (e) { upd('supplier', e.target.value); }} placeholder="예) 서울우유" />
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="수량" type="number" inputMode="decimal" value={f.qty} onChange={function (e) { upd('qty', e.target.value); }} placeholder="40" />
+              <Field label="단가(원)" type="number" inputMode="numeric" value={f.unitPrice} onChange={function (e) { upd('unitPrice', e.target.value); }} placeholder="1250" />
+            </div>
+            <Select label="상태" value={f.status} onChange={function (e) { upd('status', e.target.value); }} options={PO_STATUS_OPTS} />
+          </div>
+        </Modal>
+      );
+    }
+
+    function MembershipsTab() {
+      const auth = useAuth();
+      const toast = useToast();
+      const st = useAsync(function () { return auth.api.get('/memberships'); }, []);
+      const [busyId, setBusyId] = useState(null);
+      const rows = st.data || [];
+      const active = rows.filter(function (r) { return r.status === 'active'; });
+      const mrr = active.reduce(function (s, r) { return s + (isNum(r.monthlyFee) ? r.monthlyFee : 0); }, 0);
+      async function toggleStatus(m) {
+        const next = m.status === 'active' ? 'cancelled' : 'active';
+        setBusyId(m.id);
+        try {
+          await auth.api.patch('/memberships/' + m.id, { status: next, cancelledDate: next === 'cancelled' ? todaySeoul() : null });
+          st.reload(); toast(next === 'cancelled' ? '멤버십을 해지 처리했습니다.' : '멤버십을 활성화했습니다.', 'ok');
+        } catch (e) { toast(e.message, 'err'); } finally { setBusyId(null); }
+      }
+      return (
+        <React.Fragment>
+          <TableShell minW="min-w-[720px]"
+            toolbar={<React.Fragment>
+              <span className="text-sm font-semibold text-stone-200">멤버 {rows.length}명 · 활성 {active.length}명</span>
+              <Badge tone="green">MRR {fmtWon(mrr)}</Badge>
+            </React.Fragment>}>
+            <thead><tr className="bg-roast-950/40">
+              <Th>회원코드</Th><Th>플랜</Th><Th className="text-right">월 구독료</Th><Th>가입일</Th><Th>상태</Th><Th>해지일</Th><Th className="text-right">관리</Th>
+            </tr></thead>
+            {st.loading ? <LoadingRows cols={7} /> : (
+              <tbody>
+                {rows.length === 0 ? <tr><td colSpan={7}><EmptyState icon="🎫" title="멤버십 데이터가 없습니다." /></td></tr> : rows.map(function (m) {
+                  const isActive = m.status === 'active';
+                  return (
+                    <tr key={m.id} className={cx('border-t border-roast-800', isActive ? 'hover:bg-roast-800/30' : 'opacity-70')}>
+                      <Td className="font-mono text-xs text-stone-200">{m.memberCode}</Td>
+                      <Td><Badge tone="roast">{m.plan}</Badge></Td>
+                      <Td className="text-right tabular-nums">{fmtWon(m.monthlyFee)}</Td>
+                      <Td className="text-xs text-stone-400">{fmtDateMD(m.joinedDate)}</Td>
+                      <Td><Badge tone={isActive ? 'green' : 'gray'}>{isActive ? '활성' : '해지'}</Badge></Td>
+                      <Td className="text-xs text-stone-400">{m.cancelledDate ? fmtDateMD(m.cancelledDate) : '—'}</Td>
+                      <Td className="text-right">
+                        <Button size="sm" variant={isActive ? 'ghost' : 'outline'} onClick={function () { toggleStatus(m); }} loading={busyId === m.id} disabled={busyId === m.id} className={isActive ? 'text-red-300' : ''}>
+                          {isActive ? '해지' : '활성화'}
+                        </Button>
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            )}
+          </TableShell>
+          {st.error && <div className="mt-3"><ErrorState message={st.error} onRetry={st.reload} /></div>}
+        </React.Fragment>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+  })();
+  </script>
+</body>
+</html>

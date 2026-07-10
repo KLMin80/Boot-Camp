@@ -1,0 +1,14 @@
+# ⚠️ 비밀키는 절대 업로드하지 않는다. 값은 Vercel 환경변수로만 넣는다.
+.env
+
+# 배포에 불필요한 것들 (함수 번들 크기 절감)
+node_modules
+*.png
+.claude
+API.md
+README.md
+schema.sql
+
+# ⚠️ server.js 와 index.html 은 절대 제외하지 말 것.
+#    server.js = 엔트리포인트 (빠지면 "No entrypoint found")
+#    index.html = GET / 이 sendFile 로 내려주는 유일한 정적 파일 (빠지면 배포 후 404)
