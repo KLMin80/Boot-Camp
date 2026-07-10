@@ -15,3 +15,7 @@ Thumbs.db
 
 # Node dependencies
 node_modules/
+
+# Local scratch / class archives — not part of the repo
+/local-dashboard.png
+week-6/class/afm-weekday-6.zip
