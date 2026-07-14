@@ -12,6 +12,8 @@ Thumbs.db
 .env
 .env.*
 *.env
+# ...but keep the placeholder-only templates (no real values in these)
+!.env.example
 
 # Node dependencies
 node_modules/
