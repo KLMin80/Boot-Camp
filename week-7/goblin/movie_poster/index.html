@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>김부장 이야기 — 팬메이드 포스터 쇼케이스</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+
+<!-- ⚠️ 모든 CDN 은 버전을 명시적으로 고정한다.
+     특히 @babel/standalone 을 고정하지 않으면 8.x 로 올라가면서
+     type="text/babel" 인라인 변환이 통째로 깨져 화면이 백지가 된다. -->
+<script src="https://cdn.tailwindcss.com/3.4.16"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink: { 950: '#07050f', 900: '#0c0918', 800: '#141026', 700: '#1f1936', 600: '#2c2450' },
+          ember: { 300: '#ffd08a', 400: '#ffc46b', 500: '#ffb057', 600: '#f7913a' },
+        },
+        fontFamily: {
+          display: ['Black Han Sans', 'Malgun Gothic', 'sans-serif'],
+          sans: ['Noto Sans KR', 'Malgun Gothic', 'sans-serif'],
+        },
+      },
+    },
+  };
+</script>
+
+<style>
+  html { scroll-behavior: smooth; }
+  body {
+    background-color: #07050f;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: #ffb057; color: #07050f; }
+
+  /* 스크롤바 (다크) */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #0c0918; }
+  ::-webkit-scrollbar-thumb { background: #2c2450; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #443a70; }
+
+  /* 히어로 배경 — 노을빛 광원 */
+  .hero-glow {
+    background:
+      radial-gradient(58% 46% at 50% 42%, rgba(255,150,52,0.22) 0%, rgba(255,150,52,0) 70%),
+      radial-gradient(48% 40% at 82% 8%,  rgba(126,92,255,0.20) 0%, rgba(126,92,255,0) 72%),
+      radial-gradient(50% 42% at 12% 88%, rgba(255,176,87,0.12) 0%, rgba(255,176,87,0) 70%);
+  }
+  /* 포스터가 공중에 떠 있는 느낌 */
+  .poster-float {
+    box-shadow:
+      0 4px 12px rgba(0,0,0,0.5),
+      0 40px 90px -18px rgba(0,0,0,0.85),
+      0 0 120px -30px rgba(255,150,52,0.45);
+  }
+  .film-grain::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    opacity: 0.045; mix-blend-mode: soft-light;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+  }
+
+  /* 인물 핫스팟 */
+  @keyframes hotspot-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(255,176,87,0.55); }
+    70%  { box-shadow: 0 0 0 14px rgba(255,176,87,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,176,87,0); }
+  }
+  .hotspot-on { animation: hotspot-pulse 1.6s ease-out infinite; }
+
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pop-in  { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+  .anim-fade { animation: fade-in 0.22s ease-out both; }
+  .anim-pop  { animation: pop-in 0.26s cubic-bezier(0.22,1,0.36,1) both; }
+</style>
+</head>
+<body class="bg-ink-950 text-slate-200 font-sans">
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ========================================
+// 📦 데이터
+// ========================================
+
+// 포스터 속 좌표(x, y)는 이미지 기준 0~1 비율 — 인물 지도의 핫스팟 위치로 쓴다.
+const CHARACTERS = [
+  {
+    name: '김낙수', actor: '류승룡', group: '타이틀롤',
+    role: 'ACT 영업1팀장 · 25년차 부장',
+    where: '포스터 정중앙 — 옥상 난간 위에서 균형을 잡으며 노란 안전조끼를 깃발처럼 들고 있다. 발치엔 흰 안전모.',
+    x: 0.480, y: 0.300,
+  },
+  {
+    name: '박하진', actor: '명세빈', group: '가족',
+    role: '낙수의 아내 · 주부',
+    where: '왼쪽 — 베이지 카디건 차림으로 난간 위 남편을 올려다본다.',
+    x: 0.144, y: 0.597,
+  },
+  {
+    name: '김수겸', actor: '차강윤', group: '가족',
+    role: "낙수의 아들 · 대학생, 스타트업 'CDO'",
+    where: '왼쪽 — 데님 자켓에 노트북을 든 채 아버지를 본다.',
+    x: 0.269, y: 0.576,
+  },
+  {
+    name: '백정태', actor: '유승목', group: 'ACT 임원·팀장',
+    role: '백상무 · ACT 영업본부장, 27년차',
+    where: '오른쪽 — 은발에 조끼 차림. 낙수를 지켜본다.',
+    x: 0.729, y: 0.605,
+  },
+  {
+    name: '도진우', actor: '이신기', group: 'ACT 임원·팀장',
+    role: '영업2팀장 · 19년차',
+    where: '오른쪽 끝 — 남색 정장, 주머니에 손을 넣은 여유로운 자세.',
+    x: 0.867, y: 0.554,
+  },
+  {
+    name: '송익현', actor: '신동원', group: '영업1팀',
+    role: '영업1팀 과장 · 10년차',
+    where: '하단 — 서류 뭉치를 한아름 안고 있다.',
+    x: 0.189, y: 0.799,
+  },
+  {
+    name: '정성구', actor: '정순원', group: '영업1팀',
+    role: '영업1팀 대리 · 6년차',
+    where: '하단 — 안경을 쓰고 커피를 들고 있다.',
+    x: 0.366, y: 0.791,
+  },
+  {
+    name: '권송희', actor: '하서윤', group: '영업1팀',
+    role: '영업1팀 사원 · 3년차',
+    where: '하단 — 포니테일에 노트북을 안고 있다.',
+    x: 0.507, y: 0.815,
+  },
+];
+
+// 출처가 확인된 스틸컷만 사용한다 (언론사 기사 · 넷플릭스 캡처).
+const STILLS = [
+  { src: 'refs/still-01.jpg',  caption: '사내 계단에서 마주친 김부장과 백상무', credit: '조이뉴스24' },
+  { src: 'refs/still-02.jpg',  caption: '노란 안전조끼 차림으로 공장 구내식당에서 혼밥', credit: '한겨레21' },
+  { src: 'refs/still-04.jpg',  caption: '밤거리에 선 김부장', credit: '오마이스타' },
+  { src: 'refs/still-05.png',  caption: '공장 직원과 마주 앉은 김부장', credit: '넷플릭스 캡처' },
+  { src: 'refs/still-09.jpg',  caption: '아내 박하진과의 포옹', credit: '한겨레21' },
+  { src: 'refs/still-11.jpg',  caption: '팀원들 앞에 선 김부장', credit: '한겨레21' },
+  { src: 'refs/still-12.webp', caption: 'ACT 안전모를 쓰고 공장에 선 김부장', credit: '서울신문' },
+];
+
+// Tailwind CDN 은 런타임에 조립한 클래스명(`bg-${x}-500`)을 못 잡는다.
+// → 완성된 클래스 문자열을 맵으로 들고 있는다.
+const GROUP_STYLE = {
+  '타이틀롤':      'bg-ember-500/20 text-ember-300 ring-ember-400/40',
+  '가족':          'bg-rose-500/15 text-rose-300 ring-rose-400/30',
+  'ACT 임원·팀장': 'bg-sky-500/15 text-sky-300 ring-sky-400/30',
+  '영업1팀':       'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30',
+};
+
+// ========================================
+// 🎨 디자인 시스템 (프레젠테이션 전용)
+// ========================================
+
+function Badge({ children, className = '' }) {
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium leading-none ring-1 ${className}`}>
+      {children}
+    </span>
+  );
+}
+
+function SectionHeading({ eyebrow, title, desc }) {
+  return (
+    <header className="mb-10 sm:mb-12">
+      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.28em] text-ember-500">{eyebrow}</p>
+      <h2 className="font-display text-3xl leading-tight text-white sm:text-4xl">{title}</h2>
+      {desc && <p className="mt-4 max-w-2xl text-sm leading-relaxed text-slate-400 sm:text-base">{desc}</p>}
+    </header>
+  );
+}
+
+/**
+ * 완성된 poster.png 를 보여주되, 아직 캡처 전이라 파일이 없으면
+ * 원본 키아트로 자동 폴백한다.
+ */
+function PosterImage({ className = '', alt }) {
+  const [src, setSrc] = useState('poster.png');
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onError={() => setSrc((s) => (s === 'poster.png' ? 'art/keyart-v1.png' : s))}
+    />
+  );
+}
+
+// ========================================
+// 🧩 히어로
+// ========================================
+
+function Hero() {
+  return (
+    <section className="film-grain relative overflow-hidden border-b border-white/5">
+      <div className="hero-glow absolute inset-0" />
+      <div className="relative mx-auto grid max-w-6xl gap-12 px-6 py-16 sm:py-24 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-center lg:gap-16">
+
+        {/* 좌: 카피 */}
+        <div className="order-2 lg:order-1">
+          <Badge className="bg-white/5 text-slate-300 ring-white/10">팬메이드 · 비공식</Badge>
+
+          <h1 className="mt-6 font-display text-white">
+            <span className="block text-lg tracking-[0.12em] text-slate-300 sm:text-xl">서울 자가에 대기업 다니는</span>
+            <span className="mt-2 block text-5xl leading-[1.05] sm:text-6xl lg:text-7xl">김부장 이야기</span>
+          </h1>
+
+          <p className="mt-7 max-w-md text-[15px] leading-relaxed text-slate-400">
+            노을 지는 서울의 옥상. 25년을 버텨온 부장이 난간 위에 올라 안전조끼를
+            깃발처럼 흔든다. 가족도, 상사도, 팀원도 그를 올려다본다.
+          </p>
+
+          <div className="mt-8 space-y-1.5 border-l-2 border-ember-500/70 pl-5 font-medium text-slate-300">
+            {['대기업에', '집도있고', '차도있고', '다있는데', '가만보니', '내가없네'].map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+            <p className="text-ember-300">골때리네</p>
+          </div>
+
+          <div className="mt-10 flex flex-wrap items-center gap-3">
+            <a
+              href="poster.png" target="_blank" rel="noopener"
+              className="rounded-full bg-ember-500 px-6 py-3 text-sm font-bold text-ink-950 transition hover:bg-ember-400"
+            >
+              포스터 원본 보기 (1200×1800)
+            </a>
+            <a
+              href="poster.html" target="_blank" rel="noopener"
+              className="rounded-full px-6 py-3 text-sm font-medium text-slate-300 ring-1 ring-white/15 transition hover:bg-white/5 hover:text-white"
+            >
+              인쇄용 페이지 열기
+            </a>
+          </div>
+
+          <p className="mt-8 text-xs leading-relaxed text-slate-500">
+            넷플릭스에서 <span className="text-ember-500">10월 26일</span> 공개 · JTBC 토일드라마<br />
+            연출 조현탁 · 극본 김홍기 윤혜성 · 원작 송희구
+          </p>
+        </div>
+
+        {/* 우: 포스터 */}
+        <div className="order-1 lg:order-2">
+          <div className="poster-float mx-auto max-w-sm overflow-hidden rounded-xl ring-1 ring-white/10 lg:max-w-none">
+            <PosterImage
+              alt="김부장 이야기 팬메이드 포스터"
+              className="block w-full"
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ========================================
+// 🧩 등장인물 + 포스터 위치 지도
+// ========================================
+
+function PosterMap({ active, onPick }) {
+  return (
+    <div className="relative overflow-hidden rounded-xl ring-1 ring-white/10">
+      <PosterImage alt="포스터 속 인물 위치" className="block w-full" />
+      <div className="absolute inset-0 bg-ink-950/20" />
+
+      {/* 마커는 '속이 빈 조준링'이다 — 채운 원을 쓰면 정작 가리키려던 얼굴을 덮어버린다. */}
+      {CHARACTERS.map((c, i) => {
+        const on = active === i;
+        return (
+          <button
+            key={c.name}
+            type="button"
+            onClick={() => onPick(on ? null : i)}
+            aria-label={`${c.name} 위치`}
+            aria-pressed={on}
+            className="absolute -translate-x-1/2 -translate-y-1/2"
+            style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%` }}
+          >
+            <span
+              className={
+                'block rounded-full border-2 transition-all duration-200 ' +
+                (on
+                  ? 'hotspot-on h-7 w-7 border-ember-500 bg-ember-500/20'
+                  : 'h-5 w-5 border-white/45 hover:h-7 hover:w-7 hover:border-ember-400')
+              }
+            />
+          </button>
+        );
+      })}
+
+      {active !== null && (
+        <div className="anim-fade pointer-events-none absolute inset-x-0 bottom-0">
+          {/* 포스터 자체의 하단 카피가 비쳐 보이면 글자가 겹쳐 지저분해진다 → 불투명 바 */}
+          <div className="h-10 bg-gradient-to-t from-ink-950 to-transparent" />
+          <div className="bg-ink-950 px-4 pb-4">
+            <p className="font-display text-lg text-white">
+              {CHARACTERS[active].name}
+              <span className="ml-2 text-sm font-normal text-ember-400">{CHARACTERS[active].actor}</span>
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-300">{CHARACTERS[active].where}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CharacterCard({ char, index, active, onHover }) {
+  const on = active === index;
+  return (
+    <article
+      onMouseEnter={() => onHover(index)}
+      onMouseLeave={() => onHover(null)}
+      onFocus={() => onHover(index)}
+      onBlur={() => onHover(null)}
+      onClick={() => onHover(on ? null : index)}
+      tabIndex={0}
+      className={
+        'cursor-pointer rounded-xl border p-5 transition-all duration-200 outline-none ' +
+        (on
+          ? 'border-ember-500/60 bg-ember-500/[0.07] shadow-lg shadow-ember-600/10'
+          : 'border-white/8 bg-white/[0.03] hover:border-white/20')
+      }
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-display text-xl text-white">{char.name}</h3>
+          <p className="mt-0.5 text-sm text-ember-400">{char.actor}</p>
+        </div>
+        <Badge className={GROUP_STYLE[char.group]}>{char.group}</Badge>
+      </div>
+
+      <p className="mt-4 text-sm text-slate-300">{char.role}</p>
+
+      <p className="mt-3 flex gap-2 text-xs leading-relaxed text-slate-500">
+        <span className="mt-px shrink-0 text-ember-500/70">◈</span>
+        <span>{char.where}</span>
+      </p>
+    </article>
+  );
+}
+
+function CharacterSection() {
+  const [active, setActive] = useState(null);
+
+  return (
+    <section id="characters" className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
+      <SectionHeading
+        eyebrow="Characters"
+        title="옥상에 모인 사람들"
+        desc="카드에 마우스를 올리면 포스터 속 위치에 불이 들어옵니다. (모바일에서는 탭)"
+      />
+
+      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-12">
+        <div className="grid gap-4 sm:grid-cols-2">
+          {CHARACTERS.map((c, i) => (
+            <CharacterCard key={c.name} char={c} index={i} active={active} onHover={setActive} />
+          ))}
+        </div>
+
+        <aside className="lg:sticky lg:top-8 lg:self-start">
+          <PosterMap active={active} onPick={setActive} />
+          <p className="mt-3 text-center text-xs text-slate-600">포스터 속 인물 위치</p>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+// ========================================
+// 🧩 스틸컷 갤러리 + 라이트박스
+// ========================================
+
+function Lightbox({ index, onClose, onStep }) {
+  const still = STILLS[index];
+
+  // ESC 닫기 / ←→ 이동 — 언마운트 시 반드시 정리한다.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') onStep(1);
+      else if (e.key === 'ArrowLeft') onStep(-1);
+    };
+    window.addEventListener('keydown', onKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [onClose, onStep]);
+
+  return (
+    <div
+      role="dialog" aria-modal="true" aria-label={still.caption}
+      onClick={onClose}
+      className="anim-fade fixed inset-0 z-50 flex items-center justify-center bg-ink-950/92 p-4 backdrop-blur-sm sm:p-8"
+    >
+      <button
+        type="button" onClick={onClose} aria-label="닫기"
+        className="absolute right-5 top-5 z-10 flex h-10 w-10 items-center justify-center rounded-full text-2xl text-slate-400 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
+      >
+        ×
+      </button>
+
+      <button
+        type="button" aria-label="이전"
+        onClick={(e) => { e.stopPropagation(); onStep(-1); }}
+        className="absolute left-3 z-10 flex h-11 w-11 items-center justify-center rounded-full text-xl text-slate-300 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white sm:left-6"
+      >
+        ‹
+      </button>
+      <button
+        type="button" aria-label="다음"
+        onClick={(e) => { e.stopPropagation(); onStep(1); }}
+        className="absolute right-3 z-10 flex h-11 w-11 items-center justify-center rounded-full text-xl text-slate-300 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white sm:right-6"
+      >
+        ›
+      </button>
+
+      <figure className="anim-pop max-w-5xl" onClick={(e) => e.stopPropagation()}>
+        <img
+          src={still.src} alt={still.caption}
+          className="max-h-[76vh] w-auto rounded-lg ring-1 ring-white/10"
+        />
+        <figcaption className="mt-4 text-center">
+          <p className="text-sm text-slate-200">{still.caption}</p>
+          <p className="mt-1 text-xs text-slate-500">
+            출처 {still.credit} · {index + 1} / {STILLS.length}
+          </p>
+        </figcaption>
+      </figure>
+    </div>
+  );
+}
+
+function Gallery() {
+  const [open, setOpen] = useState(null);
+
+  const step = useCallback((d) => {
+    setOpen((i) => (i === null ? i : (i + d + STILLS.length) % STILLS.length));
+  }, []);
+  const close = useCallback(() => setOpen(null), []);
+
+  return (
+    <section id="stills" className="border-y border-white/5 bg-ink-900/60">
+      <div className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
+        <SectionHeading
+          eyebrow="Reference Stills"
+          title="참고한 실제 스틸컷"
+          desc="포스터를 그릴 때 톤과 상황을 참고한 드라마 스틸입니다. 출처가 확인된 컷만 실었습니다. 클릭하면 크게 볼 수 있습니다."
+        />
+
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
+          {STILLS.map((s, i) => (
+            <button
+              key={s.src}
+              type="button"
+              onClick={() => setOpen(i)}
+              className="group relative aspect-video overflow-hidden rounded-lg ring-1 ring-white/10 transition hover:ring-ember-500/60"
+            >
+              <img
+                src={s.src} alt={s.caption} loading="lazy"
+                className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.04]"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-ink-950/90 via-ink-950/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-3 text-left">
+                <p className="text-[11px] font-medium leading-snug text-slate-100 sm:text-xs">{s.caption}</p>
+                <p className="mt-0.5 text-[10px] text-slate-400">{s.credit}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {open !== null && <Lightbox index={open} onClose={close} onStep={step} />}
+      </div>
+    </section>
+  );
+}
+
+// ========================================
+// 🧩 제작 노트
+// ========================================
+
+function MakingNote() {
+  const notes = [
+    {
+      k: '01',
+      t: '얼굴을 복제하지 않았다',
+      d: '실제 배우의 초상을 그대로 옮기지 않고, 배역의 아키타입(25년차 부장 · 은발의 상무 · 포니테일 신입…)만 살려 그린 오리지널 일러스트입니다.',
+    },
+    {
+      k: '02',
+      t: '아트디렉션만 참고했다',
+      d: '공식 포스터의 방향성 — 노을, 서울 야경, 옥상, 금빛 보케 — 을 참고해 색과 무대를 잡고, 인물 배치와 구도는 새로 설계했습니다.',
+    },
+    {
+      k: '03',
+      t: '타이포는 실제로 얹었다',
+      d: '키아트에는 글자가 한 자도 없습니다. 상단 22%를 하늘 여백으로 비워두고, 그 위에 Black Han Sans 로 제목을 조판해 합성했습니다.',
+    },
+  ];
+
+  return (
+    <section id="notes" className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
+      <SectionHeading eyebrow="Making of" title="제작 노트" />
+
+      <div className="grid gap-5 md:grid-cols-3">
+        {notes.map((n) => (
+          <div key={n.k} className="rounded-xl border border-white/8 bg-white/[0.03] p-6">
+            <span className="font-display text-2xl text-ember-500/40">{n.k}</span>
+            <h3 className="mt-3 font-display text-lg text-white">{n.t}</h3>
+            <p className="mt-3 text-sm leading-relaxed text-slate-400">{n.d}</p>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-10 rounded-xl border border-ember-500/20 bg-ember-500/[0.06] px-6 py-5 text-sm leading-relaxed text-ember-300/90">
+        이 페이지의 포스터는 <b className="font-bold text-ember-300">AI로 생성한 팬메이드 결과물</b>이며 공식 홍보물이 아닙니다.
+        드라마의 저작권은 JTBC · 넷플릭스 및 원저작자에게 있습니다.
+      </p>
+    </section>
+  );
+}
+
+// ========================================
+// 🚀 App
+// ========================================
+
+function App() {
+  return (
+    <>
+      <Hero />
+      <CharacterSection />
+      <Gallery />
+      <MakingNote />
+
+      <footer className="border-t border-white/5 py-10 text-center">
+        <p className="text-xs text-slate-600">
+          AI 생성 팬메이드 포스터 · 공식 홍보물 아님 · 「서울 자가에 대기업 다니는 김부장 이야기」 (2025)
+        </p>
+      </footer>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

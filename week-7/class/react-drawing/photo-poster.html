@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>애플망고 눈꽃빙수 | 포토 포스터</title>
+
+  <!-- ⚠️ 모든 CDN은 버전을 명시적으로 고정한다.
+       미고정 시 @babel/standalone 이 8.x 로 올라가 type="text/babel" 인라인 변환이 통째로 깨진다. -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Noto+Serif+KR:wght@500;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --ink: #0b0806;      /* 먹빛 배경 */
+      --gold: #e0b878;     /* 금박 포인트 */
+      --cream: #f6efe4;    /* 본문 크림 */
+    }
+
+    html, body { height: 100%; }
+    body {
+      background: var(--ink);
+      font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* 페이지 배경의 은은한 온기 */
+    .stage::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(120% 70% at 50% 8%, rgba(224, 184, 120, .10), transparent 60%),
+        radial-gradient(90% 60% at 50% 100%, rgba(245, 165, 36, .07), transparent 65%);
+      pointer-events: none;
+    }
+
+    /* ── 포스터 캔버스: 컨테이너 쿼리 단위(cqw)로 타이포가 항상 비율대로 스케일된다 ── */
+    .poster {
+      container-type: inline-size;
+      font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+    }
+    .t-kicker   { font-size: 2.5cqw;  letter-spacing: .36em; font-weight: 500; }
+    .t-brand    { font-size: 2.5cqw;  letter-spacing: .30em; font-weight: 500; }
+    .t-side     { font-size: 2.1cqw;  letter-spacing: .34em; font-weight: 400; }
+    .t-title    { font-size: 10.4cqw; line-height: .98; font-weight: 700; letter-spacing: -.02em;
+                  font-family: 'Noto Serif KR', 'Batang', serif; }
+    .t-sub      { font-size: 2.95cqw; line-height: 1.6; font-weight: 300; }
+    .t-price    { font-size: 6.8cqw;  font-weight: 700; letter-spacing: -.01em;
+                  font-family: 'Noto Serif KR', 'Batang', serif; }
+    .t-chip     { font-size: 2.4cqw;  letter-spacing: .06em; font-weight: 400; }
+    .t-foot     { font-size: 2.3cqw;  letter-spacing: .08em; font-weight: 400; }
+
+    .pad-x { padding-left: 7cqw; padding-right: 7cqw; }
+
+    /* 인쇄물 질감: 아주 옅은 그레인 */
+    .grain::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: .055;
+      mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+
+    /* 등장 애니메이션 */
+    .rise { opacity: 0; transform: translateY(14px); }
+    .rise-in { opacity: 1; transform: translateY(0); transition: opacity .9s ease, transform .9s cubic-bezier(.2,.7,.2,1); }
+
+    @media (prefers-reduced-motion: reduce) {
+      .rise, .rise-in { opacity: 1 !important; transform: none !important; transition: none !important; }
+      .photo, .parallax { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // React Hooks
+    // ========================================
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ========================================
+    // 🎨 Design System — 순수 표현 컴포넌트 (비즈니스 로직 없음)
+    // ※ text/babel의 top-level 함수는 window 전역이 되므로
+    //    Image / Text / Option 같은 브라우저 내장 전역과 겹치지 않게 명명한다.
+    // ========================================
+
+    /** 금박 헤어라인 */
+    function GoldRule({ className = '', style }) {
+      return (
+        <span
+          className={`block h-px ${className}`}
+          style={{ background: 'linear-gradient(90deg, var(--gold), rgba(224,184,120,.15))', ...style }}
+          aria-hidden="true"
+        />
+      );
+    }
+
+    /** 테두리형 작은 라벨 (한정 수량 등) */
+    function OutlineChip({ children, className = '' }) {
+      return (
+        <span
+          className={`t-chip inline-block rounded-full border px-[2.6cqw] py-[1.1cqw] whitespace-nowrap ${className}`}
+          style={{ borderColor: 'rgba(224,184,120,.45)', color: 'var(--gold)' }}
+        >
+          {children}
+        </span>
+      );
+    }
+
+    /** 포스터 하단 메타 정보 한 조각 */
+    function MetaItem({ children, align = 'left' }) {
+      return (
+        <span className="t-foot" style={{ color: 'rgba(246,239,228,.62)', textAlign: align }}>
+          {children}
+        </span>
+      );
+    }
+
+    /** 포스터 아래 조작 버튼 */
+    function ControlButton({ children, onClick, pressed = false }) {
+      return (
+        <button
+          type="button"
+          onClick={onClick}
+          aria-pressed={pressed}
+          className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs tracking-wider text-[#f6efe4]/75
+                     transition hover:border-[#e0b878]/60 hover:bg-white/10 hover:text-[#e0b878]
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-[#e0b878]/60"
+        >
+          {children}
+        </button>
+      );
+    }
+
+    // ========================================
+    // 🧩 포스터 레이어 — 사진 / 스크림 / 타이포
+    // ========================================
+
+    /** 가독성용 그라디언트 스크림 + 비네트 + 인쇄 프레임 */
+    function PosterScrims({ visible }) {
+      const fade = { opacity: visible ? 1 : 0, transition: 'opacity .6s ease' };
+      return (
+        <>
+          {/* 상단 스크림: 키커·브랜드 가독성 확보 */}
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 h-[27%]"
+            style={{
+              ...fade,
+              background: 'linear-gradient(to bottom, rgba(11,8,6,.94) 0%, rgba(11,8,6,.55) 45%, rgba(11,8,6,0) 100%)',
+            }}
+          />
+          {/* 하단 스크림: 타이포가 앉는 60% 아래를 확실히 눌러주되,
+              주인공인 망고 알갱이 구간(≈35~54%)은 거의 건드리지 않도록 급하게 램프시킨다. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[52%]"
+            style={{
+              ...fade,
+              background:
+                'linear-gradient(to top, rgba(11,8,6,.98) 0%, rgba(11,8,6,.96) 40%, rgba(11,8,6,.90) 65%, rgba(11,8,6,.80) 78%, rgba(11,8,6,.50) 88%, rgba(11,8,6,.18) 96%, rgba(11,8,6,0) 100%)',
+            }}
+          />
+          {/* 비네트 (사진 보정의 일부라 타이포를 꺼도 유지) */}
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ background: 'radial-gradient(105% 78% at 50% 42%, transparent 42%, rgba(11,8,6,.55) 100%)' }}
+          />
+          {/* 인쇄물 느낌의 인셋 헤어라인 */}
+          <div
+            className="pointer-events-none absolute inset-[3.6%] border"
+            style={{ ...fade, borderColor: 'rgba(224,184,120,.22)' }}
+          />
+        </>
+      );
+    }
+
+    /** 포스터 위에 얹는 한국어 타이포그래피 전부 */
+    function PosterTypeLayer({ visible, mounted }) {
+      const step = (i) => ({ transitionDelay: `${260 + i * 130}ms` });
+      const cls = mounted ? 'rise rise-in' : 'rise';
+
+      return (
+        <div
+          className="absolute inset-0 flex flex-col justify-between"
+          style={{ opacity: visible ? 1 : 0, transition: 'opacity .6s ease' }}
+          aria-hidden={!visible}
+        >
+          {/* ── 상단 밴드 ── */}
+          <header className={`pad-x flex items-start justify-between pt-[7cqw] ${cls}`} style={step(0)}>
+            <span className="t-kicker" style={{ color: 'var(--gold)' }}>SUMMER LIMITED</span>
+            <span className="t-brand" style={{ color: 'rgba(246,239,228,.78)' }}>CAFE SEORI</span>
+          </header>
+
+          {/* ── 좌측 세로 레터링 (사진 왼쪽의 어두운 여백에만 얹는다) ── */}
+          <span
+            className={`t-side absolute ${cls}`}
+            style={{
+              ...step(4),
+              left: '3.2%',
+              top: '34%',
+              transform: mounted ? 'translateY(-50%) rotate(180deg)' : 'translateY(-46%) rotate(180deg)',
+              writingMode: 'vertical-rl',
+              color: 'rgba(246,239,228,.4)',
+            }}
+          >
+            APPLE MANGO SNOW BINGSU
+          </span>
+
+          {/* ── 하단 타이포 블록 (망고 알갱이 아래에서 시작하도록 높이를 절제한다) ── */}
+          <footer className="pad-x pb-[6cqw]">
+            <h1
+              className={`t-title ${cls}`}
+              style={{ ...step(2), color: 'var(--cream)', textShadow: '0 2px 24px rgba(0,0,0,.5)' }}
+            >
+              애플망고<br />눈꽃빙수
+            </h1>
+
+            <GoldRule className={`mt-[4cqw] w-[15cqw] ${cls}`} style={step(3)} />
+
+            <p
+              className={`t-sub mt-[3.4cqw] ${cls}`}
+              style={{ ...step(3), color: 'rgba(246,239,228,.76)' }}
+            >
+              제주에서 올라온 완숙 애플망고를 아낌없이 올리고,<br />
+              우유로 얼린 눈꽃 얼음 위에 소복이 담았습니다.
+            </p>
+
+            <div className={`mt-[4.4cqw] flex items-end justify-between gap-[3cqw] ${cls}`} style={step(4)}>
+              <span className="t-price" style={{ color: 'var(--cream)' }}>14,900원</span>
+              <OutlineChip className="mb-[1cqw]">하루 30그릇 한정</OutlineChip>
+            </div>
+
+            <div className={cls} style={step(5)}>
+              <GoldRule className="mt-[4cqw] w-full" style={{ opacity: .45 }} />
+              <div className="mt-[2.8cqw] flex items-center justify-between gap-[3cqw]">
+                <MetaItem>2026. 06. 15 — 08. 31</MetaItem>
+                <MetaItem align="right">매일 11:00 – 22:00 · @cafe.seori</MetaItem>
+              </div>
+            </div>
+          </footer>
+        </div>
+      );
+    }
+
+    /** 풀블리드 사진 + 레이어를 담는 2:3 포스터 프레임 */
+    function PosterFrame({ showType }) {
+      const [mounted, setMounted] = useState(false);
+      const [tilt, setTilt] = useState({ x: 0, y: 0 });
+      const [imgError, setImgError] = useState(false);
+      const frameRef = useRef(null);
+      const interactiveRef = useRef(true);
+
+      useEffect(() => {
+        // 모션 최소화 설정 / 터치 기기에서는 패럴럭스를 끈다
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const fine = window.matchMedia('(pointer: fine)').matches;
+        interactiveRef.current = !reduce && fine;
+
+        const id = requestAnimationFrame(() => setMounted(true));
+        return () => cancelAnimationFrame(id);
+      }, []);
+
+      const handleMove = useCallback((e) => {
+        if (!interactiveRef.current || !frameRef.current) return;
+        const r = frameRef.current.getBoundingClientRect();
+        const x = (e.clientX - r.left) / r.width - 0.5;   // -0.5 ~ 0.5
+        const y = (e.clientY - r.top) / r.height - 0.5;
+        setTilt({ x, y });
+      }, []);
+
+      const handleLeave = useCallback(() => setTilt({ x: 0, y: 0 }), []);
+
+      return (
+        <section
+          ref={frameRef}
+          onMouseMove={handleMove}
+          onMouseLeave={handleLeave}
+          aria-label="애플망고 눈꽃빙수 포스터"
+          className="poster grain relative overflow-hidden rounded-[2px] shadow-[0_40px_120px_-20px_rgba(0,0,0,.85)] ring-1 ring-white/10"
+          style={{ width: 'min(92vw, 520px, 57vh)', aspectRatio: '2 / 3', background: 'var(--ink)' }}
+        >
+          {/* 사진 레이어 (패럴럭스) */}
+          <div
+            className="parallax absolute inset-0"
+            style={{
+              transform: `translate3d(${tilt.x * -10}px, ${tilt.y * -10}px, 0)`,
+              transition: 'transform .5s cubic-bezier(.2,.7,.2,1)',
+            }}
+          >
+            {imgError ? (
+              <div className="flex h-full w-full items-center justify-center px-8 text-center text-sm text-[#f6efe4]/60">
+                사진을 불러오지 못했습니다.<br />images/mango-bingsu.jpg 경로를 확인해 주세요.
+              </div>
+            ) : (
+              <img
+                src="./images/mango-bingsu.jpg"
+                alt="유리볼에 담긴 눈꽃 얼음 위에 완숙 애플망고 큐브가 소복이 올라간 애플망고 눈꽃빙수"
+                onError={() => setImgError(true)}
+                className="photo h-full w-full object-cover"
+                style={{
+                  // 살짝 확대 + 위로 밀어, 망고 알갱이가 하단 타이포 블록 위쪽에 오도록 정렬한다.
+                  // (scale 여유분 덕분에 패럴럭스로 흔들려도 가장자리가 드러나지 않는다)
+                  transform: `scale(${mounted ? 1.1 : 1.18}) translateY(-2.5%)`,
+                  transition: 'transform 1.8s cubic-bezier(.2,.7,.2,1)',
+                  filter: 'contrast(1.06) saturate(1.06)',
+                }}
+              />
+            )}
+          </div>
+
+          <PosterScrims visible={showType} />
+
+          {/* 타이포는 사진과 반대로 아주 살짝 움직여 깊이감을 만든다 */}
+          <div
+            className="parallax absolute inset-0"
+            style={{
+              transform: `translate3d(${tilt.x * 4}px, ${tilt.y * 4}px, 0)`,
+              transition: 'transform .5s cubic-bezier(.2,.7,.2,1)',
+            }}
+          >
+            <PosterTypeLayer visible={showType} mounted={mounted} />
+          </div>
+        </section>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function PhotoPosterApp() {
+      const [showType, setShowType] = useState(true);
+
+      return (
+        <main className="stage relative flex min-h-screen flex-col items-center justify-center gap-6 px-4 py-10">
+          <PosterFrame showType={showType} />
+
+          <div className="relative flex flex-col items-center gap-3">
+            <ControlButton onClick={() => setShowType((v) => !v)} pressed={!showType}>
+              {showType ? '타이포 숨기기 · 사진만 보기' : '타이포 다시 보기'}
+            </ControlButton>
+            <p className="text-center text-[11px] leading-relaxed tracking-wide text-[#f6efe4]/35">
+              사진: fal.ai <span className="text-[#e0b878]/60">flux/dev</span>로 생성 · 포스터 타이포는 코드로 얹음
+            </p>
+          </div>
+        </main>
+      );
+    }
+
+    // ========================================
+    // Rendering
+    // ========================================
+    ReactDOM.createRoot(document.getElementById('root')).render(<PhotoPosterApp />);
+  </script>
+</body>
+</html>

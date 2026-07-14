@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>망고 빙수 — 소복 커피 여름 한정 포스터</title>
+
+  <!-- ⚠️ 모든 CDN은 버전을 명시적으로 고정한다.
+       미고정 시 @babel/standalone 이 8.x로 올라가 type="text/babel" 인라인 변환이 통째로 깨져 백지가 된다.
+       Babel 은 반드시 7.x. React/ReactDOM/Tailwind 도 정확히 핀. -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.9/babel.min.js"></script>
+
+  <!-- 한글 디스플레이 폰트(있으면 사용, 없으면 시스템 폰트로 우아하게 폴백) -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard-dynamic-subset.css">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            paper: '#FFF6E9',                                     // 포스터 종이
+            ink: { DEFAULT: '#2C1B12', soft: '#6B5445', faint: '#A08974' },
+            mango: { light: '#FFD25E', DEFAULT: '#FFAD35', dark: '#EF8A1F', deep: '#C9670F' },
+          },
+          fontFamily: {
+            sans: ['Pretendard Variable', 'Pretendard', 'Apple SD Gothic Neo',
+                   'Malgun Gothic', 'Noto Sans KR', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Cascadia Mono', 'Consolas',
+                   'D2Coding', 'monospace'],
+          },
+          backgroundImage: {
+            // 포스터가 놓인 바닥: 카페 원목 테이블
+            deck: 'radial-gradient(125% 95% at 50% -8%, #71503C 0%, #4E3529 42%, #32211A 100%)',
+          },
+          boxShadow: {
+            poster: '0 1px 2px rgba(0,0,0,.30), 0 28px 64px -20px rgba(0,0,0,.62)',
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* Tailwind 로 표현할 수 없는 것만: SVG 앰비언트 모션.
+       원래 "냉기 줄기"도 있었으나 어디에 두어도 긁힌 자국처럼 읽혀 걷어냈다.
+       움직이는 것은 떠오른 망고 조각 둘뿐 — 절제. */
+    @keyframes bsFloat {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-5px); }
+    }
+
+    .bs-float  { animation: bsFloat 4.6s ease-in-out infinite; }
+    .bs-float2 { animation: bsFloat 6.2s ease-in-out infinite; animation-delay: -2.4s; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .bs-float, .bs-float2 { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // ========================================
+    // 🎨 일러스트 팔레트 — 이 오브젝트 밖에서 색을 만들지 않는다
+    //    망고 3톤 / 얼음 2톤 / 유리 2톤 / 배경 1톤 + 연유·민트
+    // ========================================
+    const BINGSU = {
+      disc:       '#FFE0AE',  // 일러스트 배경 원판 (배경 1톤)
+      snow:       '#FFFFFF',  // 얼음 — 빛 받는 면
+      snowShade:  '#E9F0F6',  // 얼음 — 그늘 (아주 옅은 블루그레이). 진하면 눈이 아니라 때가 된다
+      glass:      '#D3E3EF',  // 유리볼
+      glassShade: '#BCD3E3',  // 유리볼 그늘
+      mangoLight: '#FFD25E',  // 큐브 윗면
+      mangoMid:   '#FFAD35',  // 큐브 왼쪽 면
+      mangoDark:  '#EF8A1F',  // 큐브 오른쪽 면
+      milk:       '#FFE4B0',  // 연유 (흰 얼음 위에서도 읽히도록 따뜻하게)
+      mint:       '#45A06B',
+      mintDeep:   '#2E7F52',
+      cast:       '#F3DFC2',  // 종이에 드리운 그림자
+    };
+
+    // ── 실루엣 원본 좌표 (clipPath 와 본체가 같은 path 를 공유한다) ─────────────
+    // 눈꽃 얼음 더미.
+    //
+    // 밑변(96,314)→(302,314) 에서 봉우리까지 "원뿔"로 세운 9개 꼭짓점을,
+    // 매 구간 바깥으로 부푼 원호(A)로 이어 만든다.
+    // 반경은 각 구간의 sagitta(= 바깥으로 부푼 높이)가 10~13px 로 고르게 나오도록 계산했다.
+    // 옆면이 공처럼 불룩하면 솜뭉치로 읽히므로, 옆구리는 곧게 세우고 로브로만 부풀린다.
+    // 봉우리는 일부러 중앙(200)이 아닌 x≈218 에 두어 손으로 퍼 담은 티를 낸다.
+    // 밑선은 아래로 불룩(y≈328)해서 그릇 림(y=300)을 덮는다 = 그릇 "안에" 담긴 읽기.
+    const ICE_PATH =
+      'M 96 314 ' +
+      'A 54 54 0 0 1 108 250 ' +  // 왼쪽 옆구리 (곧게)
+      'A 43 43 0 0 1 128 194 ' +
+      'A 33 33 0 0 1 156 150 ' +
+      'A 31 31 0 0 1 196 120 ' +
+      'A 26 26 0 0 1 240 118 ' +  // 봉우리 (x≈218, y≈107)
+      'A 26 26 0 0 1 272 148 ' +
+      'A 36 36 0 0 1 292 200 ' +
+      'A 40 40 0 0 1 300 256 ' +  // 오른쪽 옆구리
+      'A 47 47 0 0 1 302 314 ' +
+      'C 262 330 138 330 96 314 Z';
+
+    // 유리볼 몸통: 얼음 덩어리를 받칠 만큼 넉넉한 사발. 림(y=300) → 바닥(200,386)
+    const BOWL_PATH = 'M 100 300 C 100 352 144 386 200 386 C 256 386 300 352 300 300 Z';
+
+    // ========================================
+    // 🧊 일러스트 부품 (순수 도형 — 비즈니스 로직 없음)
+    // ========================================
+
+    /**
+     * 2.5D 망고 큐브. 윗면/왼쪽면/오른쪽면 3톤으로 입체를 만든다.
+     * 애니메이션은 반드시 바깥 <g> 의 className 으로만 건다 —
+     * CSS transform 은 SVG transform 속성을 덮어써서, 같은 <g>에 걸면 배치가 날아간다.
+     */
+    function ArtMangoCube({ x, y, size = 16, rot = 0, wrap = '' }) {
+      const w = size;            // 윗면 반너비
+      const d = size * 0.52;     // 윗면 반높이 (아이소메트릭 압축)
+      const h = size * 0.94;     // 옆면 높이
+      const top   = `M 0 0 L ${w} ${d} L 0 ${2 * d} L ${-w} ${d} Z`;
+      const left  = `M ${-w} ${d} L 0 ${2 * d} L 0 ${2 * d + h} L ${-w} ${d + h} Z`;
+      const right = `M 0 ${2 * d} L ${w} ${d} L ${w} ${d + h} L 0 ${2 * d + h} Z`;
+      return (
+        <g className={wrap}>
+          <g transform={`translate(${x} ${y}) rotate(${rot} 0 ${d + h / 2})`}>
+            <path d={left}  fill={BINGSU.mangoMid} />
+            <path d={right} fill={BINGSU.mangoDark} />
+            <path d={top}   fill={BINGSU.mangoLight} />
+          </g>
+        </g>
+      );
+    }
+
+    /** 납작하게 누운 망고 조각. 큐브 사이사이를 메워 "쌓인" 느낌을 만든다. */
+    function ArtMangoChip({ x, y, w = 13, h = 9, rot = 0, fill }) {
+      return (
+        <rect
+          x={-w / 2} y={-h / 2} width={w} height={h} rx="2.5"
+          fill={fill || BINGSU.mangoMid}
+          transform={`translate(${x} ${y}) rotate(${rot})`}
+        />
+      );
+    }
+
+    /** 민트잎 한 장 — 잎면 + 중앙 잎맥. */
+    function ArtMintLeaf({ x, y, rot = 0, scale = 1 }) {
+      return (
+        <g transform={`translate(${x} ${y}) rotate(${rot}) scale(${scale})`}>
+          <path d="M 0 0 C 10 -21 33 -25 46 -9 C 33 7 11 10 0 0 Z" fill={BINGSU.mint} />
+          <path d="M 2 -1 C 15 -6 31 -9 43 -9"
+                stroke={BINGSU.mintDeep} strokeWidth="1.6" strokeLinecap="round" fill="none" />
+        </g>
+      );
+    }
+
+    // ========================================
+    // 🍧 망고 빙수 일러스트 (포스터의 주인공)
+    //    쌓는 순서 = 실제로 만드는 순서:
+    //    원판 → 냉기 → 바닥그림자 → 유리볼 → 눈꽃얼음 → 얼음그늘 → 연유 → 망고 → 민트
+    // ========================================
+    function SnowBowlArt() {
+      return (
+        <svg
+          viewBox="36 40 328 406"
+          preserveAspectRatio="xMidYMid meet"
+          className="block h-full w-full"
+          role="img"
+          aria-labelledby="bs-title bs-desc"
+        >
+          <title id="bs-title">망고 빙수 일러스트</title>
+          <desc id="bs-desc">
+            유리볼에 눈꽃처럼 곱게 간 우유얼음을 수북이 담고, 그 위에 망고 큐브를 얹은 뒤
+            연유를 흘려 내리고 민트잎 한 장을 올린 그림.
+          </desc>
+
+          <defs>
+            {/* 얼음·유리볼 밖으로 색이 새지 않도록 본체와 같은 path 로 클리핑 */}
+            <clipPath id="bsIceClip"><path d={ICE_PATH} /></clipPath>
+            <clipPath id="bsBowlClip"><path d={BOWL_PATH} /></clipPath>
+          </defs>
+
+          {/* 배경 원판 (배경 1톤) */}
+          <circle cx="200" cy="204" r="158" fill={BINGSU.disc} />
+
+          {/* 종이 위에 드리운 그림자 — 포스터에 "놓인" 물체로 만든다 */}
+          <ellipse cx="200" cy="432" rx="112" ry="12" fill={BINGSU.cast} />
+
+          {/* 유리볼: 몸통 + 기둥 + 굽. 같은 색이라 하나의 실루엣으로 합쳐진다 */}
+          <g fill={BINGSU.glass}>
+            <path d={BOWL_PATH} />
+            <path d="M 190 384 L 210 384 L 214 408 L 186 408 Z" />
+            <ellipse cx="200" cy="414" rx="54" ry="11" />
+          </g>
+          <g clipPath="url(#bsBowlClip)">
+            {/* 왼쪽 하이라이트 / 오른쪽 아래 그늘 → 유리의 두께감 */}
+            <path d="M 112 306 C 98 350 112 384 150 402 C 126 376 116 344 124 306 Z"
+                  fill={BINGSU.snow} opacity="0.55" />
+            <path d="M 290 294 C 296 348 254 392 194 400 L 344 400 L 344 294 Z"
+                  fill={BINGSU.glassShade} />
+          </g>
+
+          {/* 눈꽃 얼음 더미 */}
+          <path d={ICE_PATH} fill={BINGSU.snow} />
+
+          {/* 얼음 그늘 (빛은 왼쪽 위에서).
+              경계선을 실루엣과 나란한 곡선으로 둬야 "접힌 자국"이 아니라 입체로 읽힌다.
+              폭은 20px 안팎으로 얇게 — 넓게 칠하면 흰 눈이 회색 덩어리가 된다.
+              ① 오른쪽 면을 따라 도는 초승달  ② 그릇에 잠긴 아랫단 */}
+          <g clipPath="url(#bsIceClip)" fill={BINGSU.snowShade}>
+            <path d="M 224 128 C 254 156 276 200 284 252 C 288 292 282 316 274 336 L 350 340 L 350 96 Z" />
+            <path d="M 84 296 C 140 320 260 320 316 296 L 316 344 L 84 344 Z" />
+          </g>
+
+          {/* 망고가 얼음에 내려앉은 접지 그림자 — 조각이 얹힌 게 아니라 "박혀" 보이게 */}
+          <g clipPath="url(#bsIceClip)" fill={BINGSU.snowShade}>
+            <ellipse cx="203" cy="198" rx="26" ry="6" />
+            <ellipse cx="163" cy="200" rx="20" ry="5" />
+            <ellipse cx="254" cy="194" rx="21" ry="5" />
+            <ellipse cx="180" cy="216" rx="18" ry="4.5" />
+            <ellipse cx="228" cy="220" rx="18" ry="4.5" />
+            <ellipse cx="146" cy="230" rx="17" ry="4.5" />
+            <ellipse cx="268" cy="228" rx="18" ry="4.5" />
+            <ellipse cx="284" cy="252" rx="16" ry="4.5" />
+          </g>
+
+          {/* 연유 드리즐 — 망고 더미 밑에서 새어 나와 얼음을 타고 흐른다.
+              큐브보다 먼저 그려서 조각 사이로 비치게 한다.
+              줄기 끝(circle)을 크게 잡으면 "머리 달린 국수"가 된다.
+              → 끝은 획 반지름보다 1~2px만 부풀려 살짝 맺히게 하고,
+                떨어지는 물방울은 사이를 띄워 따로 둔다. */}
+          <g clipPath="url(#bsIceClip)" fill={BINGSU.milk}>
+            <path d="M 150 176 C 138 202 148 224 135 246"
+                  stroke={BINGSU.milk} strokeWidth="11" strokeLinecap="round" fill="none" />
+            <circle cx="135" cy="248" r="7" />
+            <circle cx="134" cy="263" r="4.5" />
+
+            <path d="M 202 188 C 191 214 207 232 197 254"
+                  stroke={BINGSU.milk} strokeWidth="11.5" strokeLinecap="round" fill="none" />
+            <circle cx="197" cy="256" r="7.5" />
+            <circle cx="196" cy="272" r="5" />
+
+            <path d="M 252 180 C 266 206 254 226 269 250"
+                  stroke={BINGSU.milk} strokeWidth="10.5" strokeLinecap="round" fill="none" />
+            <circle cx="269" cy="252" r="7" />
+            <circle cx="271" cy="267" r="4.5" />
+          </g>
+
+          {/* 얼음 끝을 넘어 유리볼 바깥으로 한 줄기 */}
+          <g fill={BINGSU.milk}>
+            <path d="M 141 316 C 137 332 145 342 142 352"
+                  stroke={BINGSU.milk} strokeWidth="7" strokeLinecap="round" fill="none" />
+            <circle cx="142" cy="359" r="6.5" />
+          </g>
+
+          {/* 망고 큐브 — 크게, 겹쳐서. 뒤(y 작은 것)부터 앞으로 그려야 더미로 읽힌다.
+              뒷줄 2 → 봉우리의 큰 놈 1 → 어깨 2 → 앞으로 흘러내린 4 → 옆구리로 구른 1.
+              더미 10개 + 떠오른 2개 = 12개. 명세표의 "12 CUBES" 와 실제로 맞춘다. */}
+          <ArtMangoCube x={230} y={128} size={18} rot={9} />
+          <ArtMangoCube x={176} y={138} size={18} rot={-8} />
+          <ArtMangoCube x={203} y={148} size={24} rot={2} />
+          <ArtMangoCube x={254} y={156} size={18} rot={11} />
+          <ArtMangoCube x={163} y={164} size={17} rot={-13} />
+          <ArtMangoCube x={180} y={182} size={16} rot={-5} />
+          <ArtMangoCube x={228} y={186} size={16} rot={7} />
+          <ArtMangoCube x={268} y={194} size={16} rot={14} />
+          <ArtMangoCube x={146} y={198} size={15} rot={-16} />
+          <ArtMangoCube x={284} y={222} size={14} rot={17} />
+
+          {/* 납작한 조각 — 큐브만 있으면 딱딱하다. 옆구리로 굴러떨어진 모양 */}
+          <ArtMangoChip x={160} y={238} w={11} h={8}  rot={10}  fill={BINGSU.mangoMid} />
+          <ArtMangoChip x={242} y={234} w={11} h={8}  rot={-12} fill={BINGSU.mangoLight} />
+          <ArtMangoChip x={126} y={236} w={14} h={10} rot={-18} fill={BINGSU.mangoLight} />
+          <ArtMangoChip x={216} y={262} w={13} h={9}  rot={8}   fill={BINGSU.mangoMid} />
+
+          {/* 민트잎 한 장 — 큐브 위에 얹혀 실루엣 밖으로 삐죽 */}
+          <ArtMintLeaf x={244} y={146} rot={-40} scale={0.92} />
+
+          {/* 떠오른 망고 조각 두 개 (앰비언트 모션) */}
+          <ArtMangoCube x={318} y={130} size={12} rot={18}  wrap="bs-float" />
+          <ArtMangoCube x={78}  y={150} size={11} rot={-16} wrap="bs-float2" />
+        </svg>
+      );
+    }
+
+    // ========================================
+    // 📄 포스터 콘텐츠
+    //    구성표는 위에서 아래로 = 빙수를 실제로 쌓은 단면 순서.
+    //    일러스트에서 시작된 층이 활자로 그대로 이어진다.
+    // ========================================
+    const LAYERS = [
+      { name: '연유', note: '마지막에 한 바퀴, 진하게', spec: '18g' },
+      { name: '망고', note: '제주 애플망고, 큐브로',   spec: '12 CUBES' },
+      { name: '얼음', note: '우유를 얼려 곱게 갈아',   spec: '0.1mm' },
+    ];
+
+    function PosterSheet() {
+      return (
+        <article className="flex aspect-[2/3] w-full min-w-0 max-w-[560px] overflow-hidden rounded-[3px] bg-paper p-7 shadow-poster sm:p-9">
+          {/* 본문 단 */}
+          <div className="flex min-w-0 flex-1 flex-col">
+
+            {/* 매장 */}
+            <header className="flex items-start justify-between">
+              <div>
+                <p className="text-[17px] font-extrabold leading-none text-ink">소복</p>
+                <p className="mt-1.5 font-mono text-[8px] leading-none tracking-[0.3em] text-ink-faint">
+                  SOBOK COFFEE
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 pt-0.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-mango-dark" aria-hidden="true" />
+                <span className="text-[11px] font-semibold text-mango-deep">여름 한정</span>
+              </div>
+            </header>
+
+            {/* 헤드라인 */}
+            <div className="mt-5">
+              <h1 className="text-[clamp(46px,12vw,80px)] font-black leading-[0.92] tracking-[-0.035em] text-ink">
+                망고 빙수
+              </h1>
+              <p className="mt-3 font-mono text-[9px] tracking-[0.34em] text-ink-faint">
+                MANGO SNOW BINGSU
+              </p>
+            </div>
+
+            {/* 주인공.
+                SVG 를 flex 아이템으로 두면 min-width:auto 가 viewBox 고유 너비(328px)를
+                최소 너비로 깔아버려 좁은 화면에서 포스터가 통째로 밀려 나간다.
+                블록으로 두고 w/h-full 로만 채운다. */}
+            <div className="min-h-0 min-w-0 flex-1 py-1">
+              <SnowBowlArt />
+            </div>
+
+            {/* 구성 — 명세표 */}
+            <section aria-label="구성" className="border-t border-ink/15">
+              {LAYERS.map((layer) => (
+                <div key={layer.name}
+                     className="flex items-baseline gap-3 border-b border-ink/15 py-2">
+                  <span className="w-9 shrink-0 text-[14px] font-bold text-ink">{layer.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-soft">{layer.note}</span>
+                  <span className="shrink-0 font-mono text-[10px] tracking-[0.14em] text-ink-faint tabular-nums">
+                    {layer.spec}
+                  </span>
+                </div>
+              ))}
+            </section>
+
+            {/* 가격 · 기간 */}
+            <footer className="mt-4 flex items-end justify-between">
+              <div>
+                <p className="font-mono text-[26px] font-semibold leading-none text-ink tabular-nums">
+                  ₩ 12,500
+                </p>
+                <p className="mt-1.5 text-[10px] text-ink-faint">2인 기준</p>
+              </div>
+              <div className="text-right">
+                <p className="font-mono text-[12px] tracking-[0.12em] text-ink tabular-nums">
+                  6.20 — 8.31
+                </p>
+                <p className="mt-1.5 text-[10px] text-ink-faint">하루 40그릇, 소진 시 마감</p>
+              </div>
+            </footer>
+          </div>
+
+          {/* 오른쪽 여백에 세로로 눕힌 판권 */}
+          <div className="flex w-5 shrink-0 items-end justify-center">
+            <p className="rotate-180 whitespace-nowrap font-mono text-[8px] tracking-[0.3em] text-ink-faint [writing-mode:vertical-rl]">
+              SOBOK COFFEE · SEONGSU · SUMMER 2026
+            </p>
+          </div>
+        </article>
+      );
+    }
+
+    // ========================================
+    // 🚀 App
+    // ========================================
+    function PosterApp() {
+      return (
+        <main className="flex min-h-screen w-full items-center justify-center bg-deck p-6 antialiased sm:p-10">
+          <PosterSheet />
+        </main>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<PosterApp />);
+  </script>
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>서울 자가에 대기업 다니는 김부장 이야기 — 팬메이드 포스터</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  /* ========================================
+     1200 x 1800 인쇄용 포스터 — 여백/스크롤/크롬 없음
+     ======================================== */
+  html, body {
+    margin: 0; padding: 0;
+    width: 1200px; height: 1800px;
+    overflow: hidden;
+    background: #000;
+  }
+  * { box-sizing: border-box; }
+
+  .poster {
+    position: relative;
+    width: 1200px; height: 1800px;
+    overflow: hidden;
+    background: #0b0718;
+    font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+  }
+
+  /* ---------- 키아트 ---------- */
+  .art {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    object-position: center center;
+    display: block;
+  }
+
+  /* ---------- 가독성 스크림 ---------- */
+  .scrim-top, .scrim-bottom, .scrim-left, .vignette, .grain {
+    position: absolute; pointer-events: none;
+  }
+  .scrim-top {
+    top: 0; left: 0; right: 0; height: 580px;
+    background: linear-gradient(180deg,
+      rgba(9,6,28,0.86) 0%,
+      rgba(9,6,28,0.68) 26%,
+      rgba(9,6,28,0.38) 56%,
+      rgba(9,6,28,0.12) 80%,
+      rgba(9,6,28,0.00) 100%);
+  }
+  /* 하단 크레딧 블록 바닥: 영업1팀 얼굴(y≈1400~1490)은 살리고
+     텍스트가 놓이는 y≈1580 아래부터 급격히 어두워지도록 램프 */
+  .scrim-bottom {
+    bottom: 0; left: 0; right: 0; height: 470px;
+    background: linear-gradient(0deg,
+      rgba(4,3,12,0.94) 0%,
+      rgba(4,3,12,0.88) 18%,
+      rgba(4,3,12,0.66) 40%,
+      rgba(4,3,12,0.26) 66%,
+      rgba(4,3,12,0.00) 100%);
+  }
+  /* 좌측 카피 바탕: 사각형 + 가로 그라데이션이면 위/아래에 하드 엣지(줄)가
+     생긴다. 타원형 radial 로 사방을 부드럽게 페이드시킨다. */
+  .scrim-left {
+    top: 0; left: 0; width: 640px; height: 100%;
+    background: radial-gradient(ellipse 520px 470px at 0% 41%,
+      rgba(9,6,26,0.62) 0%,
+      rgba(9,6,26,0.36) 46%,
+      rgba(9,6,26,0.00) 100%);
+  }
+  .vignette {
+    inset: 0;
+    background: radial-gradient(130% 92% at 50% 44%,
+      rgba(0,0,0,0) 52%,
+      rgba(0,0,0,0.28) 100%);
+  }
+  .grain {
+    inset: 0;
+    opacity: 0.05;
+    mix-blend-mode: soft-light;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/></filter><rect width='180' height='180' filter='url(%23n)'/></svg>");
+  }
+
+  /* ---------- 제목 ---------- */
+  .title-block {
+    position: absolute;
+    top: 72px; left: 60px; right: 60px;
+    text-align: center;
+  }
+  .kicker {
+    margin: 0 0 18px;
+    font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+    font-weight: 700;
+    font-size: 42px;
+    letter-spacing: 0.085em;
+    color: rgba(255,255,255,0.93);
+    text-shadow:
+      0 2px 10px rgba(0,0,0,0.70),
+      0 0 26px rgba(0,0,0,0.45);
+  }
+  .title {
+    display: inline-block;
+    margin: 0;
+    white-space: nowrap;
+    font-family: 'Black Han Sans', 'Malgun Gothic', sans-serif;
+    font-weight: 400;      /* Black Han Sans는 단일 웨이트(400)가 이미 초굵기 */
+    font-size: 158px;      /* JS가 폰트 로드 후 1056px 폭에 맞춰 미세조정 */
+    line-height: 1.02;
+    letter-spacing: -0.012em;
+    color: #ffffff;
+    text-shadow:
+      0 3px 0 rgba(0,0,0,0.22),
+      0 12px 38px rgba(0,0,0,0.62),
+      0 0 90px rgba(255,166,64,0.30);
+  }
+
+  /* ---------- 좌측 세로 카피 ---------- */
+  .tagline {
+    position: absolute;
+    top: 520px; left: 66px;
+  }
+  .tagline-rule {
+    position: absolute;
+    top: 528px; left: 46px;
+    width: 3px; height: 424px;
+    background: linear-gradient(180deg,
+      rgba(255,176,74,0.92) 0%,
+      rgba(255,176,74,0.45) 55%,
+      rgba(255,176,74,0.06) 100%);
+    border-radius: 2px;
+  }
+  .tagline p {
+    margin: 0;
+    font-weight: 700;
+    font-size: 40px;
+    line-height: 62px;
+    letter-spacing: 0.03em;
+    color: rgba(255,255,255,0.87);
+    text-shadow:
+      0 2px 14px rgba(0,0,0,0.80),
+      0 0 4px rgba(0,0,0,0.55);
+  }
+  .tagline p.punch {
+    color: #ffe9c9;
+    text-shadow:
+      0 2px 14px rgba(0,0,0,0.80),
+      0 0 4px rgba(0,0,0,0.55),
+      0 0 26px rgba(255,168,64,0.35);
+  }
+
+  /* ---------- 하단 크레딧 ---------- */
+  .footer {
+    position: absolute;
+    left: 60px; right: 60px; bottom: 38px;
+    text-align: center;
+  }
+  .release {
+    margin: 0;
+    font-family: 'Black Han Sans', 'Malgun Gothic', sans-serif;
+    font-weight: 400;
+    font-size: 54px;
+    letter-spacing: 0.012em;
+    color: #ffffff;
+    text-shadow:
+      0 3px 18px rgba(0,0,0,0.80),
+      0 0 46px rgba(0,0,0,0.50);
+  }
+  .release .date {
+    color: #ffb057;
+    text-shadow:
+      0 3px 18px rgba(0,0,0,0.80),
+      0 0 34px rgba(255,150,40,0.45);
+  }
+  .divider {
+    width: 132px; height: 1px;
+    margin: 24px auto 22px;
+    background: linear-gradient(90deg,
+      rgba(255,255,255,0) 0%,
+      rgba(255,255,255,0.42) 50%,
+      rgba(255,255,255,0) 100%);
+  }
+  .credits {
+    margin: 0;
+    font-weight: 500;
+    font-size: 23px;
+    letter-spacing: 0.05em;
+    color: rgba(255,255,255,0.76);
+    text-shadow: 0 2px 12px rgba(0,0,0,0.85);
+  }
+  .disclaimer {
+    margin: 26px 0 0;
+    font-weight: 400;
+    font-size: 16px;
+    letter-spacing: 0.10em;
+    color: rgba(255,255,255,0.46);
+    text-shadow: 0 1px 8px rgba(0,0,0,0.85);
+  }
+</style>
+</head>
+<body>
+  <div class="poster">
+    <img class="art" src="art/keyart-v1.png" alt="노을 지는 서울 옥상에 선 김부장과 인물들">
+
+    <div class="scrim-top"></div>
+    <div class="scrim-left"></div>
+    <div class="scrim-bottom"></div>
+    <div class="vignette"></div>
+    <div class="grain"></div>
+
+    <div class="title-block">
+      <p class="kicker">서울 자가에 대기업 다니는</p>
+      <h1 class="title" id="title">김부장 이야기</h1>
+    </div>
+
+    <div class="tagline-rule"></div>
+    <div class="tagline">
+      <p>대기업에</p>
+      <p>집도있고</p>
+      <p>차도있고</p>
+      <p>다있는데</p>
+      <p>가만보니</p>
+      <p>내가없네</p>
+      <p class="punch">골때리네</p>
+    </div>
+
+    <div class="footer">
+      <p class="release">넷플릭스에서 <span class="date">10월 26일</span> 공개</p>
+      <div class="divider"></div>
+      <p class="credits">JTBC 토일드라마 · 연출 조현탁 · 극본 김홍기 윤혜성 · 원작 송희구</p>
+      <p class="disclaimer">AI 생성 팬메이드 포스터 · 공식 홍보물 아님</p>
+    </div>
+  </div>
+
+  <script>
+    // 폰트 로드 후 제목 폭을 1056px에 맞춰 미세조정.
+    // (JS가 실패해도 CSS 기본값 158px으로 이미 정상적으로 보인다)
+    (function () {
+      function fitTitle() {
+        var el = document.getElementById('title');
+        if (!el) return;
+        var target = 1056, lo = 80, hi = 210;
+        for (var i = 0; i < 22; i++) {
+          var mid = (lo + hi) / 2;
+          el.style.fontSize = mid + 'px';
+          if (el.scrollWidth > target) { hi = mid; } else { lo = mid; }
+        }
+        el.style.fontSize = (Math.floor(lo * 10) / 10) + 'px';
+      }
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(fitTitle);
+      } else {
+        window.addEventListener('load', fitTitle);
+      }
+    })();
+  </script>
+</body>
+</html>
