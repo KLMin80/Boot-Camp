@@ -21,3 +21,13 @@ node_modules/
 # Local scratch / class archives — not part of the repo
 /local-dashboard.png
 week-6/class/afm-weekday-6.zip
+
+# Standalone repo with its own history + remote (github.com/ruucm/my-geumcheon-cafe).
+# Committing it here would leave a gitlink pointing at a commit this repo doesn't have.
+week-7/class/my-geumcheon-cafe/
+
+# Reference-gathering scratch: search-result screenshots, contact sheets, raw candidate dump.
+# Nothing links to them; kept on disk, out of history. _manifest.json stays — it is the
+# source attribution (article + image URL) for every still the poster actually uses.
+week-7/goblin/movie_poster/refs/_*
+!week-7/goblin/movie_poster/refs/_manifest.json
