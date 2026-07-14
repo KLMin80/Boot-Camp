@@ -1,0 +1,19 @@
+# 🔒 비밀값 — 절대 커밋 금지
+.env
+
+# 로그(계기판) — .gitkeep만 추적
+logs/*
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

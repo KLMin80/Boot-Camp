@@ -1,0 +1,9 @@
+# 톡트레이더 v1 (Phase 0~4 + 스탑로스)
+python-dotenv>=1.0         # .env 로드
+requests>=2.31             # KIS REST 호출 (Phase 1~)
+python-telegram-bot>=21    # 텔레그램 봇 (Phase 3~)
+
+# ── 이후 단계용 (v1 에선 아직 불필요) ──
+# websockets>=12           # Phase 5 실시간(체결/조건검색식/VI)
+# pandas>=2.0              # Phase 8 로그 집계
+# openpyxl>=3.1            # Phase 8 엑셀 저장
