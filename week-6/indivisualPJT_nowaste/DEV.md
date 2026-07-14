@@ -110,14 +110,20 @@ Direct 연결은 `postgres` 역할로 붙으므로 **RLS를 그냥 통과한다.
 ## 프로젝트 구조
 
 ```
-indivisual PJT/
+indivisualPJT_nowaste/
 ├── prototype-v1.html      # Phase 1 산출물 (더미 데이터, 서버 없이 브라우저로 열기)
-├── index.html             # Phase 2에서 전환. React 18 CDN + Tailwind CDN. /api/*만 호출
-├── server.js              # Express + pg. API · 정적 서빙 · 인증 · 라벨 파싱 · 외부 API
+├── index.html             # 앱 본체. React 18 CDN + Tailwind CDN. /api/* 만 호출
+├── server.js              # Express + pg. API · 인증 · 허용목록 정적 서빙
+├── db.js                  # pg Pool 한 곳. URL을 분해해 개별 필드로 전달 (함정 5)
 ├── schema.sql             # fridge_ 테이블 DDL + 보관기간 프리셋 시드
+├── scripts/
+│   ├── migrate.js         # schema.sql 적용 (npm run migrate)
+│   ├── smoke.js           # 실제 서버+DB E2E 검증 35건 (npm run smoke)
+│   ├── gen-secret.js      # JWT_SECRET 생성 → .env append
+│   └── check-tables.js    # 공유 DB 테이블명 충돌 확인
 ├── package.json
-├── .env                   # ⚠️ DB_URL, JWT_SECRET. git 제외 + 정적 서빙 차단 필수
-└── .gitignore
+├── .env                   # ⚠️ SUPABASE_DB_URL, JWT_SECRET. git 제외 + 정적 서빙 차단됨
+└── MISSION.md · STRATEGY.md · research.md · AUDIENCES.md
 ```
 
 ## API 설계 (server.js)
@@ -192,6 +198,8 @@ indivisual PJT/
 
 > PK: `(ingredient, storage)`. 흔한 재료 30~50개로 시작하면 충분하다.
 > 예: 양파+`room_shade` 60일 / 양파+`fridge` 30일 / 대파+`fridge` 14일 / 사과+`fridge` 30일 / 돼지고기+`fridge` 3일 / 돼지고기+`freezer` 90일
+>
+> ⚠️ **행이 없다는 것 자체가 정보다.** `(두부, freezer)` 행이 없으면 **두부는 얼리면 못 쓴다**는 뜻이다(얼면 스펀지가 된다. 상추·오이도 마찬가지). 그러니 **'냉동실로' 버튼은 `freezer` 행이 있는 재료에만 적용**해야 한다. 안 그러면 앱이 두부를 얼려버린다. → Phase 1 프로토타입에서 실제로 잡힌 버그.
 
 **유통기한 계산 규칙 (한 곳으로 통일)**
 1. OCR로 날짜를 읽었으면 → 그 값 (`expiry_source='ocr'`)
@@ -203,33 +211,40 @@ indivisual PJT/
 
 > 순서: **디자인 → 기본기능(쉬운 것) → 인프라·보안 검증 → 어려운 기능(불확실한 것) → 마무리 → 앱화·수익화**
 
-### Phase 1: 디자인 & 프로토타이핑
-- [ ] 🟢 UI 프로토타입 — `prototype-v1.html` (React 18 CDN + Tailwind CDN, **더미 데이터**, 서버·DB 없이 브라우저로 직접 열기)
-  - 화면: **촬영 화면(연속 촬영)**, **확인 대기 목록**, **확인 카드(사진+읽은 값)**, 재고 리스트(냉장/냉동/실온 탭), 유통기한 임박, 레시피 추천, 부족 재료 주문, 하단 네비
-  - **라벨 없는 신선식품 입력**: 재료 선택 + 보관방법 아이콘 4종
-- 📌 **체크포인트:** 더미 데이터로 **"찍기 → 확인"** 두 단계 흐름이 눈에 보이고 손으로 넘어간다.
-- 📌 `git commit`
+### Phase 1: 디자인 & 프로토타이핑 ✅ 완료
+- [x] 🟢 UI 프로토타입 — `prototype-v1.html` (React 18 CDN + Tailwind CDN, **더미 데이터**, 서버·DB 없이 브라우저로 직접 열기)
+  - 화면: 냉장고(홈) · 담기(촬영) · 재료로 담기 · 확인 · 요리 · 리포트 + 하단 네비
+  - **구조 카드(Rescue Card)** — 오늘 만료될 재료 + `[냉동실로] [오늘 요리로]` 두 버튼. 이 앱의 signature. 급한 게 없으면 "오늘은 버릴 게 없어요"로 뒤집힌다
+  - **라벨 없는 신선식품**: 재료 칩 + 보관방법 아이콘 4종 → 유통기한 자동 계산 (양파+실온그늘 → D-60)
+  - 색은 **오직 시간에만** 배정 (빨강=D-1 이하, 호박=D-4 이하, 세이지=여유). 브랜드 컬러는 중립
+  - 숫자는 **자릿수 정렬(tabular-nums)**, 유통기한 도장·날짜만 모노스페이스(마트 라벨의 활자)
+- [x] 📌 **체크포인트 통과:** 더미 데이터로 "찍기 → 확인" 두 단계 흐름이 눈에 보이고 손으로 넘어간다. 전 화면 클릭 검증 완료, 콘솔 에러 0
+- **Phase 1에서 잡힌 것들:** ①두부를 냉동실로 보내는 버그 → `freezer` 프리셋 행이 있는 재료만 냉동 대상 ②잔량 게이지가 가득 찼을 때 취소선처럼 보임 → 덜어 쓴 것에만 표시 ③한글에 모노 폰트가 폴백돼 깨짐 → 순수 숫자에만 모노
+- [ ] 📌 `git commit` — Phase 1 세이브 포인트
 
-### Phase 2: 기본 기능 (쉬운 것부터)
-- [ ] 🟢 프로젝트 초기화 — `express` `pg` `dotenv` `bcryptjs` `jsonwebtoken` 설치
-- [ ] 🟡 **DB 연결 뚫기** — Supabase 프로젝트 생성 → `.env`의 `DB_URL` → `pg` Pool 연결 확인 (⚠️ 함정 4·5)
-- [ ] 🟢 `schema.sql` — `fridge_users`, `fridge_items`, `fridge_shelf_life` 생성 + **프리셋 시드 데이터 30~50건**
-- [ ] 🟢 `prototype-v1.html` → `index.html` 전환 + `server.js` 정적 서빙 (⚠️ `.env` 노출 차단 — 함정 3)
-- [ ] 🟡 회원가입/로그인 — bcrypt + JWT
-- [ ] 🟡 재고 CRUD — `/api/items` (**수동 입력 폼**으로 먼저). 모든 쿼리에 `WHERE user_id = $1`
-- [ ] 🟡 **라벨 없는 신선식품 입력** — 재료 + 보관방법 아이콘 → `/api/shelf-life`로 기한 자동 계산 (OCR 없이 동작하는 완결된 경로!)
-- [ ] 🟡 유통기한 임박 표시 + 보관위치 필터 + 냉동 전환(기한 재계산)
-- [ ] 🟢 **소진·폐기 기록** — `/api/items/:id/close`로 "다 먹음 / 버림(얼마나)" 기록. ⚠️ **이 데이터가 없으면 "식비 절감"을 측정할 수 없다** ([STRATEGY.md](STRATEGY.md))
-- 📌 **체크포인트:** `node server.js`로 띄워 로그인 → **신선식품을 아이콘 두 번 탭으로 등록** → 유통기한이 자동으로 잡힌다. (OCR 없이도 앱이 쓸모 있다)
-- 📌 `git commit`
+### Phase 2: 기본 기능 ✅ 완료
+- [x] 🟢 프로젝트 초기화 — `express` `pg` `dotenv` `bcryptjs` `jsonwebtoken`
+- [x] 🟡 **DB 연결** — `.env`의 `SUPABASE_DB_URL`(⚠️ Direct가 아니라 **Transaction pooler 6543**. IPv4로 붙어서 오히려 안전) → `db.js`가 URL을 분해해 개별 필드로 Pool에 전달 (함정 5)
+- [x] 🟢 `schema.sql` — `fridge_users` · `fridge_items` · `fridge_shelf_life` + **프리셋 66행 / 재료 38종**(그중 냉동 가능 21종)
+- [x] 🟢 `index.html` — `prototype-v1.html`을 API에 연결. 프론트는 DB를 모르고 `/api/*`만 호출
+- [x] 🟡 회원가입/로그인 — bcrypt 해시 + JWT(30일), 토큰은 localStorage
+- [x] 🟡 재고 CRUD — 모든 쿼리에 `WHERE user_id = $1`. 예외 없음
+- [x] 🟡 **라벨 없는 신선식품** — 재료 + 보관방법 아이콘 → 유통기한 자동 (양파+실온그늘 → D-60)
+- [x] 🟡 유통기한 임박 표시 + 보관위치 필터 + **냉동 전환(기한 재계산)** — 얼리면 못 쓰는 재료는 서버가 409로 거절
+- [x] 🟢 **소진·폐기 기록** — `/api/items/:id/close`. 버린 금액이 리포트에 집계된다
+- [x] 📌 **체크포인트 통과:** 가입 → 양파를 두 번 탭으로 담기 → D-60 자동 → 다짐육 냉동실로(D-1→D-60) → 두부는 거절 → 두부 버림 → 리포트에 2,200원. **OCR 없이도 앱이 쓸모 있다**
+- [ ] 📌 `git commit`
 
-### Phase 2.5: 인프라 · 보안 검증 (필수)
-- [ ] 🔴 **소유권 검증** — 계정 A의 재고를 **계정 B 토큰으로** 조회·수정·삭제 시도 → 전부 막히는지 확인. ⚠️ RLS가 안 지켜주므로 `WHERE user_id` 빠진 엔드포인트 하나면 전면 유출
-- [ ] 🔴 **`.env` 노출 차단** — 브라우저에서 `GET /.env` → **404여야 함** (200이면 DB 비번·JWT 시크릿 유출)
-- [ ] 🟡 JWT 검증 미들웨어 — 없음/만료/위조 시 401
-- [ ] 🟡 배포 환경(Vercel 등)에서 DB 연결 확인
-- 📌 **체크포인트:** 남의 데이터 접근이 실제로 차단되고, `.env`가 안 보이고, 배포 환경에서도 DB가 붙는다.
-- 📌 `git commit`
+### Phase 2.5: 인프라 · 보안 검증 ✅ 완료
+> `npm run smoke` — 목(mock) 없이 **실제 서버 + 실제 DB**에 대고 35개 검증. 전부 통과.
+
+- [x] 🔴 **소유권 검증** — 계정 B의 토큰으로 계정 A의 재고를 **조회·수정·삭제·냉동·소진처리** 시도 → **전부 404 차단**. RLS가 없는 자리를 `server.js`가 실제로 막는 것을 확인
+- [x] 🔴 **`.env` 노출 차단** — `GET /.env` `/db.js` `/schema.sql` `/package.json` → **전부 404**, 내용 안 샘. `express.static` 대신 **허용 목록(index.html만)** 방식
+- [x] 🟡 JWT 검증 — 토큰 없음/위조 → 401
+- [x] 🟡 날짜 하루 밀림 검증 (함정 6) — 상추+냉장 → 정확히 5일 뒤
+- [x] 🟡 집계 캐스팅 검증 (함정 11) — 폐기 금액이 문자열 아닌 `number`로 옴
+- [ ] 🟡 배포 환경(Vercel 등)에서 DB 연결 확인 — Phase 4에서
+- [ ] 📌 `git commit`
 
 ### Phase 3: 핵심 & 어려운 기능 (불확실한 것부터)
 - [ ] 🔴 **OCR 정확도 실측** (가장 불확실 — 앱의 성패가 여기 달렸다)
@@ -328,27 +343,26 @@ indivisual PJT/
 ## 시작하기
 
 ```bash
-# 0. 프로젝트 폴더로 이동 (폴더명에 공백 — 따옴표 필수)
-cd "D:/Boot Camp/week-6/indivisual PJT"
+cd "D:/Boot Camp/week-6/indivisualPJT_nowaste"
 
-# --- Phase 1: 서버 없이 프로토타입만 ---
-start prototype-v1.html
-
-# --- Phase 2: 서버 + DB ---
-npm init -y
-npm install express pg dotenv bcryptjs jsonwebtoken
-
-# .env 작성 (git 제외!)
-#   DB_URL=postgresql://postgres:[비밀번호]@db.[ref].supabase.co:5432/postgres
-#   JWT_SECRET=<랜덤 32바이트 hex>
-
-node server.js        # ⚠️ Live Server 말고 반드시 이걸로 (함정 8)
+npm install           # 처음 한 번
+npm start             # ⚠️ Live Server 말고 반드시 이걸로 (함정 8)
 # → http://localhost:3000
 ```
 
-**지금 당장 하실 일**
+| 명령 | 하는 일 |
+|------|---------|
+| `npm start` | 서버 실행 → http://localhost:3000 |
+| `npm run migrate` | `schema.sql` 적용 (여러 번 돌려도 안전) |
+| `npm run smoke` | **실제 서버+DB에 대고 E2E 검증 35건.** 보안·날짜·집계 포함 |
+| `npm run secret` | `JWT_SECRET` 없으면 생성해 `.env`에 추가 |
 
-1. **supabase.com에서 프로젝트 생성** → Connect → **Direct connection** 문자열 복사 → `.env`의 `DB_URL`
-2. 끝. **Tesseract.js는 CDN이라 신청할 게 없고, 바코드 API도 이제 안 씁니다.**
+**`.env`에 필요한 것** (git 제외됨)
+```
+SUPABASE_DB_URL=postgresql://...   # Supabase → Connect → 연결 문자열
+JWT_SECRET=...                     # npm run secret 이 만들어 줌
+```
+
+**Phase 1 프로토타입만 보려면:** `prototype-v1.html`을 브라우저로 그냥 열면 된다 (서버 불필요).
 
 > 쿠팡파트너스·Google Play 계정은 **Phase 5**에서. 앱이 배포되어 URL이 있어야 신청이 된다.
