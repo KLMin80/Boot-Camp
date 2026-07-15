@@ -302,13 +302,62 @@ app.post('/api/recipes/suggest', auth, async (req, res) => {
   res.json(out);
 });
 
-/* v1은 쿠팡 검색 URL. 파트너스 승인 후 이 함수 안만 딥링크로 바꾸면 된다. */
-function buyLink(name) {
-  return `https://www.coupang.com/np/search?q=${encodeURIComponent(name)}`;
+/* ───────────────── 멀티 마켓 구매 링크 ─────────────────
+   쿠팡 하나가 아니라 여러 마켓으로 보내 "직접 비교"하게 한다.
+   → 쿠팡이 구조적으로 못 하는 자리(중립 비교)를 차지하는 게 이 앱의 해자 (STRATEGY.md).
+
+   ⚠️ 실시간 가격 나란히 비교는 담벼락 때문에 불가:
+     - 쿠팡은 상품 가격 공개 API 없음 (파트너스는 딥링크만)
+     - 네이버 쇼핑 생태계에 쿠팡·G마켓·11번가 배제됨
+   → 그래서 각 마켓 '검색 딥링크' + (네이버 키 있으면) 네이버 참고 최저가.
+
+   각 마켓 URL은 이 함수 한 곳에서만 만든다. 제휴 승인되면 여기만 딥링크로 교체. */
+const MARKETS = [
+  { key: 'coupang', label: '쿠팡프레시', icon: '🚀', affiliate: true,   // 파트너스 확정 (승인 후 딥링크로 교체)
+    url: (q) => `https://www.coupang.com/np/search?q=${encodeURIComponent(q)}&channel=user` },
+  { key: 'kurly',   label: '마켓컬리',   icon: '🥬', affiliate: false,  // 제휴 미확인 — 확인 후 true
+    url: (q) => `https://www.kurly.com/search?sword=${encodeURIComponent(q)}` },
+  { key: 'ssg',     label: '이마트몰',   icon: '🏪', affiliate: false,  // 제휴 미확인
+    url: (q) => `https://emart.ssg.com/search.ssg?query=${encodeURIComponent(q)}` },
+  { key: 'naver',   label: '네이버쇼핑', icon: '🔎', affiliate: true,   // 쇼핑커넥트 확정
+    url: (q) => `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(q)}` },
+];
+
+/* 네이버 쇼핑 검색 API로 참고 최저가. 키가 있을 때만 동작(없으면 조용히 건너뜀). */
+async function naverLowestPrice(query) {
+  const id = process.env.NAVER_CLIENT_ID, secret = process.env.NAVER_CLIENT_SECRET;
+  if (!id || !secret) return null;
+  try {
+    const r = await fetch(
+      `https://openapi.naver.com/v1/search/shop.json?query=${encodeURIComponent(query)}&display=1&sort=asc`,
+      { headers: { 'X-Naver-Client-Id': id, 'X-Naver-Client-Secret': secret },
+        signal: AbortSignal.timeout(2500) }
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    const p = j.items?.[0]?.lprice;
+    return p ? Number(p) : null;
+  } catch { return null; }
 }
-app.post('/api/coupang/link', auth, (req, res) => {
-  const names = Array.isArray(req.body.items) ? req.body.items : [];
-  res.json({ links: names.map((n) => ({ name: n, url: buyLink(n) })) });
+
+app.post('/api/buy-links', auth, async (req, res) => {
+  const items = (Array.isArray(req.body.items) ? req.body.items : [])
+    .map((s) => String(s).trim()).filter(Boolean).slice(0, 10);
+
+  const links = {};
+  for (const ing of items) {
+    links[ing] = Object.fromEntries(MARKETS.map((m) => [m.key, m.url(ing)]));
+  }
+
+  // 네이버 참고가는 키가 있을 때만 (없으면 빈 객체)
+  const priceHint = {};
+  const priced = await Promise.all(items.map(async (ing) => [ing, await naverLowestPrice(ing)]));
+  for (const [ing, p] of priced) if (p) priceHint[ing] = p;
+
+  res.json({
+    markets: MARKETS.map(({ key, label, icon, affiliate }) => ({ key, label, icon, affiliate })),
+    links, priceHint,
+  });
 });
 
 /* ───────────────── 정적 서빙 ─────────────────

@@ -132,7 +132,7 @@ const API = {
 
   waste:   (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
   recipes: (tag)   => api('POST', '/api/recipes/suggest', { tag }),
-  buyLinks:(names) => api('POST', '/api/coupang/link', { items: names }),
+  buyLinks:(names) => api('POST', '/api/buy-links', { items: names }),
 };
 
 /* ── 날짜 · 표시 ──
@@ -913,6 +913,8 @@ function CookView({ toast }) {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState(null);
+  const [buyData, setBuyData] = useState(null);  // { items, markets, links, priceHint }
+  const [buying, setBuying] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -924,12 +926,16 @@ function CookView({ toast }) {
     return () => { alive = false; };
   }, [tag]);
 
+  // 여러 마켓으로 보내 직접 비교하게 한다 (실시간 가격은 담벼락 탓에 불가 → 딥링크 + 네이버 참고가)
   const buy = async (missing) => {
+    if (!missing?.length) return;
+    setBuying(true);
     try {
-      const { links } = await API.buyLinks(missing);
-      links.forEach((l) => window.open(l.url, '_blank', 'noopener'));
-      toast(`쿠팡에서 ${missing.join(', ')} 찾는 중`);
+      const data = await API.buyLinks(missing);
+      setDetail(null);
+      setBuyData({ items: missing, ...data });
     } catch (e) { toast(e.message, 'bad'); }
+    finally { setBuying(false); }
   };
 
   return (
@@ -1009,8 +1015,59 @@ function CookView({ toast }) {
       )}
 
       <div className="h-6" />
-      <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy} />
+      <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy} busy={buying} />
+      <BuySheet data={buyData} onClose={() => setBuyData(null)} onPick={(url, market, ing) => {
+        window.open(url, '_blank', 'noopener');
+        toast(`${market}에서 ${ing} 찾는 중`);
+      }} />
     </>
+  );
+}
+
+/* 멀티 마켓 구매 시트 — 재료마다 어느 마켓에서 살지 직접 고른다.
+   실시간 가격 비교는 불가하지만(담벼락), 마켓 선택권과 네이버 참고가를 준다. */
+function BuySheet({ data, onClose, onPick }) {
+  if (!data) return null;
+  const { items, markets, links, priceHint } = data;
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-[19px] font-extrabold">부족한 재료 사러 가기</h3>
+          <p className="text-[12px] text-muted mt-0.5">마켓을 골라 직접 비교해 보세요</p>
+        </div>
+        <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
+      </div>
+
+      <div className="mt-4 max-h-[52vh] overflow-y-auto noscroll space-y-4">
+        {items.map((ing) => (
+          <div key={ing}>
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="font-extrabold">{ing}</span>
+              {priceHint?.[ing] != null && (
+                <span className="tnum text-[12px] text-calm font-semibold">네이버 최저 {won(priceHint[ing])}원~</span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {markets.map((m) => (
+                <button key={m.key} onClick={() => onPick(links[ing][m.key], m.label, ing)}
+                  className="tap flex items-center gap-2 h-[50px] px-3 rounded-xl border-2 border-line bg-surface active:bg-paper transition-colors">
+                  <span className="text-[18px]">{m.icon}</span>
+                  <span className="font-bold text-[14px] flex-1 text-left">{m.label}</span>
+                  <span className="text-muted text-[13px]">→</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {!Object.keys(priceHint || {}).length && (
+        <p className="text-[11px] text-muted mt-3 leading-relaxed">
+          가격은 마켓마다 달라요. 눌러서 직접 확인하세요. <span className="opacity-70">(네이버 참고가는 설정 시 표시)</span>
+        </p>
+      )}
+    </Sheet>
   );
 }
 
