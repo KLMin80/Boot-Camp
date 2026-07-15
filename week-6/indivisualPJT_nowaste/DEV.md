@@ -279,6 +279,12 @@ indivisualPJT_nowaste/
 - 📌 `git commit`
 
 ### Phase 4: 마무리 & 배포 (웹)
+- [x] 🟢 **Vercel 배포 완료** ✅ → **https://nowaste-app-seven.vercel.app** (HTTPS 자동 = 카메라 가능)
+  - Vercel이 Express 자동감지, `main`/`start`로 server.js 직접 실행, PORT 주입. env 3개(SUPABASE_DB_URL·JWT_SECRET·OPEN_AI_API) 암호화 설정
+  - ⚠️ **잡은 배포 함정:** `res.sendFile`의 변수 경로를 nft가 못 추적 → index.html이 번들서 빠져 `GET / → 500`. 수정: 시작 시 리터럴 경로로 메모리에 읽기 + `vercel.json` `includeFiles`
+  - **maxDuration 60** → 레시피 첫 생성 14.3초가 프로덕션서 완료 확인(기본 10초면 죽음). OpenAI(레시피·OCR) Vercel서 정상
+  - 검증: `/`200 · `/api/health`ok · `/.env`404 · 가입→담기→레시피 왕복 · 테스트계정 삭제(공유DB 보안)
+- [ ] 🟡 **실기기 베타** — 폰으로 촬영(카메라)→OCR→확인, 촬영 30초 기준선 실측. 여기부터 실사용 개선
 - [ ] 🟡 UI 폴리싱 + **유통기한 하루 밀림 버그 점검** (함정 6)
 - [ ] 🟡 "확인 대기 N건" 배지 + 유통기한 알림 — 미확인 방치 방지
 - [ ] 🟡 **절감 리포트 화면** — `/api/stats/waste`로 월별 폐기 금액·절감 추이 (⚠️ SQL 집계는 캐스팅 필수 — 함정 11)
