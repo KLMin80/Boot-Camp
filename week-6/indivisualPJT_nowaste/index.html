@@ -124,6 +124,7 @@ const API = {
 
   items:   (status) => api('GET', `/api/items${status ? `?status=${status}` : ''}`),
   addItem: (body)   => api('POST', '/api/items', body),
+  parseLabel: (image, storage) => api('POST', '/api/label/parse', { image, storage }),
   patch:   (id, b)  => api('PATCH', `/api/items/${id}`, b),
   freeze:  (id)     => api('POST', `/api/items/${id}/freeze`),
   close:   (id, outcome, amount) =>
@@ -147,6 +148,26 @@ const STORAGE = {
   room:       { label: '실온',      icon: '🌡️' },
   room_shade: { label: '실온·그늘', icon: '🌥️' },
 };
+
+/* 업로드 크기만 줄인다. 2048px 유지 — 더 줄이면 작은 라벨 날짜를 놓친다(실측).
+   OpenAI가 내부적으로 어차피 축소하므로 토큰(비용)은 안 늘고, 업로드만 가벼워진다. */
+function fileToDataUrl(file, maxDim = 2048, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('이미지를 열 수 없어요')); };
+    img.src = url;
+  });
+}
 
 /* ==== SECTION:PRIMITIVES ====
    색은 오직 '남은 시간'에만 배정한다. 브랜드 색은 중립.
@@ -568,19 +589,17 @@ function AddView({ setMode }) {
       <Header title="담기" sub="장 본 걸 냉장고에 넣습니다" />
 
       <div className="px-4 pt-5 space-y-2.5">
-        {/* Phase 3에서 열린다. 없는 걸 있는 척하지 않는다. */}
-        <div className="rounded-2xl border border-line bg-surface p-4 opacity-60">
+        <button onClick={() => setMode('photo')}
+          className="tap w-full rounded-2xl border-2 border-ink bg-surface p-4 text-left active:bg-paper transition-colors">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-paper grid place-items-center text-[21px]">📷</div>
             <div className="flex-1">
               <p className="font-bold">사진으로 담기</p>
               <p className="text-[12px] text-muted mt-0.5">라벨을 찍으면 제품명·용량·유통기한을 읽어옵니다</p>
             </div>
+            <span className="text-muted">→</span>
           </div>
-          <div className="mt-3 rounded-lg bg-paper px-3 py-2">
-            <p className="text-[12px] font-semibold text-muted">아직 준비 중이에요 (다음 단계)</p>
-          </div>
-        </div>
+        </button>
 
         <button onClick={() => setMode('fresh')}
           className="tap w-full rounded-2xl border-2 border-ink bg-surface p-4 text-left active:bg-paper transition-colors">
@@ -606,6 +625,126 @@ function AddView({ setMode }) {
           </div>
         </button>
       </div>
+    </>
+  );
+}
+
+/* 사진으로 담기 — 라벨을 찍으면(또는 골라 올리면) GPT가 읽어 확인 대기에 쌓는다.
+   찍기만 하고 확인은 나중에. 카메라는 file input(capture)로 — 안정적이고 HTTPS 없이도 됨. */
+function PhotoCaptureView({ onDone, back }) {
+  const inputRef = useRef();
+  const [storage, setStorage] = useState('fridge');
+  const [rows, setRows] = useState([]); // { name, status:'reading'|'done'|'fail', read }
+  const [running, setRunning] = useState(false);
+
+  const pickFiles = () => inputRef.current?.click();
+
+  const onFiles = async (e) => {
+    const files = [...(e.target.files || [])].slice(0, 12);
+    e.target.value = ''; // 같은 파일 다시 고를 수 있게
+    if (!files.length) return;
+    setRunning(true);
+    const start = rows.length;
+    setRows((r) => [...r, ...files.map((f) => ({ name: f.name, status: 'reading' }))]);
+
+    let ok = 0;
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const dataUrl = await fileToDataUrl(files[i]);
+        const { item } = await API.parseLabel(dataUrl, storage);
+        setRows((r) => r.map((x, idx) => idx === start + i ? { ...x, status: 'done', read: item } : x));
+        ok++;
+      } catch (ex) {
+        setRows((r) => r.map((x, idx) => idx === start + i ? { ...x, status: 'fail', err: ex.message } : x));
+      }
+    }
+    setRunning(false);
+    if (ok) onDone(ok); // 확인 대기 갱신 + 안내
+  };
+
+  const doneCount = rows.filter((r) => r.status === 'done').length;
+
+  return (
+    <>
+      <Header title="사진으로 담기" sub="라벨을 찍기만 하세요. 확인은 나중에."
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <input ref={inputRef} type="file" accept="image/*" capture="environment" multiple
+        onChange={onFiles} className="hidden" />
+
+      <div className="px-4 pt-5">
+        {/* 보관 위치 — 기본 냉장, 확인 화면에서 바꿀 수 있음 */}
+        <p className="text-[13px] font-bold mb-2">어디에 넣을 거예요?</p>
+        <div className="grid grid-cols-4 gap-2 mb-5">
+          {Object.entries(STORAGE).map(([key, s]) => (
+            <button key={key} onClick={() => setStorage(key)}
+              className={`tap h-[62px] rounded-xl border-2 grid place-items-center gap-0.5 transition-colors ${
+                storage === key ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+              }`}>
+              <span className="text-[18px] leading-none">{s.icon}</span>
+              <span className="text-[10px] font-bold">{s.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <button onClick={pickFiles} disabled={running}
+          className="tap w-full h-[120px] rounded-2xl border-2 border-dashed border-ink/40 bg-surface grid place-items-center active:bg-paper disabled:opacity-50">
+          <div className="text-center">
+            <div className="text-[32px] leading-none">📷</div>
+            <p className="font-bold mt-2">{running ? '읽는 중…' : '라벨 사진 찍기'}</p>
+            <p className="text-[11px] text-muted mt-0.5">여러 장 한 번에 · 제품명·용량·유통기한이 보이게</p>
+          </div>
+        </button>
+
+        {/* 촬영 안내 — OCR 실측에서 나온 그대로 */}
+        <div className="mt-3 rounded-xl bg-paper px-3.5 py-3">
+          <p className="text-[12px] font-bold mb-1">잘 읽히게 찍는 법</p>
+          <ul className="text-[12px] text-muted space-y-0.5">
+            <li>· 유통기한 글자가 화면을 채우게 <span className="font-semibold text-ink">가까이</span></li>
+            <li>· 빛 반사 피하고 <span className="font-semibold text-ink">또렷하게</span> (도장이 흐리면 놓쳐요)</li>
+            <li>· 연도가 없어도 괜찮아요 — 앱이 채웁니다</li>
+          </ul>
+        </div>
+      </div>
+
+      {rows.length > 0 && (
+        <div className="px-4 pt-5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[13px] font-bold">읽은 결과 <span className="tnum text-muted">{doneCount}/{rows.length}</span></p>
+            {doneCount > 0 && !running && (
+              <button onClick={() => onDone(0, true)} className="tap text-[13px] font-bold text-ink underline underline-offset-2">
+                확인하러 가기 →
+              </button>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            {rows.map((r, i) => (
+              <div key={i} className="flex items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-2.5">
+                <span className="text-[15px]">
+                  {r.status === 'reading' ? '⏳' : r.status === 'done' ? '✓' : '✕'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  {r.status === 'done' ? (
+                    <>
+                      <p className="text-[14px] font-semibold truncate">{r.read.name}</p>
+                      <p className="tnum text-[12px] text-muted">
+                        {r.read.capacity}{r.read.unit} · {r.read.expiry_date.replace(/-/g, '.')}
+                        {r.read.expiry_source === 'preset' && <span className="text-warn"> · 날짜 확인 필요</span>}
+                      </p>
+                    </>
+                  ) : r.status === 'fail' ? (
+                    <p className="text-[13px] text-urgent">못 읽었어요 — 다시 찍어주세요</p>
+                  ) : (
+                    <p className="text-[13px] text-muted">읽는 중…</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="h-8" />
     </>
   );
 }
@@ -811,11 +950,13 @@ function ManualView({ onAdd, back, busy }) {
    지금은 비어 있지만 자리를 만들어 둔다 — 확인 흐름이 이 앱의 심장이니까. */
 function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
   const [i, setI] = useState(0);
+  const [edit, setEdit] = useState(null); // null이면 보기, 객체면 수정 중
   useEffect(() => { if (i >= queue.length && queue.length) setI(queue.length - 1); }, [queue.length, i]);
+  const card = queue[i];
+  useEffect(() => { setEdit(null); }, [card?.id]); // 카드 넘어가면 수정 초기화
 
   if (loading) return (<><Header title="확인" /><Spinner /></>);
 
-  const card = queue[i];
   if (!card) {
     return (
       <>
@@ -827,15 +968,9 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
             장 보고 오면 <span className="font-semibold text-ink">사진만 찍어두고</span>,<br />
             정리 다 끝낸 뒤 여기 앉아서 확인하면 돼요.
           </p>
-          <div className="mt-6 rounded-xl border border-line bg-surface px-4 py-3 text-left">
-            <p className="text-[12px] font-bold">📷 사진으로 담기는 다음 단계에서 열립니다</p>
-            <p className="text-[12px] text-muted mt-1 leading-relaxed">
-              지금은 <span className="font-semibold text-ink">재료로 담기</span>로 바로 넣을 수 있어요.
-            </p>
-          </div>
           <button onClick={() => setView('add')}
-            className="tap mt-5 h-[50px] px-6 rounded-xl bg-ink text-white font-bold active:opacity-80">
-            담으러 가기
+            className="tap mt-6 h-[50px] px-6 rounded-xl bg-ink text-white font-bold active:opacity-80">
+            사진으로 담으러 가기
           </button>
         </div>
       </>
@@ -843,6 +978,10 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
   }
 
   const guessed = card.expiry_source === 'preset';
+  const editing = edit !== null;
+  const startEdit = () => setEdit({ name: card.name, expiry_date: card.expiry_date, storage: card.storage });
+  const patch = (k) => (v) => setEdit((e) => ({ ...e, [k]: v }));
+
   return (
     <>
       <Header title="확인" sub="읽어둔 값이 맞는지만 봐주세요"
@@ -851,26 +990,58 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
       <div className="px-4 pt-4 pb-2">
         <div key={card.id} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
           <div className="p-4 space-y-2.5">
-            <Row label="제품명" value={card.name} />
+            {editing ? (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1">제품명</label>
+                <input value={edit.name} onChange={(e) => patch('name')(e.target.value)}
+                  className="w-full h-[46px] px-3 rounded-lg border-2 border-line bg-surface font-semibold focus:border-ink outline-none" />
+              </div>
+            ) : <Row label="제품명" value={card.name} />}
+
             <Row label="용량" value={`${card.capacity}${card.unit}`} tnum />
             {card.price != null && <Row label="가격" value={`${won(card.price)}원`} tnum />}
 
+            {/* 유통기한 — 이 카드의 주인공. 수정 모드면 날짜 입력. */}
             <div className={`rounded-xl border-2 px-3.5 py-3 ${
-              guessed ? 'border-warn bg-warn/[.07]' : `${TONE[urgencyOf(card.days_left)].border} ${TONE[urgencyOf(card.days_left)].soft}`}`}>
+              guessed && !editing ? 'border-warn bg-warn/[.07]' : `${TONE[urgencyOf(card.days_left)].border} ${TONE[urgencyOf(card.days_left)].soft}`}`}>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-muted">유통기한</span>
-                <Stamp days={card.days_left} />
+                {!editing && <Stamp days={card.days_left} />}
               </div>
-              <p className="mono text-[19px] font-bold mt-1">{card.expiry_date.replace(/-/g, '.')}</p>
-              <p className="text-[11px] mt-1 leading-relaxed">
-                {guessed
-                  ? <span className="text-warn font-semibold">라벨에서 날짜를 못 읽어 보관기간으로 잡았어요. 맞는지 봐주세요.</span>
-                  : <span className="text-muted">라벨에서 읽었어요</span>}
-              </p>
+              {editing ? (
+                <input type="date" value={edit.expiry_date} onChange={(e) => patch('expiry_date')(e.target.value)}
+                  className="mono w-full h-[44px] px-3 mt-1.5 rounded-lg border-2 border-line bg-surface text-[16px] font-bold focus:border-ink outline-none" />
+              ) : (
+                <>
+                  <p className="mono text-[19px] font-bold mt-1">{card.expiry_date.replace(/-/g, '.')}</p>
+                  <p className="text-[11px] mt-1 leading-relaxed">
+                    {guessed
+                      ? <span className="text-warn font-semibold">라벨에서 날짜를 못 읽어 보관기간으로 잡았어요. 맞는지 봐주세요.</span>
+                      : <span className="text-muted">라벨에서 읽었어요</span>}
+                  </p>
+                </>
+              )}
             </div>
+
+            {editing && (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1.5">보관</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {Object.entries(STORAGE).map(([key, s]) => (
+                    <button key={key} onClick={() => patch('storage')(key)}
+                      className={`tap h-[52px] rounded-lg border-2 grid place-items-center gap-0.5 transition-colors ${
+                        edit.storage === key ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+                      }`}>
+                      <span className="text-[15px] leading-none">{s.icon}</span>
+                      <span className="text-[10px] font-bold">{s.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          {card.ocr_text && (
+          {card.ocr_text && !editing && (
             <details className="border-t border-line">
               <summary className="tap px-4 py-2.5 text-[12px] text-muted font-semibold cursor-pointer select-none active:bg-paper">
                 사진에서 읽은 글자 보기
@@ -882,14 +1053,27 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
       </div>
 
       <div className="px-4 pt-2 pb-4 space-y-2">
-        <button disabled={busy} onClick={() => onConfirm(card)}
-          className="tap w-full h-[56px] rounded-xl bg-ink text-white font-bold text-[15px] active:opacity-80 disabled:opacity-50">
-          맞아요 — 냉장고에 넣기
-        </button>
-        <button disabled={busy} onClick={() => onDrop(card)}
-          className="tap w-full h-[48px] rounded-xl border-2 border-line text-muted font-semibold text-[14px] active:bg-paper disabled:opacity-50">
-          버릴 거예요
-        </button>
+        {editing ? (
+          <button disabled={busy} onClick={() => { onConfirm(card, edit); }}
+            className="tap w-full h-[56px] rounded-xl bg-ink text-white font-bold text-[15px] active:opacity-80 disabled:opacity-50">
+            고쳐서 냉장고에 넣기
+          </button>
+        ) : (
+          <button disabled={busy} onClick={() => onConfirm(card)}
+            className="tap w-full h-[56px] rounded-xl bg-ink text-white font-bold text-[15px] active:opacity-80 disabled:opacity-50">
+            맞아요 — 냉장고에 넣기
+          </button>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <button disabled={busy} onClick={() => editing ? setEdit(null) : startEdit()}
+            className="tap h-[48px] rounded-xl border-2 border-line font-semibold text-[14px] active:bg-paper disabled:opacity-50">
+            {editing ? '취소' : '고칠게요'}
+          </button>
+          <button disabled={busy} onClick={() => onDrop(card)}
+            className="tap h-[48px] rounded-xl border-2 border-line text-muted font-semibold text-[14px] active:bg-paper disabled:opacity-50">
+            버릴 거예요
+          </button>
+        </div>
       </div>
     </>
   );
@@ -1297,6 +1481,13 @@ function NowasteApp() {
     toast(`${item.name} — ${fmtDate(item.expiry_date)}까지로 담았어요`);
   });
 
+  // 사진 판독 완료 → 확인 대기 갱신. goConfirm=true면 바로 확인 화면으로.
+  const photosDone = (ok, goConfirm) => guard(async () => {
+    await refresh();
+    if (goConfirm) { setAddMode('menu'); setView('confirm'); return; }
+    if (ok) toast(`${ok}장 담았어요 — 정리 끝나고 확인하세요`);
+  });
+
   /* 구조 카드: 얼려도 되는 것만 한 번에 냉동실로.
      서버가 두부 같은 건 409로 거절한다 — 그걸 그대로 사람 말로 보여준다. */
   const freezeAll = (list) => guard(async () => {
@@ -1325,10 +1516,18 @@ function NowasteApp() {
     await refresh();
   });
 
-  const confirmCard = (card) => guard(async () => {
-    await API.patch(card.id, { status: 'confirmed' });
+  const confirmCard = (card, edits) => guard(async () => {
+    const body = { status: 'confirmed' };
+    if (edits) {
+      if (edits.name && edits.name !== card.name) body.name = edits.name.trim();
+      if (edits.expiry_date && edits.expiry_date !== card.expiry_date) {
+        body.expiry_date = edits.expiry_date; body.expiry_source = 'manual';
+      }
+      if (edits.storage && edits.storage !== card.storage) body.storage = edits.storage;
+    }
+    const { item } = await API.patch(card.id, body);
     await refresh();
-    toast(`${card.name} — 냉장고에 넣었어요`);
+    toast(`${item.name} — 냉장고에 넣었어요`);
   });
 
   const dropCard = (card) => guard(async () => {
@@ -1359,6 +1558,7 @@ function NowasteApp() {
             email={email || '내 계정'} onLogout={logout} />
         )}
         {view === 'add' && addMode === 'menu'   && <AddView setMode={setAddMode} />}
+        {view === 'add' && addMode === 'photo'  && <PhotoCaptureView onDone={photosDone} back={() => setAddMode('menu')} />}
         {view === 'add' && addMode === 'fresh'  && <FreshView presets={presets} onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}
         {view === 'add' && addMode === 'manual' && <ManualView onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}
         {view === 'confirm' && (

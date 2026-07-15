@@ -11,6 +11,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
 const recipes = require('./recipes');
+const ocr = require('./ocr');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +21,7 @@ if (!JWT_SECRET) {
   process.exit(1);
 }
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '12mb' })); // 라벨 사진 base64가 크다 (클라에서 2048px로 줄여 보냄)
 
 /* ───────────────── 날짜 ─────────────────
    date 컬럼을 그대로 JSON에 담으면 toISOString()을 타면서
@@ -157,6 +158,54 @@ app.post('/api/items', auth, async (req, res) => {
   );
   res.status(201).json({ item: r.rows[0] });
 });
+
+/* 라벨 사진 → OCR → 확인 대기(pending) 재고 생성.
+   찍기만 하고 확인은 나중에. 그래서 status='pending'으로 넣고, 확인 화면에서 검증한다. */
+app.post('/api/label/parse', auth, async (req, res) => {
+  const image = req.body.image;
+  if (!image) return res.status(400).json({ error: '이미지가 필요합니다.' });
+  const storage = ['fridge', 'freezer', 'room', 'room_shade'].includes(req.body.storage)
+    ? req.body.storage : 'fridge';
+
+  let read;
+  try {
+    read = await ocr.readLabel(image);
+  } catch (e) {
+    console.error('[ocr]', e.message);
+    return res.status(502).json({ error: '사진을 읽지 못했어요. 조금 더 가까이, 밝은 곳에서 다시 찍어주세요.' });
+  }
+
+  // 유통기한: OCR로 읽었으면 그 값 → 없으면 재료 프리셋 → 그래도 없으면 냉장 7일 기본(사용자가 확인 때 고침)
+  let expiry = read.expiry;
+  let source = expiry ? 'ocr' : null;
+  if (!expiry && read.ingredient) {
+    const p = await pool.query(
+      'SELECT days FROM fridge_shelf_life WHERE ingredient = $1 AND storage = $2',
+      [read.ingredient, storage]
+    );
+    if (p.rows[0]) { expiry = await addDaysKST(p.rows[0].days); source = 'preset'; }
+  }
+  if (!expiry) { expiry = await addDaysKST(7); source = 'preset'; }
+
+  const r = await pool.query(
+    `INSERT INTO fridge_items
+       (user_id, name, ingredient, capacity, remaining, unit, price,
+        expiry_date, expiry_source, storage, status, ocr_text)
+     VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9,'pending',$10)
+     RETURNING ${ITEM_COLS}`,
+    [req.userId,
+     read.name || '이름 확인 필요',
+     read.ingredient || read.name || '재료',
+     read.capacity && read.capacity > 0 ? read.capacity : 1,
+     read.unit || 'g', read.price, expiry, source, storage, read.ocr_text]
+  );
+  res.status(201).json({ item: r.rows[0], read: { ...read, expiry_source: source } });
+});
+
+async function addDaysKST(days) {
+  const d = await pool.query(`SELECT to_char(${TODAY_KST} + $1::int, 'YYYY-MM-DD') AS d`, [days]);
+  return d.rows[0].d;
+}
 
 const PATCHABLE = ['name', 'ingredient', 'capacity', 'remaining', 'unit', 'price',
                    'expiry_date', 'expiry_source', 'storage', 'status'];
