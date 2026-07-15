@@ -115,7 +115,8 @@ indivisualPJT_nowaste/
 ├── index.html             # 앱 본체. React 18 CDN + Tailwind CDN. /api/* 만 호출
 ├── server.js              # Express + pg. API · 인증 · 허용목록 정적 서빙
 ├── db.js                  # pg Pool 한 곳. URL을 분해해 개별 필드로 전달 (함정 5)
-├── schema.sql             # fridge_ 테이블 DDL + 보관기간 프리셋 시드
+├── recipes.js             # 레시피 하이브리드 엔진 (캐시 + OpenAI gpt-4o-mini)
+├── schema.sql             # fridge_ 테이블 DDL + 보관기간 프리셋 + 레시피 캐시
 ├── scripts/
 │   ├── migrate.js         # schema.sql 적용 (npm run migrate)
 │   ├── smoke.js           # 실제 서버+DB E2E 검증 35건 (npm run smoke)
@@ -142,7 +143,7 @@ indivisualPJT_nowaste/
 | DELETE | `/api/items/:id` | 삭제 |
 | GET | `/api/shelf-life?ingredient=양파&storage=room_shade` | 권장 보관일수 조회 |
 | GET | `/api/stats/waste?months=6` | **월별 폐기 금액·절감 추이** — MISSION 성공 지표 측정 |
-| POST | `/api/recipes/suggest` | 보유 재고 기반 레시피 추천 |
+| POST | `/api/recipes/suggest` | 레시피 추천 (하이브리드: 캐시 → OpenAI 생성 → 캐시 저장) |
 | POST | `/api/coupang/link` | 구매 링크 생성. **v1: 쿠팡 검색 URL** → 승인 후 딥링크로 교체 |
 
 **OCR 엔진을 바꿔도 프론트는 안 바뀐다.** `/api/label/parse`가 텍스트를 받아 구조화하므로, OCR을 Tesseract.js → CLOVA → ML Kit으로 갈아타도 **파싱 로직과 응답 형태는 그대로**다.
@@ -257,8 +258,8 @@ indivisualPJT_nowaste/
 - [ ] 🔴 **촬영 → 백그라운드 OCR → 확인 대기 큐** — 연속 촬영, 사진은 IndexedDB에 임시 보관, OCR은 백그라운드, 완료 시 `status=pending`으로 적재
 - [ ] 🟡 **확인 화면** — 사진 + 읽어낸 값 나란히, 카드 넘기며 확인/수정 → `status=confirmed`
 - [ ] 🟡 **촬영 30초 기준선 실측** — 실제 장바구니로 재본다 (확인 단계 제외)
-- [ ] 🟡 보유 재고 기반 레시피 추천 — `ingredient`로 매칭 + 상황별(아이들용/건강식) 필터
-- [ ] 🟡 용량 기반 잔량 자동 차감 — 사용량만큼 `remaining` UPDATE
+- [x] 🟢 **보유 재고 기반 레시피 추천 (하이브리드)** ✅ Phase 2에서 앞당겨 완료 — `recipes.js`. **캐시(전역 카탈로그) 먼저 → 부족하면 OpenAI `gpt-4o-mini` 생성 → 캐시 저장.** 첫 조합 ~13초, 캐시 히트 ~200ms. structured output **enum으로 재료를 38종 어휘에 강제**(환각 차단). 랭킹: 급한 재료 → 소진량 → 부족 적은 순. 양념은 '있다고 가정'해 주문서 제외. 검증 `npm run test:recipes`
+- [ ] 🟡 용량 기반 잔량 자동 차감 — 사용량만큼 `remaining` UPDATE (레시피 `uses[].amt` 사용)
 - [ ] 🟢 부족 재료 구매 링크 — **쿠팡 검색 URL 생성**. ⚠️ 링크 생성을 **함수 하나에 가둘 것** (승인 후 딥링크로 교체할 지점)
 - [ ] ⬜ (선택) 바코드 스캔 보조 — OCR이 제품명을 못 잡을 때만. 공공 API 커버리지가 나쁘므로 **없어도 무방**
 - 📌 **체크포인트:** 촬영 → 백그라운드 OCR → 확인 → 재고 → 레시피 → 구매링크 → 잔량 차감의 **전체 흐름**이 동작.
@@ -287,11 +288,12 @@ indivisualPJT_nowaste/
 
 | 항목 | 설명 | 획득 방법 |
 |------|------|----------|
-| `DB_URL` | Supabase Postgres 연결 문자열 | supabase.com → Connect → **Direct connection**. 안 붙으면 pooler로 폴백 (함정 4) |
-| `JWT_SECRET` | JWT 서명 키 | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| Tesseract.js | 브라우저 OCR | **CDN. 키·계정·비용 없음.** 바로 시작 가능 |
+| `SUPABASE_DB_URL` | Supabase Postgres 연결 문자열 | supabase.com → Connect. Direct가 안 붙으면 **pooler(6543)** — 지금 이걸 쓰는 중 (함정 4) |
+| `JWT_SECRET` | JWT 서명 키 | `npm run secret` 이 생성 |
+| `OPEN_AI_API` | 레시피 생성 (`gpt-4o-mini`) | platform.openai.com → API keys. **`server.js`가 프록시하므로 프론트 노출 없음.** 호출당 ~0.01원, 캐시로 점점 0에 수렴 |
+| Tesseract.js | 브라우저 OCR (Phase 3) | **CDN. 키·계정·비용 없음** |
 
-> **anon key 불필요** (supabase-js 안 씀). **supabase CLI 불필요** (Edge Function 안 씀). **바코드 API 불필요** (OCR 우선으로 전환).
+> **anon key 불필요** (supabase-js 안 씀). **supabase CLI 불필요** (Edge Function 안 씀). **바코드 API 불필요** (OCR 우선).
 
 ### 정확도 부족 시 (Phase 3 실측 후 판단)
 

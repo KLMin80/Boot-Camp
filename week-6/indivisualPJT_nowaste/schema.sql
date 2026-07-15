@@ -57,6 +57,26 @@ CREATE INDEX IF NOT EXISTS idx_fridge_items_user_expiry ON fridge_items (user_id
 CREATE INDEX IF NOT EXISTS idx_fridge_items_user_status ON fridge_items (user_id, status);
 CREATE INDEX IF NOT EXISTS idx_fridge_items_user_open   ON fridge_items (user_id) WHERE outcome IS NULL;
 
+-- 레시피 캐시 — 전역 공유 카탈로그 (user_id 없음).
+-- 하이브리드: 여기서 먼저 찾고, 없으면 LLM으로 생성해 여기 저장한다.
+-- 한 사용자가 만든 레시피가 모두에게 남는다 = 쓸수록 LLM 호출이 줄어드는 플라이휠.
+CREATE TABLE IF NOT EXISTS fridge_recipe_cache (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  title      text UNIQUE NOT NULL,
+  tag        text NOT NULL DEFAULT '어른' CHECK (tag IN ('아이','어른','건강')),
+  mins       int  NOT NULL DEFAULT 20,
+  emoji      text NOT NULL DEFAULT '🍽️',
+  uses       jsonb NOT NULL,                    -- [{"ing":"두부","amt":300,"unit":"g"}]
+  core_ings  text[] NOT NULL,                   -- uses의 재료명만 정렬 — 부분집합 매칭용
+  seasonings text[] NOT NULL DEFAULT '{}',      -- 집에 있다고 가정하는 양념 (주문 대상 아님)
+  steps      jsonb NOT NULL DEFAULT '[]',       -- 조리 단계
+  source     text NOT NULL DEFAULT 'llm' CHECK (source IN ('llm','seed')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+-- core_ings 배열 겹침(&&) 질의를 빠르게
+CREATE INDEX IF NOT EXISTS idx_recipe_core_ings ON fridge_recipe_cache USING gin (core_ings);
+CREATE INDEX IF NOT EXISTS idx_recipe_tag ON fridge_recipe_cache (tag);
+
 -- 보관기간 프리셋 시드
 -- freezer 행이 없는 재료 = 얼리면 못 쓰는 재료 (두부·감자·달걀·우유·오이·상추·토마토)
 INSERT INTO fridge_shelf_life (ingredient, storage, days) VALUES

@@ -10,6 +10,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
+const recipes = require('./recipes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -280,47 +281,25 @@ app.get('/api/stats/waste', auth, async (req, res) => {
   res.json({ monthly: monthly.rows, top: top.rows, ...saved.rows[0] });
 });
 
-/* ───────────────── 레시피 · 구매 링크 ─────────────────
-   Phase 3에서 진짜 매칭으로 바꾼다. 지금은 보유 재고에 대고 고정 목록을 맞춘다. */
-const RECIPES = [
-  { id: 'r1', title: '두부 대파 된장찌개', mins: 15, tag: '어른', emoji: '🍲',
-    uses: [{ ing: '두부', amt: 300, unit: 'g' }, { ing: '대파', amt: 100, unit: 'g' }], extra: [] },
-  { id: 'r2', title: '대파 돼지고기 볶음', mins: 20, tag: '아이', emoji: '🥘',
-    uses: [{ ing: '대파', amt: 100, unit: 'g' }, { ing: '돼지고기', amt: 300, unit: 'g' }], extra: ['간장'] },
-  { id: 'r3', title: '시금치 달걀말이', mins: 12, tag: '아이', emoji: '🥚',
-    uses: [{ ing: '시금치', amt: 100, unit: 'g' }, { ing: '달걀', amt: 3, unit: '개' }], extra: [] },
-  { id: 'r4', title: '우유 감자 스프', mins: 25, tag: '건강', emoji: '🥣',
-    uses: [{ ing: '우유', amt: 400, unit: 'ml' }, { ing: '감자', amt: 200, unit: 'g' }], extra: ['양송이'] },
-  { id: 'r5', title: '양파 소고기 덮밥', mins: 18, tag: '어른', emoji: '🍛',
-    uses: [{ ing: '양파', amt: 1, unit: '개' }, { ing: '소고기', amt: 200, unit: 'g' }], extra: ['밥'] },
-];
-
+/* ───────────────── 레시피 (하이브리드: 캐시 + LLM) ───────────────── */
 app.post('/api/recipes/suggest', auth, async (req, res) => {
-  const tag = req.body.tag && req.body.tag !== '전체' ? req.body.tag : null;
-  const r = await pool.query(
-    `SELECT ingredient, SUM(remaining)::float8 AS have,
-            MIN(expiry_date - ${TODAY_KST})::int AS days_left
+  const tag = req.body.tag || '전체';
+
+  // 보유 재고를 재료 단위로 집계 (급한 순 판단에 min 유통기한)
+  const inv = await pool.query(
+    `SELECT ingredient AS ing, SUM(remaining)::float8 AS remaining,
+            MIN(unit) AS unit, MIN(expiry_date - ${TODAY_KST})::int AS days_left
        FROM fridge_items
       WHERE user_id = $1 AND outcome IS NULL AND status = 'confirmed'
-      GROUP BY 1`,
+      GROUP BY ingredient`,
     [req.userId]
   );
-  const stock = Object.fromEntries(r.rows.map((x) => [x.ingredient, x]));
+  // 레시피 어휘 = 우리가 아는 모든 재료 (프리셋 사전이 곧 정식 재료명)
+  const vocabRes = await pool.query('SELECT DISTINCT ingredient FROM fridge_shelf_life ORDER BY 1');
+  const vocab = vocabRes.rows.map((r) => r.ingredient);
 
-  const out = RECIPES
-    .filter((rc) => !tag || rc.tag === tag)
-    .map((rc) => {
-      const missing = [
-        ...rc.uses.filter((u) => !stock[u.ing] || stock[u.ing].have < u.amt).map((u) => u.ing),
-        ...rc.extra,
-      ];
-      const owned = rc.uses.filter((u) => stock[u.ing]);
-      const soonest = owned.length ? Math.min(...owned.map((u) => stock[u.ing].days_left)) : 99;
-      return { ...rc, missing, soonest, uses: rc.uses.map((u) => ({ ...u, have: stock[u.ing]?.have ?? 0, days_left: stock[u.ing]?.days_left ?? null })) };
-    })
-    .sort((a, b) => a.soonest - b.soonest); // 급한 재료를 쓰는 것부터
-
-  res.json({ recipes: out });
+  const out = await recipes.suggest({ inventory: inv.rows, vocab, tag, want: 6 });
+  res.json(out);
 });
 
 /* v1은 쿠팡 검색 URL. 파트너스 승인 후 이 함수 안만 딥링크로 바꾸면 된다. */

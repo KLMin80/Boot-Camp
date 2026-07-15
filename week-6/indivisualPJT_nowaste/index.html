@@ -912,6 +912,7 @@ function CookView({ toast }) {
   const [tag, setTag] = useState('전체');
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -946,42 +947,44 @@ function CookView({ toast }) {
         ))}
       </div>
 
-      {loading ? <Spinner label="찾는 중" /> : (
+      {loading ? (
+        <div className="text-center py-16">
+          <p className="text-[14px] text-muted">냉장고를 보고 요리를 고르는 중…</p>
+          <p className="text-[12px] text-muted/70 mt-1.5">처음 보는 재료 조합이면 몇 초 걸려요</p>
+        </div>
+      ) : (
         <div className="px-4 pt-3 space-y-2.5">
           {list.map((r) => (
-            <article key={r.id} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
-              <div className="flex gap-3 p-4 pb-3">
-                <div className="w-12 h-12 rounded-xl bg-paper grid place-items-center text-[24px] shrink-0">{r.emoji}</div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-extrabold truncate">{r.title}</h3>
-                    {r.soonest <= 1 && (
-                      <span className="shrink-0 text-[10px] font-bold text-white bg-urgent px-1.5 py-0.5 rounded">급한 재료</span>
-                    )}
+            <article key={r.title} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
+              <button onClick={() => setDetail(r)} className="tap w-full text-left active:bg-paper transition-colors">
+                <div className="flex gap-3 p-4 pb-3">
+                  <div className="w-12 h-12 rounded-xl bg-paper grid place-items-center text-[24px] shrink-0">{r.emoji}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-extrabold truncate">{r.title}</h3>
+                      {r.urgentUses >= 1 && (
+                        <span className="shrink-0 text-[10px] font-bold text-white bg-urgent px-1.5 py-0.5 rounded">급한 재료</span>
+                      )}
+                    </div>
+                    <p className="tnum text-[12px] text-muted mt-0.5">{r.mins}분 · {r.tag} · 만드는 법 보기</p>
                   </div>
-                  <p className="tnum text-[12px] text-muted mt-0.5">{r.mins}분 · {r.tag}</p>
                 </div>
-              </div>
 
-              <div className="px-4 pb-3 flex flex-wrap gap-1.5">
-                {r.uses.map((u) => {
-                  const have = u.days_left != null;
-                  const tone = have ? urgencyOf(u.days_left) : null;
-                  return (
-                    <span key={u.ing}
-                      className={`tnum text-[12px] font-semibold px-2 py-1 rounded-md border ${
-                        have ? `${TONE[tone].border} ${TONE[tone].soft} ${TONE[tone].text}`
-                             : 'border-dashed border-line text-muted'}`}>
-                      {u.ing} {u.amt}{u.unit}{!have && ' 없음'}
-                    </span>
-                  );
-                })}
-                {r.extra.map((m) => (
-                  <span key={m} className="text-[12px] font-semibold px-2 py-1 rounded-md border border-dashed border-line text-muted">
-                    {m} 없음
-                  </span>
-                ))}
-              </div>
+                <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+                  {r.uses.map((u) => {
+                    const owned = u.days_left != null;
+                    const tone = owned ? urgencyOf(u.days_left) : null;
+                    return (
+                      <span key={u.ing}
+                        className={`tnum text-[12px] font-semibold px-2 py-1 rounded-md border ${
+                          owned ? `${TONE[tone].border} ${TONE[tone].soft} ${TONE[tone].text}`
+                                : 'border-dashed border-line text-muted'}`}>
+                        {u.ing} {u.amt}{u.unit}{!owned && ' 없음'}
+                      </span>
+                    );
+                  })}
+                </div>
+              </button>
 
               <div className="grid grid-cols-2 gap-2 p-3 pt-0">
                 <button onClick={() => toast(`${r.title} — 잔량 차감은 다음 단계에서 붙어요`)}
@@ -997,12 +1000,77 @@ function CookView({ toast }) {
               </div>
             </article>
           ))}
-          {!list.length && <p className="text-center text-muted text-[14px] py-14">추천할 게 없어요.</p>}
+          {!list.length && (
+            <p className="text-center text-muted text-[14px] py-14 leading-relaxed">
+              지금 재료로 추천할 게 없어요.<br />재료를 더 담으면 요리가 나와요.
+            </p>
+          )}
         </div>
       )}
 
       <div className="h-6" />
+      <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy} />
     </>
+  );
+}
+
+/* 레시피 상세 — 만드는 법. 카드를 탭하면 뜬다. */
+function RecipeSheet({ recipe, onClose, onBuy }) {
+  if (!recipe) return null;
+  const r = recipe;
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="flex items-start gap-3">
+        <div className="w-12 h-12 rounded-xl bg-paper grid place-items-center text-[24px] shrink-0">{r.emoji}</div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-[19px] font-extrabold">{r.title}</h3>
+          <p className="tnum text-[12px] text-muted mt-0.5">{r.mins}분 · {r.tag}</p>
+        </div>
+        <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
+      </div>
+
+      <div className="mt-4">
+        <p className="text-[11px] font-bold text-muted mb-1.5">재료</p>
+        <div className="flex flex-wrap gap-1.5">
+          {r.uses.map((u) => {
+            const owned = u.days_left != null;
+            const tone = owned ? urgencyOf(u.days_left) : null;
+            return (
+              <span key={u.ing}
+                className={`tnum text-[12px] font-semibold px-2 py-1 rounded-md border ${
+                  owned ? `${TONE[tone].border} ${TONE[tone].soft} ${TONE[tone].text}`
+                        : 'border-dashed border-line text-muted'}`}>
+                {u.ing} {u.amt}{u.unit}{!owned && ' 없음'}
+              </span>
+            );
+          })}
+        </div>
+        {r.seasonings?.length > 0 && (
+          <p className="text-[11px] text-muted mt-2">양념: {r.seasonings.join(', ')} <span className="opacity-60">(집에 있다고 봤어요)</span></p>
+        )}
+      </div>
+
+      {r.steps?.length > 0 && (
+        <div className="mt-4 max-h-[38vh] overflow-y-auto noscroll">
+          <p className="text-[11px] font-bold text-muted mb-1.5">만드는 법</p>
+          <ol className="space-y-2">
+            {r.steps.map((s, i) => (
+              <li key={i} className="flex gap-2.5">
+                <span className="tnum shrink-0 w-5 h-5 rounded-full bg-ink text-white text-[11px] font-bold grid place-items-center mt-0.5">{i + 1}</span>
+                <span className="text-[14px] leading-relaxed">{s}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {r.missing?.length > 0 && (
+        <button onClick={() => onBuy(r.missing)}
+          className="tap w-full h-[50px] rounded-xl border-2 border-ink font-bold mt-4 active:bg-paper">
+          부족한 {r.missing.join(', ')} 주문하기
+        </button>
+      )}
+    </Sheet>
   );
 }
 
