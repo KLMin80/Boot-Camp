@@ -6,6 +6,7 @@
 
 require('dotenv').config();
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -413,11 +414,12 @@ app.post('/api/buy-links', auth, async (req, res) => {
    ⚠️ express.static으로 프로젝트 폴더를 통째로 열면
    GET /.env 로 DB 비밀번호와 JWT 시크릿이 그대로 유출된다.
    그래서 파일을 하나씩 허용 목록으로만 내보낸다. */
-const ALLOWED_FILES = { '/': 'index.html', '/index.html': 'index.html' };
+// index.html을 시작 시 한 번 읽어 메모리에서 서빙.
+// (Vercel 번들러가 런타임 sendFile 경로를 추적 못 해 파일을 안 넣는 문제 회피 +
+//  매 요청 디스크 stat 제거. 배포는 불변이라 시작 시 1회 읽으면 충분.)
+const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
-app.get(['/', '/index.html'], (req, res) => {
-  res.sendFile(path.join(__dirname, ALLOWED_FILES[req.path] || 'index.html'));
-});
+app.get(['/', '/index.html'], (req, res) => res.type('html').send(INDEX_HTML));
 
 app.get('/api/health', async (req, res) => {
   await pool.query('SELECT 1');
