@@ -18,6 +18,9 @@ Thumbs.db
 # Node dependencies
 node_modules/
 
+# Tesseract.js 언어모델 (OCR 검증용으로만 --no-save 설치; 채택 안 함)
+*.traineddata
+
 # Local scratch / class archives — not part of the repo
 /local-dashboard.png
 week-6/class/afm-weekday-6.zip
