@@ -1,0 +1,5 @@
+# 배포에 불필요한 것 제외 (런타임은 server.js·index.html·*.js 모듈만 필요)
+scripts/
+*.png
+*.md
+.playwright-mcp/

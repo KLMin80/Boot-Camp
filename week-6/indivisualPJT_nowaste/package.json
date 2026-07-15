@@ -23,5 +23,8 @@
     "jsonwebtoken": "^9.0.3",
     "openai": "^6.47.0",
     "pg": "^8.22.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
