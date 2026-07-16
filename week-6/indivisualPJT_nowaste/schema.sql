@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS fridge_items (
   expiry_source    text NOT NULL DEFAULT 'manual' CHECK (expiry_source IN ('ocr','preset','manual')),
 
   storage          text NOT NULL DEFAULT 'fridge' CHECK (storage IN ('fridge','freezer','room','room_shade')),
-  status           text NOT NULL DEFAULT 'confirmed' CHECK (status IN ('pending','confirmed')),
+  -- pending=사진 판독 후 확인 대기 / confirmed=냉장고에 있음 / ordered=주문함, 도착 예정
+  status           text NOT NULL DEFAULT 'confirmed' CHECK (status IN ('pending','confirmed','ordered')),
 
   -- 소진·폐기 (STRATEGY.md: 이걸 안 쌓으면 절감을 측정할 수 없고, 자산도 안 남는다)
   closed_on        date,
@@ -66,11 +67,12 @@ CREATE TABLE IF NOT EXISTS fridge_recipe_cache (
   tag        text NOT NULL DEFAULT '어른' CHECK (tag IN ('아이','어른','건강')),
   mins       int  NOT NULL DEFAULT 20,
   emoji      text NOT NULL DEFAULT '🍽️',
-  uses       jsonb NOT NULL,                    -- [{"ing":"두부","amt":300,"unit":"g"}]
+  uses       jsonb NOT NULL,                    -- [{"ing":"두부","amt":300,"unit":"g"}] — servings 기준 양
+  servings   int  NOT NULL DEFAULT 2,           -- 기준 인분 (UI서 인분 바꾸면 uses 양을 비례 스케일)
   core_ings  text[] NOT NULL,                   -- uses의 재료명만 정렬 — 부분집합 매칭용
   seasonings text[] NOT NULL DEFAULT '{}',      -- 집에 있다고 가정하는 양념 (주문 대상 아님)
   steps      jsonb NOT NULL DEFAULT '[]',       -- 조리 단계
-  source     text NOT NULL DEFAULT 'llm' CHECK (source IN ('llm','seed')),
+  source     text NOT NULL DEFAULT 'llm' CHECK (source IN ('llm','seed','byname')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 -- core_ings 배열 겹침(&&) 질의를 빠르게
@@ -123,3 +125,19 @@ INSERT INTO fridge_shelf_life (ingredient, storage, days) VALUES
   ('밥','fridge',2),        ('밥','freezer',30),
   ('식빵','room',3),        ('식빵','fridge',7), ('식빵','freezer',30)
 ON CONFLICT (ingredient, storage) DO UPDATE SET days = EXCLUDED.days;
+
+-- ── 기존 DB 마이그레이션 (여러 번 돌려도 안전) ──
+-- 재고 status에 'ordered'(주문함, 도착 예정) 추가
+ALTER TABLE fridge_items DROP CONSTRAINT IF EXISTS fridge_items_status_check;
+ALTER TABLE fridge_items ADD CONSTRAINT fridge_items_status_check
+  CHECK (status IN ('pending','confirmed','ordered'));
+
+-- 레시피에 기준 인분(servings) + source에 'byname' 허용
+ALTER TABLE fridge_recipe_cache ADD COLUMN IF NOT EXISTS servings int NOT NULL DEFAULT 2;
+ALTER TABLE fridge_recipe_cache DROP CONSTRAINT IF EXISTS fridge_recipe_cache_source_check;
+ALTER TABLE fridge_recipe_cache ADD CONSTRAINT fridge_recipe_cache_source_check
+  CHECK (source IN ('llm','seed','byname'));
+
+-- ordered 항목을 빠르게 (곧 도착 목록)
+CREATE INDEX IF NOT EXISTS idx_fridge_items_user_ordered
+  ON fridge_items (user_id) WHERE status = 'ordered' AND outcome IS NULL;

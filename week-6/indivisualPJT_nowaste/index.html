@@ -127,13 +127,15 @@ const API = {
   parseLabel: (image, storage) => api('POST', '/api/label/parse', { image, storage }),
   patch:   (id, b)  => api('PATCH', `/api/items/${id}`, b),
   freeze:  (id)     => api('POST', `/api/items/${id}/freeze`),
+  receive: (id)     => api('POST', `/api/items/${id}/receive`),
   close:   (id, outcome, amount) =>
              api('POST', `/api/items/${id}/close`, { outcome, discarded_amount: amount ?? null }),
   remove:  (id)     => api('DELETE', `/api/items/${id}`),
 
-  waste:   (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
-  recipes: (tag)   => api('POST', '/api/recipes/suggest', { tag }),
-  buyLinks:(names) => api('POST', '/api/buy-links', { items: names }),
+  waste:    (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
+  recipes:  (tag, includeOrdered) => api('POST', '/api/recipes/suggest', { tag, includeOrdered }),
+  recipeByName: (dish, tag, includeOrdered) => api('POST', '/api/recipes/byname', { dish, tag, includeOrdered }),
+  buyLinks: (names) => api('POST', '/api/buy-links', { items: names }),
 };
 
 /* ── 날짜 · 표시 ──
@@ -148,6 +150,13 @@ const STORAGE = {
   room:       { label: '실온',      icon: '🌡️' },
   room_shade: { label: '실온·그늘', icon: '🌥️' },
 };
+
+// 재료별 기본 단위 추정 (고기·채소는 g, 우유는 ml, 낱개로 세는 건 개)
+const UNITS = ['g', 'ml', '개'];
+const COUNT_INGS = new Set(['양파', '사과', '배', '달걀', '바나나', '귤', '감자', '고구마', '토마토', '애호박', '오이', '파프리카']);
+const ML_INGS = new Set(['우유', '요거트']);
+const defaultUnit = (ing) => (ML_INGS.has(ing) ? 'ml' : COUNT_INGS.has(ing) ? '개' : 'g');
+const defaultAmount = (unit) => (unit === '개' ? 1 : unit === 'ml' ? 500 : 300);
 
 /* 업로드 크기만 줄인다. 2048px 유지 — 더 줄이면 작은 라벨 날짜를 놓친다(실측).
    OpenAI가 내부적으로 어차피 축소하므로 토큰(비용)은 안 늘고, 업로드만 가벼워진다. */
@@ -487,7 +496,7 @@ const TABS = [
   { key: 'room',    label: '실온' },
 ];
 
-function HomeView({ items, loading, presets, pendingCount, setView, onFreezeAll, onItemAction, busy, email, onLogout }) {
+function HomeView({ items, ordered = [], loading, presets, pendingCount, setView, onFreezeAll, onItemAction, onReceive, busy, email, onLogout }) {
   const [tab, setTab] = useState('all');
   const [sheet, setSheet] = useState(null);
 
@@ -530,6 +539,29 @@ function HomeView({ items, loading, presets, pendingCount, setView, onFreezeAll,
         <>
           <RescueCard doomed={doomed} presets={presets} busy={busy}
             onFreezeAll={onFreezeAll} onCook={() => setView('cook')} />
+
+          {/* 곧 도착 — 주문했지만 아직 안 온 재료. 도착하면 냉장고로. */}
+          {ordered.length > 0 && (
+            <section className="mx-4 mt-4 rounded-2xl border border-frost/40 bg-frost/[.05] overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+                <span className="text-[13px]">🛒</span>
+                <span className="text-[13px] font-bold text-frost">곧 도착</span>
+                <span className="tnum text-[12px] text-muted">{ordered.length}</span>
+              </div>
+              <div className="divide-y divide-frost/15">
+                {ordered.map((it) => (
+                  <div key={it.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <span className="font-semibold flex-1 truncate">{it.name}</span>
+                    <button disabled={busy} onClick={() => onReceive(it)}
+                      className="tap text-[12px] font-bold text-white bg-frost px-3 py-1.5 rounded-lg active:opacity-80 disabled:opacity-50">
+                      받았어요
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted px-4 py-2">받으면 냉장고로 옮기고 유통기한이 잡혀요. 요리 화면에서 '주문분 포함'을 켜면 미리 레시피에 반영돼요.</p>
+            </section>
+          )}
 
           {items.length > 0 && (
             <div className="flex gap-1.5 px-4 pt-5 pb-1 overflow-x-auto noscroll">
@@ -754,7 +786,8 @@ function PhotoCaptureView({ onDone, back }) {
 function FreshView({ presets, onAdd, back, busy }) {
   const [ing, setIng] = useState(null);
   const [storage, setStorage] = useState(null);
-  const [qty, setQty] = useState(1);
+  const [unit, setUnit] = useState('개');
+  const [amount, setAmount] = useState(1);
 
   const names = useMemo(() => Object.keys(presets), [presets]);
   const [q, setQ] = useState('');
@@ -770,7 +803,11 @@ function FreshView({ presets, onAdd, back, busy }) {
     setIng(v);
     const opts = Object.keys(presets[v] || {});
     setStorage(opts.length === 1 ? opts[0] : null);
+    const u = defaultUnit(v);
+    setUnit(u);
+    setAmount(defaultAmount(u));
   };
+  const pickUnit = (u) => { setUnit(u); setAmount(defaultAmount(u)); };
 
   return (
     <>
@@ -823,19 +860,35 @@ function FreshView({ presets, onAdd, back, busy }) {
 
       {days != null && (
         <div className="rise px-4 pt-6">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[13px] font-bold flex-1">몇 개예요?</span>
-            <button onClick={() => setQty((n) => Math.max(1, n - 1))}
-              className="tap w-10 h-10 rounded-lg border-2 border-line font-bold active:bg-paper">−</button>
-            <span className="tnum w-10 text-center font-bold text-[17px]">{qty}</span>
-            <button onClick={() => setQty((n) => n + 1)}
-              className="tap w-10 h-10 rounded-lg border-2 border-line font-bold active:bg-paper">+</button>
+          <p className="text-[13px] font-bold mb-2">얼마나요?</p>
+          <div className="flex items-center gap-2 mb-2">
+            {unit === '개' ? (
+              <>
+                <button onClick={() => setAmount((n) => Math.max(1, n - 1))}
+                  className="tap w-11 h-11 rounded-lg border-2 border-line font-bold active:bg-paper">−</button>
+                <span className="tnum w-12 text-center font-bold text-[17px]">{amount}</span>
+                <button onClick={() => setAmount((n) => n + 1)}
+                  className="tap w-11 h-11 rounded-lg border-2 border-line font-bold active:bg-paper">+</button>
+              </>
+            ) : (
+              <input type="number" min="1" value={amount}
+                onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
+                className="tnum w-24 h-11 px-3 rounded-lg border-2 border-line bg-surface font-bold text-[16px] focus:border-ink outline-none" />
+            )}
+            <div className="flex gap-1.5 ml-auto">
+              {UNITS.map((u) => (
+                <button key={u} onClick={() => pickUnit(u)}
+                  className={`tap w-12 h-11 rounded-lg border-2 text-[14px] font-bold transition-colors ${
+                    unit === u ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+                  }`}>{u}</button>
+              ))}
+            </div>
           </div>
 
-          <div className="rounded-xl border-2 border-calm bg-calm/[.06] px-4 py-4 flex items-center gap-3">
+          <div className="rounded-xl border-2 border-calm bg-calm/[.06] px-4 py-4 flex items-center gap-3 mt-3">
             <span className="text-[26px] leading-none">{STORAGE[storage].icon}</span>
             <div className="flex-1">
-              <p className="font-extrabold">{ing} · {STORAGE[storage].label}</p>
+              <p className="font-extrabold tnum">{ing} {amount}{unit} · {STORAGE[storage].label}</p>
               <p className="tnum text-[13px] text-calm font-semibold mt-0.5">
                 {days}일 뒤까지 <span className="text-muted font-normal">(오늘 담으면)</span>
               </p>
@@ -844,7 +897,7 @@ function FreshView({ presets, onAdd, back, busy }) {
           </div>
 
           <button disabled={busy}
-            onClick={() => onAdd({ name: ing, ingredient: ing, capacity: qty, remaining: qty, unit: '개', storage })}
+            onClick={() => onAdd({ name: ing, ingredient: ing, capacity: amount, remaining: amount, unit, storage })}
             className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-3 active:opacity-80 disabled:opacity-50">
             {busy ? '담는 중…' : '담기'}
           </button>
@@ -1092,23 +1145,41 @@ function Row({ label, value, tnum }) {
 
 const COOK_TAGS = ['전체', '아이', '어른', '건강'];
 
-function CookView({ toast }) {
+function CookView({ toast, onAddOrdered, hasOrdered }) {
   const [tag, setTag] = useState('전체');
+  const [includeOrdered, setIncludeOrdered] = useState(false);
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState(null);
   const [buyData, setBuyData] = useState(null);  // { items, markets, links, priceHint }
   const [buying, setBuying] = useState(false);
+  const [dish, setDish] = useState('');
+  const [finding, setFinding] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    API.recipes(tag)
+    API.recipes(tag, includeOrdered)
       .then((r) => alive && setList(r.recipes))
       .catch((e) => alive && toast(e.message, 'bad'))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [tag]);
+  }, [tag, includeOrdered]);
+
+  // 원하는 음식 직접 입력 → 그 레시피 생성해서 상세로 연다
+  const findDish = async () => {
+    const q = dish.trim();
+    if (!q || finding) return;
+    setFinding(true);
+    try {
+      const { recipe } = await API.recipeByName(q, tag, includeOrdered);
+      setDish('');
+      setDetail(recipe);
+      // 새로 만든 건 목록 맨 앞에도 (중복 아니면)
+      setList((cur) => cur.some((x) => x.title === recipe.title) ? cur : [recipe, ...cur]);
+    } catch (e) { toast(e.message, 'bad'); }
+    finally { setFinding(false); }
+  };
 
   // 여러 마켓으로 보내 직접 비교하게 한다 (실시간 가격은 담벼락 탓에 불가 → 딥링크 + 네이버 참고가)
   const buy = async (missing) => {
@@ -1126,7 +1197,21 @@ function CookView({ toast }) {
     <>
       <Header title="오늘 뭐 먹지" sub="급한 재료부터 쓰는 순서로" />
 
-      <div className="flex gap-1.5 px-4 pt-4 pb-1">
+      {/* 원하는 음식 직접 입력 */}
+      <div className="px-4 pt-4">
+        <div className="flex gap-2">
+          <input value={dish} onChange={(e) => setDish(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && findDish()}
+            placeholder="먹고 싶은 음식 입력 (예: 김치찌개)"
+            className="flex-1 h-11 px-3.5 rounded-xl border-2 border-line bg-surface text-[14px] font-medium focus:border-ink outline-none" />
+          <button onClick={findDish} disabled={finding || !dish.trim()}
+            className="tap px-4 h-11 rounded-xl bg-ink text-white font-bold text-[14px] active:opacity-80 disabled:opacity-40">
+            {finding ? '…' : '레시피'}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
         {COOK_TAGS.map((t) => (
           <button key={t} onClick={() => setTag(t)}
             className={`tap px-3.5 h-8 rounded-full text-[13px] font-semibold border transition-colors ${
@@ -1135,6 +1220,14 @@ function CookView({ toast }) {
             {t}
           </button>
         ))}
+        {hasOrdered && (
+          <button onClick={() => setIncludeOrdered((v) => !v)}
+            className={`tap ml-auto shrink-0 px-3 h-8 rounded-full text-[12px] font-bold border transition-colors ${
+              includeOrdered ? 'bg-frost text-white border-frost' : 'bg-surface text-muted border-line active:bg-paper'
+            }`}>
+            🛒 주문분 {includeOrdered ? '포함' : '제외'}
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -1200,25 +1293,36 @@ function CookView({ toast }) {
 
       <div className="h-6" />
       <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy} busy={buying} />
-      <BuySheet data={buyData} onClose={() => setBuyData(null)} onPick={(url, market, ing) => {
-        window.open(url, '_blank', 'noopener');
-        toast(`${market}에서 ${ing} 찾는 중`);
-      }} />
+      <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
+        onPick={(url, market, ing) => {
+          window.open(url, '_blank', 'noopener');
+          toast(`${market}에서 ${ing} 찾는 중`);
+        }} />
     </>
   );
 }
 
 /* 멀티 마켓 구매 시트 — 재료마다 어느 마켓에서 살지 직접 고른다.
-   실시간 가격 비교는 불가하지만(담벼락), 마켓 선택권과 네이버 참고가를 준다. */
-function BuySheet({ data, onClose, onPick }) {
+   실시간 가격 비교는 불가하지만(담벼락), 마켓 선택권과 네이버 참고가를 준다.
+   외부에서 사고 온 뒤 '주문했어요'로 '곧 도착'(ordered) 재고에 넣을 수 있다. */
+function BuySheet({ data, onClose, onPick, onAddOrdered }) {
+  const [ordered, setOrdered] = useState({});
+  useEffect(() => { setOrdered({}); }, [data]);
   if (!data) return null;
   const { items, markets, links, priceHint } = data;
+
+  const markOrdered = async (ing) => {
+    setOrdered((o) => ({ ...o, [ing]: 'loading' }));
+    try { await onAddOrdered(ing); setOrdered((o) => ({ ...o, [ing]: 'done' })); }
+    catch { setOrdered((o) => ({ ...o, [ing]: undefined })); }
+  };
+
   return (
     <Sheet open onClose={onClose}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-[19px] font-extrabold">부족한 재료 사러 가기</h3>
-          <p className="text-[12px] text-muted mt-0.5">마켓을 골라 직접 비교해 보세요</p>
+          <p className="text-[12px] text-muted mt-0.5">마켓을 골라 비교하고, 주문했으면 표시해요</p>
         </div>
         <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
       </div>
@@ -1231,6 +1335,12 @@ function BuySheet({ data, onClose, onPick }) {
               {priceHint?.[ing] != null && (
                 <span className="tnum text-[12px] text-calm font-semibold">네이버 최저 {won(priceHint[ing])}원~</span>
               )}
+              <button onClick={() => markOrdered(ing)} disabled={ordered[ing]}
+                className={`ml-auto text-[12px] font-bold px-2.5 py-1 rounded-md border-2 transition-colors ${
+                  ordered[ing] === 'done' ? 'border-frost text-frost bg-frost/10'
+                    : 'border-line text-muted active:bg-paper'}`}>
+                {ordered[ing] === 'done' ? '🛒 주문함 ✓' : ordered[ing] === 'loading' ? '…' : '주문했어요'}
+              </button>
             </div>
             <div className="grid grid-cols-2 gap-2">
               {markets.map((m) => (
@@ -1257,8 +1367,18 @@ function BuySheet({ data, onClose, onPick }) {
 
 /* 레시피 상세 — 만드는 법. 카드를 탭하면 뜬다. */
 function RecipeSheet({ recipe, onClose, onBuy }) {
+  const base = recipe?.servings > 0 ? recipe.servings : 2;
+  const [servings, setServings] = useState(base);
+  useEffect(() => { setServings(recipe?.servings > 0 ? recipe.servings : 2); }, [recipe?.title]);
   if (!recipe) return null;
   const r = recipe;
+  // 인분에 맞춰 양을 비례 스케일 (깔끔하게 반올림)
+  const scale = servings / base;
+  const scaleAmt = (amt) => {
+    const v = (amt || 0) * scale;
+    return v >= 100 ? Math.round(v / 10) * 10 : v >= 10 ? Math.round(v) : Math.round(v * 2) / 2;
+  };
+
   return (
     <Sheet open onClose={onClose}>
       <div className="flex items-start gap-3">
@@ -1270,18 +1390,30 @@ function RecipeSheet({ recipe, onClose, onBuy }) {
         <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
       </div>
 
+      {/* 인분 선택 — 바꾸면 아래 재료 양이 비례해 바뀐다 (주말 여러 끼니 대비) */}
+      <div className="flex items-center gap-2 mt-4 rounded-xl bg-paper px-3.5 py-2.5">
+        <span className="text-[13px] font-bold flex-1">몇 인분?</span>
+        <button onClick={() => setServings((n) => Math.max(1, n - 1))}
+          className="tap w-9 h-9 rounded-lg border-2 border-line bg-surface font-bold active:bg-paper">−</button>
+        <span className="tnum w-14 text-center font-extrabold text-[16px]">{servings}인분</span>
+        <button onClick={() => setServings((n) => Math.min(12, n + 1))}
+          className="tap w-9 h-9 rounded-lg border-2 border-line bg-surface font-bold active:bg-paper">+</button>
+      </div>
+
       <div className="mt-4">
-        <p className="text-[11px] font-bold text-muted mb-1.5">재료</p>
+        <p className="text-[11px] font-bold text-muted mb-1.5">재료 <span className="font-normal">· {servings}인분 기준</span></p>
         <div className="flex flex-wrap gap-1.5">
           {r.uses.map((u) => {
             const owned = u.days_left != null;
             const tone = owned ? urgencyOf(u.days_left) : null;
+            const need = scaleAmt(u.amt);
+            const short = owned && u.have < need; // 있지만 양이 모자람
             return (
               <span key={u.ing}
                 className={`tnum text-[12px] font-semibold px-2 py-1 rounded-md border ${
                   owned ? `${TONE[tone].border} ${TONE[tone].soft} ${TONE[tone].text}`
                         : 'border-dashed border-line text-muted'}`}>
-                {u.ing} {u.amt}{u.unit}{!owned && ' 없음'}
+                {u.ing} {need}{u.unit}{!owned && ' 없음'}{short && ` (${u.have}${u.unit}뿐)`}
               </span>
             );
           })}
@@ -1422,6 +1554,7 @@ function NowasteApp() {
 
   const [items, setItems] = useState([]);
   const [pending, setPending] = useState([]);
+  const [ordered, setOrdered] = useState([]);
   const [presets, setPresets] = useState({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -1434,14 +1567,15 @@ function NowasteApp() {
     timer.current = setTimeout(() => setMsg(null), tone === 'bad' ? 3200 : 2200);
   }, []);
 
-  const logout = () => { setToken(null); setEmail(''); setItems([]); setPending([]); setView('home'); };
+  const logout = () => { setToken(null); setEmail(''); setItems([]); setPending([]); setOrdered([]); setView('home'); };
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [a, b] = await Promise.all([API.items('confirmed'), API.items('pending')]);
+      const [a, b, c] = await Promise.all([API.items('confirmed'), API.items('pending'), API.items('ordered')]);
       setItems(a.items);
       setPending(b.items);
+      setOrdered(c.items);
     } catch (e) {
       if (e.status === 401) logout();
       else toast(e.message, 'bad');
@@ -1536,6 +1670,20 @@ function NowasteApp() {
     toast('버린 것으로 기록했어요');
   });
 
+  // 주문한 재료 → '곧 도착'(ordered). 구매 시트의 "주문했어요"에서 호출.
+  const addOrdered = async (ing) => {
+    await API.addItem({ name: ing, ingredient: ing, capacity: 1, remaining: 1, unit: '개', storage: 'fridge', status: 'ordered' });
+    await refresh();
+    toast(`${ing} — 곧 도착으로 담았어요`);
+  };
+
+  // 주문분 도착 → 냉장고로 (유통기한 오늘 기준 재계산)
+  const receiveItem = (item) => guard(async () => {
+    await API.receive(item.id);
+    await refresh();
+    toast(`${item.name} — 냉장고에 넣었어요`);
+  });
+
   const goto = (v) => { setAddMode('menu'); setView(v); };
 
   if (!booted) return <div className="phone" />;
@@ -1553,8 +1701,8 @@ function NowasteApp() {
     <div className="phone">
       <main className="flex-1 overflow-y-auto noscroll">
         {view === 'home' && (
-          <HomeView items={items} loading={loading} presets={presets} pendingCount={pending.length}
-            setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} busy={busy}
+          <HomeView items={items} ordered={ordered} loading={loading} presets={presets} pendingCount={pending.length}
+            setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} onReceive={receiveItem} busy={busy}
             email={email || '내 계정'} onLogout={logout} />
         )}
         {view === 'add' && addMode === 'menu'   && <AddView setMode={setAddMode} />}
@@ -1565,7 +1713,7 @@ function NowasteApp() {
           <ConfirmView queue={pending} loading={loading} setView={goto}
             onConfirm={confirmCard} onDrop={dropCard} busy={busy} />
         )}
-        {view === 'cook'   && <CookView toast={toast} />}
+        {view === 'cook'   && <CookView toast={toast} onAddOrdered={addOrdered} hasOrdered={ordered.length > 0} />}
         {view === 'report' && <ReportView toast={toast} />}
       </main>
 

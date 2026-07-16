@@ -109,10 +109,10 @@ app.get('/api/shelf-life', async (req, res) => {
 
 /* ───────────────── 재고 ───────────────── */
 app.get('/api/items', auth, async (req, res) => {
-  const status = req.query.status; // pending | confirmed | (없으면 열려있는 전부)
+  const status = req.query.status; // pending | confirmed | ordered | (없으면 열려있는 전부)
   const params = [req.userId];
   let where = 'user_id = $1 AND outcome IS NULL';
-  if (status === 'pending' || status === 'confirmed') {
+  if (['pending', 'confirmed', 'ordered'].includes(status)) {
     params.push(status);
     where += ` AND status = $${params.length}`;
   }
@@ -266,6 +266,30 @@ app.post('/api/items/:id/freeze', auth, async (req, res) => {
   res.json({ item: r.rows[0] });
 });
 
+/* 주문한 재료가 도착 → 냉장고로. 유통기한을 도착일(오늘) 기준으로 다시 계산한다. */
+app.post('/api/items/:id/receive', auth, async (req, res) => {
+  const cur = await pool.query(
+    "SELECT ingredient, storage FROM fridge_items WHERE id = $1 AND user_id = $2 AND status = 'ordered'",
+    [req.params.id, req.userId]
+  );
+  if (!cur.rowCount) return res.status(404).json({ error: '주문한 항목이 아니에요.' });
+
+  const { ingredient, storage } = cur.rows[0];
+  const p = await pool.query('SELECT days FROM fridge_shelf_life WHERE ingredient = $1 AND storage = $2', [ingredient, storage]);
+  const days = p.rows[0]?.days ?? 7;
+  const r = await pool.query(
+    `UPDATE fridge_items
+        SET status = 'confirmed',
+            purchased_on = ${TODAY_KST},
+            expiry_date = ${TODAY_KST} + $1::int,
+            expiry_source = 'preset'
+      WHERE id = $2 AND user_id = $3
+      RETURNING ${ITEM_COLS}`,
+    [days, req.params.id, req.userId]
+  );
+  res.json({ item: r.rows[0] });
+});
+
 /* 소진·폐기 — 이 기록이 없으면 "식비 절감"을 측정할 수 없다 (STRATEGY.md) */
 app.post('/api/items/:id/close', auth, async (req, res) => {
   const outcome = req.body.outcome; // 'eaten' | 'discarded'
@@ -331,24 +355,40 @@ app.get('/api/stats/waste', auth, async (req, res) => {
   res.json({ monthly: monthly.rows, top: top.rows, ...saved.rows[0] });
 });
 
+/* 레시피용 재고 집계. includeOrdered면 '곧 도착'(ordered)도 포함(주말 미리 주문 대비). */
+async function inventoryForRecipes(userId, includeOrdered) {
+  const statuses = includeOrdered ? ['confirmed', 'ordered'] : ['confirmed'];
+  const inv = await pool.query(
+    `SELECT ingredient AS ing, SUM(remaining)::float8 AS remaining,
+            MIN(unit) AS unit, MIN(expiry_date - ${TODAY_KST})::int AS days_left,
+            bool_or(status = 'ordered') AS ordered
+       FROM fridge_items
+      WHERE user_id = $1 AND outcome IS NULL AND status = ANY($2)
+      GROUP BY ingredient`,
+    [userId, statuses]
+  );
+  return inv.rows;
+}
+async function recipeVocab() {
+  const r = await pool.query('SELECT DISTINCT ingredient FROM fridge_shelf_life ORDER BY 1');
+  return r.rows.map((x) => x.ingredient);
+}
+
 /* ───────────────── 레시피 (하이브리드: 캐시 + LLM) ───────────────── */
 app.post('/api/recipes/suggest', auth, async (req, res) => {
   const tag = req.body.tag || '전체';
+  const inventory = await inventoryForRecipes(req.userId, Boolean(req.body.includeOrdered));
+  const vocab = await recipeVocab();
+  const out = await recipes.suggest({ inventory, vocab, tag, want: 6 });
+  res.json(out);
+});
 
-  // 보유 재고를 재료 단위로 집계 (급한 순 판단에 min 유통기한)
-  const inv = await pool.query(
-    `SELECT ingredient AS ing, SUM(remaining)::float8 AS remaining,
-            MIN(unit) AS unit, MIN(expiry_date - ${TODAY_KST})::int AS days_left
-       FROM fridge_items
-      WHERE user_id = $1 AND outcome IS NULL AND status = 'confirmed'
-      GROUP BY ingredient`,
-    [req.userId]
-  );
-  // 레시피 어휘 = 우리가 아는 모든 재료 (프리셋 사전이 곧 정식 재료명)
-  const vocabRes = await pool.query('SELECT DISTINCT ingredient FROM fridge_shelf_life ORDER BY 1');
-  const vocab = vocabRes.rows.map((r) => r.ingredient);
-
-  const out = await recipes.suggest({ inventory: inv.rows, vocab, tag, want: 6 });
+/* 음식명으로 레시피 만들기 — 추천에 없는 요리를 직접 입력 */
+app.post('/api/recipes/byname', auth, async (req, res) => {
+  const inventory = await inventoryForRecipes(req.userId, Boolean(req.body.includeOrdered));
+  const vocab = await recipeVocab();
+  const out = await recipes.byName({ dish: req.body.dish, inventory, vocab, tag: req.body.tag || '전체' });
+  if (!out.recipe) return res.status(out.error ? 422 : 404).json({ error: out.error || '레시피를 못 만들었어요.' });
   res.json(out);
 });
 
