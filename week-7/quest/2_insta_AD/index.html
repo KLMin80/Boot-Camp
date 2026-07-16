@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>NIKE · JUST DO IT — 인스타그램 광고 카드 (1080×1080)</title>
+<link rel="stylesheet" href="fonts_embed.css">
+<style>
+  /* ============================================================
+     Nike Instagram Ad Card — 1080 x 1080 (fixed square)
+     Brand system:  ink #0A0A0A · white #FFFFFF · volt #D7FF00
+     Type:  Anton (Futura Bold Condensed 대체) · Noto Sans KR 900/700
+     ============================================================ */
+  :root{
+    --ink:#0a0a0a;
+    --white:#ffffff;
+    --volt:#d7ff00;     /* Nike Running 시그니처 볼트 액센트 */
+    --pad:76px;
+  }
+  html,body{margin:0;padding:0;background:#1b1b1b;}
+  *{box-sizing:border-box;}
+
+  .card{
+    position:relative;
+    width:1080px;height:1080px;
+    overflow:hidden;
+    background:var(--ink);
+    font-family:'Noto Sans KR','Malgun Gothic',sans-serif;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:geometricPrecision;
+  }
+
+  /* ---------- 히어로 비주얼 ---------- */
+  .hero{
+    position:absolute;inset:0;
+    width:100%;height:100%;
+    object-fit:cover;object-position:52% center;
+    display:block;
+    filter:contrast(1.06) brightness(1.02);
+  }
+
+  /* ---------- 가독성 스크림 ---------- */
+  .scrim,.vignette{position:absolute;inset:0;pointer-events:none;}
+  .scrim-left{
+    background:linear-gradient(100deg,
+      rgba(8,8,10,0.97) 0%, rgba(8,8,10,0.93) 20%,
+      rgba(8,8,10,0.66) 38%, rgba(8,8,10,0.18) 55%, rgba(8,8,10,0) 68%);
+  }
+  .scrim-bottom{
+    background:linear-gradient(0deg,
+      rgba(8,8,10,0.92) 0%, rgba(8,8,10,0.55) 13%, rgba(8,8,10,0) 32%);
+  }
+  .scrim-top{
+    background:linear-gradient(180deg,
+      rgba(8,8,10,0.72) 0%, rgba(8,8,10,0) 20%);
+  }
+  .vignette{
+    background:radial-gradient(125% 100% at 62% 44%,
+      rgba(0,0,0,0) 54%, rgba(0,0,0,0.38) 100%);
+  }
+
+  /* ---------- 콘텐츠 레이어 ---------- */
+  .layer{
+    position:absolute;inset:0;
+    padding:var(--pad);
+    display:flex;flex-direction:column;
+    justify-content:space-between;
+  }
+
+  /* Swoosh (브랜드 마크) */
+  .swoosh{width:124px;height:auto;display:block;}
+  .swoosh path{fill:var(--white);}
+
+  /* 중단 메시지 블록 */
+  .msg{margin-top:auto;margin-bottom:26px;}
+  .eyebrow{
+    display:flex;align-items:center;gap:16px;
+    margin-bottom:26px;
+  }
+  .eyebrow .tick{width:34px;height:9px;background:var(--volt);display:block;}
+  .eyebrow span{
+    font-family:'Anton',sans-serif;
+    font-size:21px;letter-spacing:6px;
+    color:var(--white);text-transform:uppercase;
+    line-height:1;padding-top:3px;
+  }
+  .headline{
+    font-family:'Noto Sans KR',sans-serif;font-weight:900;
+    color:var(--white);
+    font-size:82px;line-height:1.04;letter-spacing:-2px;
+    margin:0;text-shadow:0 2px 30px rgba(0,0,0,0.55);
+  }
+  .headline .accent{color:var(--volt);}
+
+  /* 하단 액션 블록 */
+  .foot{
+    display:flex;align-items:flex-end;justify-content:space-between;
+  }
+  .foot-left{display:flex;flex-direction:column;gap:30px;}
+  .slogan{
+    font-family:'Anton',sans-serif;
+    font-size:70px;line-height:0.9;letter-spacing:1px;
+    color:var(--white);text-transform:uppercase;margin:0;
+  }
+  .cta{
+    display:inline-flex;align-items:center;gap:14px;
+    align-self:flex-start;
+    background:var(--volt);color:var(--ink);
+    font-family:'Noto Sans KR',sans-serif;font-weight:900;
+    font-size:27px;letter-spacing:-0.5px;
+    padding:20px 34px 20px 38px;border-radius:999px;
+    box-shadow:0 10px 34px rgba(0,0,0,0.45);
+  }
+  .cta svg{width:24px;height:24px;display:block;}
+  .cta path{stroke:var(--ink);}
+
+  .url{
+    font-family:'Anton',sans-serif;
+    font-size:24px;letter-spacing:4px;color:var(--white);
+    text-transform:uppercase;opacity:0.92;
+    padding-bottom:6px;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img class="hero" src="art/hero_v2_2048.png" alt="달리는 러너 히어로 비주얼">
+
+    <div class="scrim scrim-top"></div>
+    <div class="scrim scrim-left"></div>
+    <div class="scrim scrim-bottom"></div>
+    <div class="vignette"></div>
+
+    <div class="layer">
+      <!-- 브랜드 마크 -->
+      <svg class="swoosh" viewBox="0 7 24 10" xmlns="http://www.w3.org/2000/svg" aria-label="Nike">
+        <path d="M24 7.8L6.442 15.276c-1.456.616-2.679.925-3.668.925-1.12 0-1.933-.392-2.437-1.177-.317-.504-.444-1.143-.383-1.916.063-.774.35-1.6.865-2.478.428-.72 1.033-1.522 1.813-2.404-.219.354-.409.71-.573 1.068-.638 1.394-.75 2.559-.334 3.494.464 1.04 1.5 1.56 3.108 1.56.394 0 .81-.033 1.246-.099.437-.066.89-.166 1.359-.3L24 7.8z"/>
+      </svg>
+
+      <!-- 한 줄 카피 -->
+      <div class="msg">
+        <div class="eyebrow"><i class="tick"></i><span>Nike Running</span></div>
+        <h1 class="headline">오늘,<br>한계를 <span class="accent">다시 쓴다.</span></h1>
+      </div>
+
+      <!-- 슬로건 · CTA · URL -->
+      <div class="foot">
+        <div class="foot-left">
+          <p class="slogan">Just Do It.</p>
+          <a class="cta">지금 쇼핑하기
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 12h14M13 6l6.5 6-6.5 6" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+        </div>
+        <div class="url">Nike.com</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

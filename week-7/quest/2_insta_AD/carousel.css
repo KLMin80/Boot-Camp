@@ -1,0 +1,91 @@
+/* ============================================================
+   Nike 캐러셀 공용 브랜드 시스템 — 3장 공통 (1080×1080)
+   ink #0A0A0A · white #FFF · volt #D7FF00
+   Anton (Futura Bold Condensed 대체) · Noto Sans KR 900/700
+   ============================================================ */
+:root{ --ink:#0a0a0a; --white:#ffffff; --volt:#d7ff00; --pad:76px; }
+html,body{margin:0;padding:0;background:#1b1b1b;}
+*{box-sizing:border-box;}
+
+.card{
+  position:relative;width:1080px;height:1080px;overflow:hidden;
+  background:var(--ink);
+  font-family:'Noto Sans KR','Malgun Gothic',sans-serif;
+  -webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;
+}
+.hero{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  object-position:center;display:block;filter:contrast(1.06) brightness(1.02);}
+
+/* 가독성 스크림 */
+.scrim,.vignette{position:absolute;inset:0;pointer-events:none;}
+.scrim-left{background:linear-gradient(100deg,
+  rgba(8,8,10,0.97) 0%, rgba(8,8,10,0.92) 20%, rgba(8,8,10,0.64) 38%,
+  rgba(8,8,10,0.16) 55%, rgba(8,8,10,0) 68%);}
+.scrim-bottom{background:linear-gradient(0deg,
+  rgba(8,8,10,0.94) 0%, rgba(8,8,10,0.55) 14%, rgba(8,8,10,0) 33%);}
+.scrim-top{background:linear-gradient(180deg,
+  rgba(8,8,10,0.80) 0%, rgba(8,8,10,0) 20%);}
+.vignette{background:radial-gradient(125% 100% at 60% 44%,
+  rgba(0,0,0,0) 52%, rgba(0,0,0,0.40) 100%);}
+
+.layer{position:absolute;inset:0;padding:var(--pad);display:flex;flex-direction:column;}
+
+/* 상단바: Swoosh + 페이지 인디케이터 */
+.topbar{display:flex;align-items:center;justify-content:space-between;}
+.swoosh{width:116px;height:auto;display:block;}
+.swoosh path{fill:var(--white);}
+.pageind{display:flex;gap:9px;align-items:center;}
+.pageind i{width:22px;height:5px;border-radius:3px;background:rgba(255,255,255,0.30);display:block;}
+.pageind i.on{width:42px;background:var(--volt);}
+
+/* 아이브로우 */
+.eyebrow{display:flex;align-items:center;gap:15px;margin-bottom:24px;}
+.eyebrow .tick{width:32px;height:9px;background:var(--volt);display:block;flex:none;}
+.eyebrow span{font-family:'Anton',sans-serif;font-size:20px;letter-spacing:6px;
+  color:var(--white);text-transform:uppercase;line-height:1;padding-top:3px;}
+
+/* 헤드라인 */
+.headline{font-family:'Noto Sans KR',sans-serif;font-weight:900;color:var(--white);
+  margin:0;letter-spacing:-2px;line-height:1.05;text-shadow:0 2px 30px rgba(0,0,0,0.5);}
+.accent{color:var(--volt);}
+
+/* 슬로건 */
+.slogan{font-family:'Anton',sans-serif;text-transform:uppercase;color:var(--white);
+  margin:0;line-height:0.9;letter-spacing:1px;}
+
+/* CTA */
+.cta{display:inline-flex;align-items:center;gap:14px;align-self:flex-start;
+  background:var(--volt);color:var(--ink);font-family:'Noto Sans KR',sans-serif;font-weight:900;
+  font-size:27px;letter-spacing:-0.5px;padding:20px 34px 20px 38px;border-radius:999px;
+  box-shadow:0 10px 34px rgba(0,0,0,0.45);}
+.cta svg{width:24px;height:24px;display:block;}
+.cta path{stroke:var(--ink);}
+
+/* URL 워드마크 */
+.url{font-family:'Anton',sans-serif;font-size:23px;letter-spacing:4px;color:var(--white);
+  text-transform:uppercase;opacity:0.9;padding-bottom:4px;}
+
+/* 스와이프 유도 */
+.swipe{display:flex;align-items:center;gap:13px;font-family:'Noto Sans KR',sans-serif;
+  font-weight:700;font-size:21px;letter-spacing:0.5px;color:var(--white);opacity:0.94;}
+.swipe .chev{display:flex;}
+.swipe .chev svg{width:22px;height:22px;margin-left:-11px;}
+.swipe .chev svg:first-child{margin-left:0;}
+.swipe path{stroke:var(--volt);}
+
+/* 하단 액션 정렬 */
+.foot{display:flex;align-items:flex-end;justify-content:space-between;}
+.foot-left{display:flex;flex-direction:column;gap:28px;}
+
+/* 본문(2장) 전용 */
+.ghost{position:absolute;pointer-events:none;opacity:0.055;}
+.ghost path{fill:var(--white);}
+.sub{font-family:'Noto Sans KR',sans-serif;font-weight:700;font-size:25px;line-height:1.5;
+  color:rgba(255,255,255,0.62);margin:26px 0 0;letter-spacing:-0.3px;}
+.points{margin-top:auto;}
+.point{display:flex;align-items:baseline;gap:22px;padding:17px 2px;
+  border-top:1px solid rgba(255,255,255,0.15);}
+.point:last-child{border-bottom:1px solid rgba(255,255,255,0.15);}
+.point .n{font-family:'Anton',sans-serif;font-size:23px;color:var(--volt);letter-spacing:1px;
+  min-width:36px;flex:none;}
+.point .t{font-family:'Noto Sans KR',sans-serif;font-weight:700;font-size:28px;color:#fff;letter-spacing:-0.5px;}
