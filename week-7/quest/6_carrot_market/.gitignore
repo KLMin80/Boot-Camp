@@ -1,0 +1,7 @@
+node_modules/
+.env
+.vercel
+.playwright-mcp/
+*.log
+
+.vercel

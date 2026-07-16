@@ -1,0 +1,13 @@
+# 런타임에 필요한 건 server.js · db.js · index.html · package*.json · vercel.json 뿐.
+# ⚠️ server.js / db.js / index.html 은 절대 제외 금지 (엔트리포인트·의존모듈·정적페이지).
+.env
+node_modules
+.vercel
+scripts/
+screenshots/
+assets/
+*.png
+*.svg
+*.md
+*.log
+.playwright-mcp/

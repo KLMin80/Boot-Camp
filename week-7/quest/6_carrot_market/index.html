@@ -1,0 +1,997 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>단군마켓 — 내 근처 중고거래</title>
+<link id="favicon" rel="icon" type="image/svg+xml">
+<meta name="theme-color" content="#ff6f0f">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.9/babel.min.js"></script>
+<style>
+:root{
+  --carrot:#ff6f0f; --carrot-d:#e8600a; --carrot-l:#fff2e8;
+  --ink:#212124; --gray:#6b7079; --gray2:#adb1ba; --line:#f2f3f4; --line2:#e5e7ea;
+  --bg:#fff; --page:#e9ecf0; --green:#15b46b; --red:#ec5b56;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{background:var(--page);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",Roboto,sans-serif;
+  font-size:15px;line-height:1.4;-webkit-font-smoothing:antialiased}
+button{font-family:inherit}
+input,textarea,select{font-family:inherit}
+a{color:inherit;text-decoration:none}
+
+.app{max-width:480px;margin:0 auto;min-height:100vh;background:var(--bg);position:relative;
+  box-shadow:0 0 40px rgba(0,0,0,.07);overflow-x:hidden}
+.screen{min-height:100vh}
+.pad-nav{padding-bottom:64px}
+.pad-bar{padding-bottom:80px}
+
+/* logo */
+.logo{display:inline-block;line-height:0}
+.logo svg{width:100%;height:100%;display:block}
+
+/* topbar */
+.topbar{position:sticky;top:0;z-index:20;height:52px;display:flex;align-items:center;gap:6px;
+  padding:0 6px 0 14px;background:#fff;border-bottom:1px solid var(--line)}
+.topbar .region{display:flex;align-items:center;gap:3px;font-size:19px;font-weight:800;letter-spacing:-.5px;
+  background:none;border:0;padding:4px 2px;cursor:pointer}
+.topbar .title{font-size:19px;font-weight:800;letter-spacing:-.5px;display:flex;align-items:center;gap:7px}
+.topbar .sp{flex:1}
+.iconbtn{width:40px;height:40px;display:grid;place-items:center;border:0;background:none;color:var(--ink);
+  border-radius:50%;cursor:pointer;padding:0}
+.iconbtn:active{background:var(--line)}
+.topbar.plain{justify-content:space-between;padding:0 6px}
+.topbar.plain .ttl{font-size:17px;font-weight:700}
+
+/* bottom nav */
+.bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;height:56px;
+  background:#fff;border-top:1px solid var(--line);display:flex;z-index:20}
+.bnav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--gray2);font-size:11px;font-weight:600;background:none;border:0;cursor:pointer;position:relative}
+.bnav button.on{color:var(--ink)}
+.bnav button.on svg{color:var(--carrot)}
+.bnav .dot{position:absolute;top:8px;right:calc(50% - 16px);width:7px;height:7px;border-radius:50%;background:var(--carrot)}
+
+/* FAB */
+.fab{position:fixed;bottom:72px;right:max(16px, calc(50% - 224px));z-index:25;height:50px;padding:0 20px 0 15px;
+  border-radius:25px;background:var(--carrot);color:#fff;border:0;display:flex;align-items:center;gap:6px;
+  font-size:15px;font-weight:700;box-shadow:0 6px 18px rgba(255,111,15,.45);cursor:pointer}
+.fab:active{background:var(--carrot-d)}
+
+/* product list */
+.pitem{display:flex;gap:14px;padding:16px;border-bottom:1px solid var(--line);cursor:pointer;
+  width:100%;background:none;border-left:0;border-right:0;border-top:0;text-align:left;align-items:flex-start}
+.pitem:active{background:#fafafa}
+.thumb-wrap{position:relative;flex:none}
+.pitem .thumb{width:106px;height:106px;border-radius:10px;object-fit:cover;background:var(--line2);display:block}
+.thumb-ph{width:106px;height:106px;border-radius:10px;background:var(--line);display:grid;place-items:center;color:var(--gray2)}
+.sold-cover{position:absolute;inset:0;background:rgba(0,0,0,.55);border-radius:10px;color:#fff;
+  display:grid;place-items:center;font-weight:700;font-size:14px}
+.pitem .body{flex:1;min-width:0;padding-top:1px}
+.pitem .t{font-size:16px;line-height:1.34;margin:0 0 4px;color:var(--ink);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pitem .meta{font-size:13px;color:var(--gray);margin-bottom:7px}
+.pitem .price{font-weight:700;font-size:16px}
+.nanum{color:var(--green);font-weight:800}
+.pitem .stat{display:flex;gap:9px;justify-content:flex-end;color:var(--gray2);font-size:13px;
+  align-items:center;margin-top:8px}
+.pitem .stat span{display:inline-flex;align-items:center;gap:2px}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;margin-bottom:5px;vertical-align:middle}
+.tag.reserved{background:#eaf6ef;color:var(--green)}
+.tag.sold{background:#f1f2f3;color:var(--gray)}
+
+/* generic */
+.center-col{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+  padding:80px 32px;color:var(--gray)}
+.spin{width:26px;height:26px;border:3px solid var(--line2);border-top-color:var(--carrot);border-radius:50%;
+  animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.err-banner{background:#fdecea;color:#c0392b;padding:10px 14px;border-radius:8px;font-size:13.5px;margin:10px 16px}
+
+/* forms */
+.field{padding:16px;border-bottom:1px solid var(--line)}
+.field label{display:block;font-size:14px;font-weight:700;margin-bottom:9px}
+.inp{width:100%;border:0;font-size:16px;padding:6px 0;outline:none;background:none;color:var(--ink)}
+.inp::placeholder{color:var(--gray2)}
+.box{width:100%;border:1px solid var(--line2);border-radius:10px;font-size:15px;padding:13px 14px;outline:none;background:#fff}
+.box:focus{border-color:var(--carrot)}
+textarea.box{resize:none;min-height:160px;line-height:1.5}
+.btn{width:100%;height:50px;border:0;border-radius:10px;background:var(--carrot);color:#fff;font-size:16px;
+  font-weight:700;cursor:pointer}
+.btn:disabled{opacity:.5}
+.btn.line{background:#fff;color:var(--ink);border:1px solid var(--line2)}
+.btn.sm{height:40px;font-size:14px;border-radius:8px;width:auto;padding:0 16px}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:12px 16px;border-bottom:1px solid var(--line);scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;padding:8px 15px;border-radius:20px;background:#f4f5f6;color:var(--gray);font-size:14px;
+  font-weight:600;border:1px solid transparent;cursor:pointer;white-space:nowrap}
+.chip.on{background:var(--carrot-l);color:var(--carrot-d);border-color:#ffd3ab}
+
+/* image uploader */
+.uploader{display:flex;gap:10px;overflow-x:auto;padding:16px;scrollbar-width:none}
+.uploader::-webkit-scrollbar{display:none}
+.up-add{flex:none;width:80px;height:80px;border-radius:10px;border:1px dashed var(--line2);background:#fff;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--gray);
+  font-size:12px;cursor:pointer}
+.up-thumb{position:relative;flex:none;width:80px;height:80px;border-radius:10px;overflow:hidden;background:var(--line)}
+.up-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.up-del{position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.6);
+  color:#fff;border:0;font-size:13px;line-height:1;cursor:pointer;display:grid;place-items:center}
+.up-rep{position:absolute;bottom:0;left:0;right:0;background:var(--carrot);color:#fff;font-size:10px;
+  text-align:center;padding:2px 0;font-weight:700}
+
+/* detail */
+.slider{position:relative;background:#000;aspect-ratio:1/1;overflow:hidden}
+.slider .track{display:flex;height:100%;transition:transform .28s ease}
+.slider .track img{width:100%;height:100%;object-fit:contain;flex:none;background:#111}
+.slider .dots{position:absolute;bottom:12px;left:0;right:0;display:flex;justify-content:center;gap:6px}
+.slider .dots i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.45)}
+.slider .dots i.on{background:#fff}
+.slider .count{position:absolute;bottom:10px;right:12px;background:rgba(0,0,0,.5);color:#fff;font-size:12px;
+  padding:2px 9px;border-radius:12px}
+.slider .navbtn{position:absolute;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:50%;
+  background:rgba(0,0,0,.35);border:0;color:#fff;display:grid;place-items:center;cursor:pointer}
+.overlay-back{position:absolute;top:10px;left:10px;z-index:5;width:38px;height:38px;border-radius:50%;
+  background:rgba(0,0,0,.3);color:#fff;border:0;display:grid;place-items:center;cursor:pointer}
+.seller{display:flex;align-items:center;gap:12px;padding:16px}
+.avatar{width:44px;height:44px;border-radius:50%;background:var(--carrot-l);color:var(--carrot-d);
+  display:grid;place-items:center;font-weight:800;font-size:17px;flex:none}
+.seller .info{flex:1}
+.seller .nm{font-weight:700}
+.seller .rg{font-size:13px;color:var(--gray)}
+.manner{text-align:right;font-size:12px;color:var(--gray)}
+.manner b{font-size:15px}
+.mbar{width:64px;height:5px;border-radius:3px;background:var(--line2);margin-top:4px;overflow:hidden}
+.mbar i{display:block;height:100%;background:linear-gradient(90deg,#ffb43d,#15b46b)}
+.detail-body{padding:4px 16px 16px}
+.detail-body h1{font-size:20px;font-weight:700;margin:6px 0 6px;line-height:1.3}
+.detail-cat{font-size:13px;color:var(--gray);margin-bottom:14px}
+.detail-cat a{color:var(--gray);text-decoration:underline}
+.detail-desc{font-size:15.5px;line-height:1.65;white-space:pre-wrap;margin:0 0 18px}
+.detail-stat{font-size:13px;color:var(--gray2)}
+.hr{height:1px;background:var(--line);margin:0 16px}
+.hr.full{margin:0}
+
+/* detail bottom bar */
+.detailbar{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:#fff;
+  border-top:1px solid var(--line);padding:9px 14px calc(9px + env(safe-area-inset-bottom));display:flex;
+  align-items:center;gap:14px;z-index:20}
+.heart-btn{background:none;border:0;padding:0 14px 0 2px;border-right:1px solid var(--line2);cursor:pointer;
+  display:grid;place-items:center;color:var(--gray)}
+.heart-btn.on{color:var(--carrot)}
+.detailbar .price-col{flex:1}
+.detailbar .price-col .p{font-weight:800;font-size:17px}
+.detailbar .price-col .sub{font-size:12px;color:var(--gray)}
+
+/* chat list */
+.chat-item{display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);cursor:pointer;
+  width:100%;background:none;border-left:0;border-right:0;border-top:0;text-align:left;align-items:center}
+.chat-item:active{background:#fafafa}
+.chat-item .cthumb{width:52px;height:52px;border-radius:50%;object-fit:cover;background:var(--line2);flex:none}
+.chat-item .cbody{flex:1;min-width:0}
+.chat-item .crow{display:flex;align-items:baseline;gap:6px}
+.chat-item .cnm{font-weight:700}
+.chat-item .crg{font-size:12px;color:var(--gray2)}
+.chat-item .ctime{font-size:12px;color:var(--gray2);margin-left:auto}
+.chat-item .cmsg{font-size:14px;color:var(--gray);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-item .cpro{width:44px;height:44px;border-radius:8px;object-fit:cover;background:var(--line2);flex:none}
+
+/* chat room */
+.chat-head{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line)}
+.chat-head .row1{height:52px;display:flex;align-items:center;gap:4px;padding:0 6px}
+.chat-head .row1 .nm{font-size:17px;font-weight:700}
+.chat-prod{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#fafbfc;border-bottom:1px solid var(--line)}
+.chat-prod img{width:40px;height:40px;border-radius:6px;object-fit:cover;background:var(--line2)}
+.chat-prod .pt{font-size:13px;color:var(--gray);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-prod .pp{font-weight:700;font-size:14px}
+.msgs{padding:14px 14px 90px;min-height:calc(100vh - 200px);display:flex;flex-direction:column}
+.daysep{text-align:center;font-size:12px;color:var(--gray2);margin:10px 0}
+.msg{display:flex;margin:3px 0;gap:6px;align-items:flex-end;max-width:100%}
+.msg.me{flex-direction:row-reverse}
+.bubble{max-width:72%;padding:9px 13px;border-radius:18px;font-size:14.5px;line-height:1.45;word-break:break-word}
+.msg.me .bubble{background:var(--carrot);color:#fff;border-bottom-right-radius:5px}
+.msg.you .bubble{background:#f1f2f3;color:var(--ink);border-bottom-left-radius:5px}
+.msg .time{font-size:10.5px;color:var(--gray2);white-space:nowrap;margin-bottom:1px}
+.chat-input{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;
+  background:#fff;border-top:1px solid var(--line);padding:8px 10px calc(8px + env(safe-area-inset-bottom));
+  display:flex;gap:8px;align-items:flex-end;z-index:20}
+.chat-input textarea{flex:1;border:0;background:#f2f3f4;border-radius:20px;padding:10px 15px;font-size:15px;
+  outline:none;resize:none;max-height:100px;line-height:1.4}
+.send-btn{width:40px;height:40px;border-radius:50%;background:var(--carrot);border:0;color:#fff;flex:none;
+  display:grid;place-items:center;cursor:pointer}
+.send-btn:disabled{background:var(--line2)}
+
+/* mypage */
+.me-head{padding:22px 18px;display:flex;align-items:center;gap:14px;border-bottom:8px solid var(--line)}
+.me-head .avatar{width:60px;height:60px;font-size:23px}
+.me-head .nm{font-size:19px;font-weight:800}
+.me-head .rg{font-size:13.5px;color:var(--gray);margin-top:3px}
+.menu-row{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);
+  cursor:pointer;background:none;border-left:0;border-right:0;border-top:0;width:100%;font-size:15.5px;color:var(--ink)}
+.menu-row .ic{color:var(--gray)}
+.menu-row .ct{margin-left:auto;color:var(--gray2);font-size:14px}
+.section-t{font-size:13px;font-weight:700;color:var(--gray);padding:18px 16px 6px}
+
+/* auth */
+.auth{padding:40px 24px 24px;min-height:100vh;display:flex;flex-direction:column}
+.auth .brand{display:flex;flex-direction:column;align-items:center;gap:14px;margin:24px 0 36px}
+.auth .brand .nm{font-size:26px;font-weight:800;color:var(--carrot);letter-spacing:-1px}
+.auth .brand .sub{color:var(--gray);font-size:14px}
+.auth .f{margin-bottom:14px}
+.auth .f label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:var(--gray)}
+.auth .switch{text-align:center;margin-top:18px;color:var(--gray);font-size:14px}
+.auth .switch b{color:var(--carrot);cursor:pointer}
+.region-row{display:flex;gap:8px}
+.region-row .box{flex:1}
+.help{font-size:12.5px;color:var(--gray2);margin-top:7px;line-height:1.5}
+
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:60;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:#fff;width:100%;max-width:480px;border-radius:16px 16px 0 0;padding:8px 0 16px;animation:up .22s ease}
+@keyframes up{from{transform:translateY(100%)}}
+.sheet .grab{width:36px;height:4px;background:var(--line2);border-radius:2px;margin:8px auto 6px}
+.sheet .opt{padding:15px 20px;font-size:16px;cursor:pointer;display:flex;align-items:center;gap:10px}
+.sheet .opt:active{background:#fafafa}
+.sheet .opt.danger{color:var(--red)}
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;
+  padding:11px 18px;border-radius:22px;font-size:13.5px;z-index:80;max-width:88%;text-align:center}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+(function(){
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+/* ═══════════ 단군 로고 SVG ═══════════ */
+const DANGUN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="단군마켓">
+<defs><linearGradient id="dbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff9048"/><stop offset="1" stop-color="#ff6f0f"/></linearGradient></defs>
+<rect width="128" height="128" rx="30" fill="url(#dbg)"/>
+<circle cx="64" cy="16" r="7.5" fill="#4a3524"/><rect x="60.5" y="15" width="7" height="13" rx="3" fill="#4a3524"/>
+<path d="M31 54 Q64 22 97 54 Q64 41 31 54 Z" fill="#4a3524"/><rect x="31" y="49" width="66" height="8" rx="4" fill="#3a2a1a"/>
+<circle cx="31" cy="72" r="7" fill="#f6c393"/><circle cx="97" cy="72" r="7" fill="#f6c393"/>
+<ellipse cx="64" cy="70" rx="33" ry="34" fill="#ffdcaf"/>
+<circle cx="45" cy="78" r="6" fill="#ff9e5e" opacity="0.5"/><circle cx="83" cy="78" r="6" fill="#ff9e5e" opacity="0.5"/>
+<path d="M45 63 q7 -5 14 -1" stroke="#4a3524" stroke-width="4.2" fill="none" stroke-linecap="round"/>
+<path d="M69 62 q7 -4 14 1" stroke="#4a3524" stroke-width="4.2" fill="none" stroke-linecap="round"/>
+<circle cx="53" cy="72" r="3.6" fill="#3a2a1a"/><circle cx="75" cy="72" r="3.6" fill="#3a2a1a"/>
+<path d="M39 84 Q40 106 64 114 Q88 106 89 84 Q77 93 64 93 Q51 93 39 84 Z" fill="#fbf5ec"/>
+<path d="M57 85 q7 6 14 0" stroke="#c8623a" stroke-width="3" fill="none" stroke-linecap="round"/></svg>`;
+document.getElementById('favicon').href = 'data:image/svg+xml,' + encodeURIComponent(DANGUN_SVG);
+function Logo({size=30}){ return <span className="logo" style={{width:size,height:size}} dangerouslySetInnerHTML={{__html:DANGUN_SVG}}/>; }
+
+/* ═══════════ 상수 ═══════════ */
+const CATEGORIES = ['디지털기기','생활가전','가구/인테리어','유아동','의류','뷰티/미용','스포츠/레저','취미/게임/음반','도서','생활/주방','반려동물용품','식물','기타 중고물품'];
+const CAT_EMOJI = {'디지털기기':'📱','생활가전':'🔌','가구/인테리어':'🛋️','유아동':'🧸','의류':'👕','뷰티/미용':'💄','스포츠/레저':'⚽','취미/게임/음반':'🎮','도서':'📚','생활/주방':'🍳','반려동물용품':'🐶','식물':'🪴','기타 중고물품':'📦'};
+const STATUS = { selling:{label:'판매중'}, reserved:{label:'예약중',cls:'reserved'}, sold:{label:'거래완료',cls:'sold'} };
+
+/* ═══════════ 헬퍼 ═══════════ */
+const jwt = () => localStorage.getItem('dangun.jwt');
+function setSession(token,user){ localStorage.setItem('dangun.jwt',token); localStorage.setItem('dangun.user',JSON.stringify(user)); window.dispatchEvent(new Event('dangun:auth')); }
+function patchUser(user){ localStorage.setItem('dangun.user',JSON.stringify(user)); window.dispatchEvent(new Event('dangun:auth')); }
+function logout(){ localStorage.removeItem('dangun.jwt'); localStorage.removeItem('dangun.user'); window.dispatchEvent(new Event('dangun:auth')); }
+
+async function api(method, path, body){
+  const res = await fetch(path, {
+    method,
+    headers:{ 'Content-Type':'application/json', ...(jwt()?{Authorization:'Bearer '+jwt()}:{}) },
+    body: body!==undefined ? JSON.stringify(body) : undefined,
+  });
+  let data=null; try{ data=await res.json(); }catch{}
+  if(res.status===401){ logout(); if(!location.hash.startsWith('#/login')) location.hash='#/login'; }
+  if(!res.ok) throw new Error((data&&data.error)||'요청에 실패했어요.');
+  return data;
+}
+const go = (h)=>{ location.hash = h; };
+const won = (n)=> Number(n).toLocaleString('ko-KR');
+function priceText(p){ return p>0 ? won(p)+'원' : '나눔'; }
+
+function timeAgo(iso){
+  if(!iso) return '';
+  const d = new Date(iso), s = (Date.now()-d.getTime())/1000;
+  if(s<60) return '방금 전';
+  if(s<3600) return Math.floor(s/60)+'분 전';
+  if(s<86400) return Math.floor(s/3600)+'시간 전';
+  if(s<2592000) return Math.floor(s/86400)+'일 전';
+  if(s<31536000) return Math.floor(s/2592000)+'개월 전';
+  return Math.floor(s/31536000)+'년 전';
+}
+function clockText(iso){
+  const d=new Date(iso); let h=d.getHours(); const m=String(d.getMinutes()).padStart(2,'0');
+  const ap=h<12?'오전':'오후'; h=h%12||12; return `${ap} ${h}:${m}`;
+}
+function dayText(iso){
+  const d=new Date(iso); const days=['일','월','화','수','목','금','토'];
+  return `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
+}
+
+/* ═══════════ 아이콘 ═══════════ */
+const I = {
+  back:(p)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" {...p}><path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  search:(p)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" {...p}><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2"/><path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>,
+  chevron:(p)=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" {...p}><path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  chevronD:(p)=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...p}><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  heart:(p)=><svg width="22" height="22" viewBox="0 0 24 24" {...p}><path d="M12 20.5l-1.4-1.28C5.4 14.5 2.5 11.87 2.5 8.64 2.5 6.1 4.5 4.1 7 4.1c1.54 0 3.04.72 4 1.86.96-1.14 2.46-1.86 4-1.86 2.5 0 4.5 2 4.5 4.54 0 3.23-2.9 5.86-8.1 10.58L12 20.5z" fill={p&&p.fill||'none'} stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round"/></svg>,
+  heartSm:(p)=><svg width="14" height="14" viewBox="0 0 24 24" {...p}><path d="M12 20.5l-1.4-1.28C5.4 14.5 2.5 11.87 2.5 8.64 2.5 6.1 4.5 4.1 7 4.1c1.54 0 3.04.72 4 1.86.96-1.14 2.46-1.86 4-1.86 2.5 0 4.5 2 4.5 4.54 0 3.23-2.9 5.86-8.1 10.58L12 20.5z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  chat:(p)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" {...p}><path d="M4 5h16v11H9l-4 3.5V16H4V5z" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round"/></svg>,
+  chatSm:(p)=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" {...p}><path d="M4 5h16v11H9l-4 3.5V16H4V5z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/></svg>,
+  home:(p)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" {...p}><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1v-8z" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round"/></svg>,
+  user:(p)=><svg width="24" height="24" viewBox="0 0 24 24" fill="none" {...p}><circle cx="12" cy="8" r="3.6" stroke="currentColor" strokeWidth="1.9"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/></svg>,
+  plus:(p)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" {...p}><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"/></svg>,
+  camera:(p)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" {...p}><path d="M4 8h3l1.5-2h7L17 8h3v11H4V8z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/><circle cx="12" cy="13" r="3.2" stroke="currentColor" strokeWidth="1.7"/></svg>,
+  send:(p)=><svg width="20" height="20" viewBox="0 0 24 24" {...p}><path d="M4 12L20 4l-4 16-4-6-8-2z" fill="currentColor"/></svg>,
+  loc:(p)=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" {...p}><path d="M12 21c4-4.5 7-8 7-11a7 7 0 1 0-14 0c0 3 3 6.5 7 11z" stroke="currentColor" strokeWidth="1.8"/><circle cx="12" cy="10" r="2.4" stroke="currentColor" strokeWidth="1.8"/></svg>,
+  bag:(p)=><svg width="21" height="21" viewBox="0 0 24 24" fill="none" {...p}><path d="M6 8h12l-1 12H7L6 8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M9 8V6a3 3 0 0 1 6 0v2" stroke="currentColor" strokeWidth="1.8"/></svg>,
+  edit:(p)=><svg width="21" height="21" viewBox="0 0 24 24" fill="none" {...p}><path d="M4 20h4L18 10l-4-4L4 16v4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/></svg>,
+  trash:(p)=><svg width="21" height="21" viewBox="0 0 24 24" fill="none" {...p}><path d="M5 7h14M9 7V5h6v2m-8 0l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+};
+
+/* ═══════════ 공용 컴포넌트 ═══════════ */
+function Spinner(){ return <div className="center-col"><div className="spin"/></div>; }
+function Toast({msg}){ return msg ? <div className="toast">{msg}</div> : null; }
+function useToast(){ const [m,setM]=useState(''); const show=(t)=>{ setM(t); setTimeout(()=>setM(''),1900); }; return [m,show]; }
+
+function BottomNav({tab,chatDot}){
+  const items=[['home','홈',I.home],['favorites','관심',I.heart],['chats','채팅',I.chat],['me','나의 단군',I.user]];
+  return <nav className="bnav">{items.map(([k,label,Ic])=>
+    <button key={k} className={tab===k?'on':''} onClick={()=>go('#/'+(k==='home'?'':k))}>
+      <Ic/>{k==='chats'&&chatDot?<span className="dot"/>:null}<span>{label}</span>
+    </button>)}</nav>;
+}
+
+function ProductItem({p, showFav}){
+  const st = STATUS[p.status]||STATUS.selling;
+  return <button className="pitem" onClick={()=>go('#/product/'+p.id)}>
+    <div className="thumb-wrap">
+      {p.thumb ? <img className="thumb" src={p.thumb} alt=""/> : <div className="thumb-ph">{I.bag({})}</div>}
+      {p.status==='sold' && <div className="sold-cover">거래완료</div>}
+    </div>
+    <div className="body">
+      <p className="t">{p.status==='reserved' && <span className="tag reserved">예약중</span>} {p.title}</p>
+      <div className="meta">{p.region} · {timeAgo(p.created_at)}</div>
+      <div className="price">{p.price>0 ? won(p.price)+'원' : <span className="nanum">나눔</span>}</div>
+      <div className="stat">
+        {p.chat_count>0 && <span>{I.chatSm({})}{p.chat_count}</span>}
+        {p.fav_count>0 && <span>{I.heartSm({})}{p.fav_count}</span>}
+      </div>
+    </div>
+  </button>;
+}
+
+/* 이미지 업로더 — 클라에서 리사이즈 후 ImageKit에 직접 업로드 */
+async function resizeImage(file, max=1280, q=0.82){
+  const img = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=URL.createObjectURL(file); });
+  let {width:w, height:h} = img;
+  if(Math.max(w,h)>max){ const r=max/Math.max(w,h); w=Math.round(w*r); h=Math.round(h*r); }
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  c.getContext('2d').drawImage(img,0,0,w,h);
+  URL.revokeObjectURL(img.src);
+  return new Promise((res)=> c.toBlob((b)=>res(b),'image/jpeg',q));
+}
+async function uploadOne(file){
+  const sig = await api('GET','/api/imagekit/auth');
+  const blob = await resizeImage(file);
+  const fd = new FormData();
+  fd.append('file', blob, 'dangun.jpg');
+  fd.append('fileName', 'p_'+Date.now()+'_'+Math.floor(Math.random()*1e4)+'.jpg');
+  fd.append('publicKey', sig.publicKey);
+  fd.append('signature', sig.signature);
+  fd.append('expire', sig.expire);
+  fd.append('token', sig.token);
+  fd.append('folder', '/dangun_market');
+  fd.append('useUniqueFileName','true');
+  const r = await fetch('https://upload.imagekit.io/api/v1/files/upload',{ method:'POST', body:fd });
+  const j = await r.json();
+  if(!r.ok) throw new Error(j.message||'이미지 업로드 실패');
+  return (j.url||'').split('?')[0];
+}
+function ImageUploader({urls, setUrls, onErr}){
+  const [busy,setBusy]=useState(false);
+  const ref=useRef();
+  async function pick(e){
+    const files=[...e.target.files].slice(0, 3-urls.length);
+    e.target.value='';
+    if(!files.length) return;
+    setBusy(true);
+    try{
+      const out=[];
+      for(const f of files){ out.push(await uploadOne(f)); }
+      setUrls([...urls, ...out]);
+    }catch(err){ onErr&&onErr(err.message); }
+    setBusy(false);
+  }
+  return <div className="uploader">
+    <button type="button" className="up-add" onClick={()=>ref.current.click()} disabled={busy||urls.length>=3}>
+      {busy? <div className="spin" style={{width:20,height:20,borderWidth:2}}/> : I.camera({})}
+      <span>{urls.length}/3</span>
+    </button>
+    <input ref={ref} type="file" accept="image/*" multiple hidden onChange={pick}/>
+    {urls.map((u,i)=><div className="up-thumb" key={u+i}>
+      <img src={u} alt=""/>
+      <button type="button" className="up-del" onClick={()=>setUrls(urls.filter((_,j)=>j!==i))}>×</button>
+      {i===0 && <div className="up-rep">대표</div>}
+    </div>)}
+  </div>;
+}
+
+/* ═══════════ 화면들 (아래에서 채움) ═══════════ */
+/* ── 동네 입력 필드 (직접 입력 또는 위치 인증) ── */
+function RegionField({region, setRegion, onCoords}){
+  const [locating,setLocating]=useState(false);
+  const [msg,setMsg]=useState('');
+  function useLocation(){
+    setMsg('');
+    if(!navigator.geolocation){ setMsg('이 브라우저는 위치를 지원하지 않아요. 직접 입력해 주세요.'); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(async(pos)=>{
+      try{
+        const {latitude:lat, longitude:lon}=pos.coords;
+        const r=await api('POST','/api/geo/reverse',{lat,lon});
+        setRegion(r.region);
+        onCoords&&onCoords({lat,lon});
+        setMsg('현재 위치: '+(r.full||r.region)+' 로 설정했어요.');
+      }catch(e){ setMsg(e.message||'위치 확인 실패. 직접 입력해 주세요.'); }
+      setLocating(false);
+    },(err)=>{ setLocating(false); setMsg('위치 권한이 거부됐어요. 직접 입력해 주세요.'); },{timeout:8000});
+  }
+  return <div>
+    <div className="region-row">
+      <input className="box" placeholder="동네 (예: 역삼동)" value={region}
+        onChange={e=>{setRegion(e.target.value); onCoords&&onCoords(null);}}/>
+      <button type="button" className="btn line sm" style={{flex:'none',display:'flex',alignItems:'center',gap:4}}
+        onClick={useLocation} disabled={locating}>
+        {locating? <div className="spin" style={{width:16,height:16,borderWidth:2}}/> : I.loc({})}
+        위치인증
+      </button>
+    </div>
+    <div className="help">{msg || '내 동네를 직접 입력하거나, 위치인증으로 현재 동네를 자동 설정할 수 있어요.'}</div>
+  </div>;
+}
+
+function Login(){
+  const [email,setEmail]=useState(''); const [pw,setPw]=useState('');
+  const [err,setErr]=useState(''); const [busy,setBusy]=useState(false);
+  async function submit(e){
+    e.preventDefault(); setErr(''); setBusy(true);
+    try{ const r=await api('POST','/api/auth/login',{email,password:pw}); setSession(r.token,r.user); go('#/'); }
+    catch(ex){ setErr(ex.message); setBusy(false); }
+  }
+  return <div className="auth">
+    <div className="brand"><Logo size={72}/><div className="nm">단군마켓</div><div className="sub">우리 동네 중고 직거래 마켓</div></div>
+    <form onSubmit={submit}>
+      <div className="f"><label>이메일</label><input className="box" type="email" autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></div>
+      <div className="f"><label>비밀번호</label><input className="box" type="password" autoComplete="current-password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="6자 이상"/></div>
+      {err && <div className="err-banner" style={{margin:'4px 0 10px'}}>{err}</div>}
+      <button className="btn" disabled={busy||!email||!pw}>{busy?'로그인 중…':'로그인'}</button>
+    </form>
+    <div className="switch">아직 회원이 아니신가요? <b onClick={()=>go('#/signup')}>이메일로 가입하기</b></div>
+  </div>;
+}
+
+function Signup(){
+  const [f,setF]=useState({nickname:'',email:'',pw:'',region:''});
+  const [coords,setCoords]=useState(null);
+  const [err,setErr]=useState(''); const [busy,setBusy]=useState(false);
+  const upd=(k)=>(e)=>setF({...f,[k]:e.target.value});
+  async function submit(e){
+    e.preventDefault(); setErr('');
+    if(f.pw.length<6){ setErr('비밀번호는 6자 이상이어야 해요.'); return; }
+    if(!f.region.trim()){ setErr('동네를 설정해 주세요.'); return; }
+    setBusy(true);
+    try{
+      const r=await api('POST','/api/auth/signup',{
+        email:f.email, password:f.pw, nickname:f.nickname, region:f.region.trim(),
+        lat:coords?coords.lat:null, lon:coords?coords.lon:null });
+      setSession(r.token,r.user); go('#/');
+    }catch(ex){ setErr(ex.message); setBusy(false); }
+  }
+  return <div className="auth">
+    <div className="topbar plain" style={{margin:'-40px -24px 0',position:'static'}}>
+      <button className="iconbtn" onClick={()=>go('#/login')}>{I.back({})}</button>
+      <span className="ttl">이메일로 가입</span><span style={{width:40}}/>
+    </div>
+    <div className="brand" style={{margin:'20px 0 26px'}}><Logo size={56}/><div className="sub">단군마켓에 오신 걸 환영해요!</div></div>
+    <form onSubmit={submit}>
+      <div className="f"><label>닉네임</label><input className="box" value={f.nickname} onChange={upd('nickname')} placeholder="동네에서 쓸 이름"/></div>
+      <div className="f"><label>이메일</label><input className="box" type="email" value={f.email} onChange={upd('email')} placeholder="you@example.com"/></div>
+      <div className="f"><label>비밀번호</label><input className="box" type="password" value={f.pw} onChange={upd('pw')} placeholder="6자 이상"/></div>
+      <div className="f"><label>내 동네 설정</label><RegionField region={f.region} setRegion={(r)=>setF(v=>({...v,region:r}))} onCoords={setCoords}/></div>
+      {err && <div className="err-banner" style={{margin:'4px 0 10px'}}>{err}</div>}
+      <button className="btn" disabled={busy||!f.nickname||!f.email||!f.pw||!f.region}>{busy?'가입 중…':'가입하고 시작하기'}</button>
+    </form>
+    <div className="switch">이미 계정이 있으신가요? <b onClick={()=>go('#/login')}>로그인</b></div>
+  </div>;
+}
+function Empty({icon,title,sub,action}){
+  return <div className="center-col">
+    <div style={{fontSize:46,marginBottom:10}}>{icon}</div>
+    <div style={{fontWeight:700,color:'var(--ink)',marginBottom:6,fontSize:16}}>{title}</div>
+    <div style={{fontSize:14,lineHeight:1.6}}>{sub}</div>
+    {action&&<div style={{marginTop:18}}>{action}</div>}
+  </div>;
+}
+
+function RegionSheet({onClose, toast}){
+  const user=JSON.parse(localStorage.getItem('dangun.user')||'null');
+  const [region,setRegion]=useState(user.region);
+  const [coords,setCoords]=useState(null);
+  const [busy,setBusy]=useState(false);
+  async function save(){
+    setBusy(true);
+    try{ const r=await api('PATCH','/api/auth/region',{region:region.trim(),lat:coords?coords.lat:null,lon:coords?coords.lon:null});
+      patchUser(r.user); toast&&toast('동네를 '+r.user.region+'(으)로 바꿨어요'); onClose(true); }
+    catch(e){ setBusy(false); }
+  }
+  return <div className="modal-bg" onClick={()=>onClose(false)}>
+    <div className="sheet" onClick={e=>e.stopPropagation()} style={{padding:'8px 20px 24px'}}>
+      <div className="grab"/>
+      <h3 style={{margin:'8px 0 16px',fontSize:18}}>내 동네 설정</h3>
+      <RegionField region={region} setRegion={setRegion} onCoords={setCoords}/>
+      <button className="btn" style={{marginTop:18}} disabled={busy||!region.trim()} onClick={save}>{busy?'저장 중…':'이 동네로 설정'}</button>
+    </div>
+  </div>;
+}
+
+function Home(){
+  const [user,setUser]=useState(()=>JSON.parse(localStorage.getItem('dangun.user')||'null'));
+  useEffect(()=>{ const h=()=>setUser(JSON.parse(localStorage.getItem('dangun.user')||'null'));
+    window.addEventListener('dangun:auth',h); return ()=>window.removeEventListener('dangun:auth',h); },[]);
+  const [cat,setCat]=useState(null);
+  const [q,setQ]=useState('');
+  const [typed,setTyped]=useState('');
+  const [mode,setMode]=useState('browse');
+  const [list,setList]=useState(null);
+  const [sheet,setSheet]=useState(false);
+  const [msg,toast]=useToast();
+
+  const load=useCallback(async()=>{
+    setList(null);
+    try{
+      const qs=[]; if(cat) qs.push('category='+encodeURIComponent(cat)); if(q.trim()) qs.push('q='+encodeURIComponent(q.trim()));
+      const r=await api('GET','/api/products'+(qs.length?'?'+qs.join('&'):''));
+      setList(r.products);
+    }catch{ setList([]); }
+  },[cat,q]);
+  useEffect(()=>{ load(); },[load]);
+
+  return <div className="screen pad-nav">
+    {mode==='browse'
+      ? <div className="topbar">
+          <button className="region" onClick={()=>setSheet(true)}>{user.region} {I.chevronD({})}</button>
+          <span className="sp"/>
+          <button className="iconbtn" onClick={()=>{setTyped(q); setMode('search');}}>{I.search({})}</button>
+        </div>
+      : <div className="topbar">
+          <button className="iconbtn" onClick={()=>{setMode('browse');}}>{I.back({})}</button>
+          <form style={{flex:1,display:'flex'}} onSubmit={e=>{e.preventDefault(); setQ(typed.trim());}}>
+            <input autoFocus className="inp" style={{fontSize:16}} placeholder="검색어를 입력하세요"
+              value={typed} onChange={e=>setTyped(e.target.value)}/>
+          </form>
+          {typed && <button className="iconbtn" onClick={()=>{setTyped(''); setQ('');}}>×</button>}
+          <button className="iconbtn" onClick={()=>setQ(typed.trim())}>{I.search({})}</button>
+        </div>}
+
+    {mode==='browse' &&
+      <div className="chips">
+        <button className={'chip'+(cat===null?' on':'')} onClick={()=>setCat(null)}>전체</button>
+        {CATEGORIES.map(c=><button key={c} className={'chip'+(cat===c?' on':'')} onClick={()=>setCat(cat===c?null:c)}>{CAT_EMOJI[c]} {c}</button>)}
+      </div>}
+
+    {q && <div style={{padding:'12px 16px 2px',fontSize:14,color:'var(--gray)'}}><b style={{color:'var(--ink)'}}>'{q}'</b> 검색 결과</div>}
+
+    {list===null ? <Spinner/> :
+     list.length===0 ?
+       <Empty icon={q?'🔍':'🥕'} title={q?'검색 결과가 없어요':'아직 등록된 상품이 없어요'}
+         sub={q?'다른 검색어로 찾아보세요.':'첫 상품을 등록해 이웃과 거래를 시작해 보세요!'}
+         action={!q&&<button className="btn sm" onClick={()=>go('#/new')} style={{color:'#fff'}}>+ 상품 등록하기</button>}/> :
+       <div>{list.map(p=><ProductItem key={p.id} p={p}/>)}</div>}
+
+    {mode==='browse' && <button className="fab" onClick={()=>go('#/new')}>{I.plus({})} 글쓰기</button>}
+    <BottomNav tab="home"/>
+    {sheet && <RegionSheet onClose={()=>setSheet(false)} toast={toast}/>}
+    <Toast msg={msg}/>
+  </div>;
+}
+
+function Favorites(){
+  const [list,setList]=useState(null);
+  useEffect(()=>{ api('GET','/api/me/favorites').then(r=>setList(r.products)).catch(()=>setList([])); },[]);
+  return <div className="screen pad-nav">
+    <div className="topbar plain"><span className="ttl" style={{paddingLeft:10}}>관심 목록</span></div>
+    {list===null ? <Spinner/> :
+     list.length===0 ? <Empty icon="🧡" title="관심 상품이 없어요" sub="마음에 드는 상품에 하트를 눌러보세요."/> :
+     <div>{list.map(p=><ProductItem key={p.id} p={p} showFav/>)}</div>}
+    <BottomNav tab="favorites"/>
+  </div>;
+}
+function Sheet({onClose, options, title}){
+  return <div className="modal-bg" onClick={()=>onClose()}>
+    <div className="sheet" onClick={e=>e.stopPropagation()}>
+      <div className="grab"/>
+      {title&&<div style={{padding:'6px 20px 10px',fontWeight:700,fontSize:15}}>{title}</div>}
+      {options.map((o,i)=><div key={i} className={'opt'+(o.danger?' danger':'')} onClick={()=>o.onClick()}>{o.icon}{o.label}</div>)}
+    </div>
+  </div>;
+}
+function SimpleError({msg}){
+  return <div className="screen"><div className="topbar plain"><button className="iconbtn" onClick={()=>go('#/')}>{I.back({})}</button></div>
+    <Empty icon="⚠️" title="문제가 생겼어요" sub={msg}/></div>;
+}
+const mannerPct=(t)=>Math.max(6,Math.min(100,(t/99)*100))+'%';
+const mannerColor=(t)=>t>=55?'#15b46b':t>=40?'#4fbf7a':t>=36?'#ffb43d':'#ff8a3d';
+
+function Slider({images}){
+  const [i,setI]=useState(0);
+  const n=images.length;
+  const startX=useRef(null);
+  if(n===0) return <div className="slider" style={{display:'grid',placeItems:'center'}}>
+    <span style={{fontSize:52,opacity:.5}}>🥕</span></div>;
+  const clamp=(v)=>Math.max(0,Math.min(n-1,v));
+  return <div className="slider"
+    onTouchStart={e=>startX.current=e.touches[0].clientX}
+    onTouchEnd={e=>{ if(startX.current==null)return; const dx=e.changedTouches[0].clientX-startX.current;
+      if(dx>40)setI(clamp(i-1)); else if(dx<-40)setI(clamp(i+1)); startX.current=null; }}>
+    <div className="track" style={{transform:`translateX(-${i*100}%)`}}>{images.map((u,k)=><img key={k} src={u} alt=""/>)}</div>
+    {n>1&&<React.Fragment>
+      {i>0&&<button className="navbtn" style={{left:8}} onClick={()=>setI(i-1)}>{I.back({})}</button>}
+      {i<n-1&&<button className="navbtn" style={{right:8}} onClick={()=>setI(i+1)}>{I.chevron({})}</button>}
+      <div className="dots">{images.map((_,k)=><i key={k} className={k===i?'on':''}/>)}</div>
+      <div className="count">{i+1}/{n}</div>
+    </React.Fragment>}
+  </div>;
+}
+
+function ProductDetail({id}){
+  const [p,setP]=useState(null);
+  const [err,setErr]=useState('');
+  const [sheet,setSheet]=useState(null);
+  const [chatBusy,setChatBusy]=useState(false);
+  const [msg,toast]=useToast();
+  useEffect(()=>{ api('GET','/api/products/'+id).then(r=>setP(r.product)).catch(e=>setErr(e.message)); },[id]);
+
+  async function toggleFav(){
+    try{ const r=await api('POST','/api/products/'+id+'/favorite'); setP(v=>({...v,favorited:r.favorited,fav_count:r.fav_count})); }catch(e){ toast(e.message); }
+  }
+  async function startChat(){
+    setChatBusy(true);
+    try{ const r=await api('POST','/api/products/'+id+'/chat'); go('#/chat/'+r.chat_id); }
+    catch(e){ toast(e.message); setChatBusy(false); }
+  }
+  async function setStatus(s){
+    try{ await api('POST','/api/products/'+id+'/status',{status:s}); setP(v=>({...v,status:s})); setSheet(null); toast('‘'+STATUS[s].label+'’(으)로 변경했어요'); }catch(e){ toast(e.message); }
+  }
+  async function del(){
+    if(!window.confirm('이 상품을 삭제할까요? 되돌릴 수 없어요.')) return;
+    try{ await api('DELETE','/api/products/'+id); go('#/'); }catch(e){ toast(e.message); }
+  }
+
+  if(err) return <SimpleError msg={err}/>;
+  if(!p) return <div className="screen"><div className="topbar plain"><button className="iconbtn" onClick={()=>go('#/')}>{I.back({})}</button></div><Spinner/></div>;
+
+  return <div className="screen pad-bar">
+    <div style={{position:'relative'}}>
+      <button className="overlay-back" onClick={()=>{ if(history.length>1) history.back(); else go('#/'); }}>{I.back({})}</button>
+      {p.is_owner && <button className="overlay-back" style={{left:'auto',right:10,fontSize:22,fontWeight:700}} onClick={()=>setSheet('menu')}>⋯</button>}
+      <Slider images={p.images}/>
+    </div>
+
+    <div className="seller">
+      <div className="avatar">{(p.author.nickname||'?').slice(0,1)}</div>
+      <div className="info"><div className="nm">{p.author.nickname}</div><div className="rg">{p.author.region}</div></div>
+      <div className="manner">
+        <b style={{color:mannerColor(p.author.manner_temp)}}>{p.author.manner_temp}°C</b>
+        <div style={{fontSize:11}}>매너온도</div>
+        <div className="mbar"><i style={{width:mannerPct(p.author.manner_temp),background:mannerColor(p.author.manner_temp)}}/></div>
+      </div>
+    </div>
+    <div className="hr"/>
+
+    <div className="detail-body">
+      {p.status!=='selling' && <div style={{marginBottom:10}}><span className={'tag '+STATUS[p.status].cls}>{STATUS[p.status].label}</span></div>}
+      <h1>{p.title}</h1>
+      <div className="detail-cat">{CAT_EMOJI[p.category]} {p.category} · {timeAgo(p.created_at)}</div>
+      <p className="detail-desc">{p.description||'설명이 없습니다.'}</p>
+      <div className="detail-stat">관심 {p.fav_count} · 채팅 {p.chat_count} · 조회 {p.view_count}</div>
+    </div>
+
+    <div className="detailbar">
+      {!p.is_owner && <button className={'heart-btn'+(p.favorited?' on':'')} onClick={toggleFav} aria-label="관심">{I.heart({fill:p.favorited?'currentColor':'none'})}</button>}
+      <div className="price-col"><div className="p">{priceText(p.price)}</div>
+        {p.is_owner? <div className="sub" style={{color:'var(--carrot)'}}>내 상품</div> : <div className="sub">{STATUS[p.status].label}</div>}</div>
+      {p.is_owner
+        ? <button className="btn sm" style={{color:'#fff'}} onClick={()=>setSheet('status')}>거래 상태 변경</button>
+        : <button className="btn sm" style={{color:'#fff'}} disabled={chatBusy||p.status==='sold'} onClick={startChat}>
+            {p.status==='sold'?'거래완료된 상품':(chatBusy?'채팅방 여는 중…':'채팅하기')}</button>}
+    </div>
+
+    {sheet==='menu' && <Sheet onClose={()=>setSheet(null)} options={[
+      {label:'수정하기', icon:I.edit({}), onClick:()=>go('#/product/'+id+'/edit')},
+      {label:'삭제하기', icon:I.trash({}), danger:true, onClick:del},
+    ]}/>}
+    {sheet==='status' && <Sheet onClose={()=>setSheet(null)} title="거래 상태를 선택해 주세요" options={[
+      {label:'판매중', onClick:()=>setStatus('selling')},
+      {label:'예약중', onClick:()=>setStatus('reserved')},
+      {label:'거래완료', onClick:()=>setStatus('sold')},
+    ]}/>}
+    <Toast msg={msg}/>
+  </div>;
+}
+function ProductForm({id}){
+  const editing=!!id;
+  const user=JSON.parse(localStorage.getItem('dangun.user')||'{}');
+  const [loaded,setLoaded]=useState(!editing);
+  const [urls,setUrls]=useState([]);
+  const [title,setTitle]=useState('');
+  const [price,setPrice]=useState('');
+  const [free,setFree]=useState(false);
+  const [category,setCategory]=useState('');
+  const [desc,setDesc]=useState('');
+  const [catSheet,setCatSheet]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [msg,toast]=useToast();
+
+  useEffect(()=>{
+    if(!editing) return;
+    api('GET','/api/products/'+id).then(r=>{
+      const p=r.product;
+      if(!p.is_owner){ go('#/product/'+id); return; }
+      setUrls(p.images); setTitle(p.title); setPrice(p.price?String(p.price):'');
+      setFree(p.price===0); setCategory(p.category); setDesc(p.description); setLoaded(true);
+    }).catch(e=>toast(e.message));
+  },[id]);
+
+  async function submit(){
+    if(!title.trim()){ toast('제목을 입력해 주세요'); return; }
+    if(!category){ toast('카테고리를 선택해 주세요'); return; }
+    setBusy(true);
+    const body={ title:title.trim(), price:free?0:(parseInt(price||'0',10)||0), description:desc.trim(), category, images:urls };
+    try{
+      if(editing){ await api('PATCH','/api/products/'+id, body); go('#/product/'+id); }
+      else{ const r=await api('POST','/api/products', body); go('#/product/'+r.id); }
+    }catch(e){ toast(e.message); setBusy(false); }
+  }
+
+  return <div className="screen" style={{paddingBottom:80}}>
+    <div className="topbar plain">
+      <button className="iconbtn" onClick={()=>{ if(history.length>1) history.back(); else go('#/'); }}>{I.back({})}</button>
+      <span className="ttl">{editing?'내 상품 수정':'중고거래 글쓰기'}</span>
+      <span style={{width:40}}/>
+    </div>
+    {!loaded ? <Spinner/> : <React.Fragment>
+      <ImageUploader urls={urls} setUrls={setUrls} onErr={toast}/>
+      <div className="hr full"/>
+      <div className="field"><label>제목</label>
+        <input className="inp" placeholder="글 제목" value={title} onChange={e=>setTitle(e.target.value)}/></div>
+      <div className="field"><label>거래 방식 · 가격</label>
+        <label style={{display:'flex',alignItems:'center',gap:8,fontWeight:400,marginBottom:12,fontSize:14,cursor:'pointer'}}>
+          <input type="checkbox" checked={free} onChange={e=>setFree(e.target.checked)} style={{width:17,height:17,accentColor:'var(--carrot)'}}/>
+          무료로 나눔할래요 🧡
+        </label>
+        {!free && <div style={{display:'flex',alignItems:'center',gap:6}}>
+          <span style={{color:'var(--gray)',fontSize:17}}>₩</span>
+          <input className="inp" inputMode="numeric" placeholder="가격을 입력해 주세요"
+            value={price?won(price):''} onChange={e=>setPrice(e.target.value.replace(/[^\d]/g,'').slice(0,10))}/>
+        </div>}
+      </div>
+      <button className="field" onClick={()=>setCatSheet(true)}
+        style={{cursor:'pointer',display:'flex',alignItems:'center',background:'none',width:'100%',textAlign:'left'}}>
+        <label style={{marginBottom:0,flex:1}}>카테고리</label>
+        <span style={{color:category?'var(--ink)':'var(--gray2)',display:'flex',alignItems:'center',gap:4,fontSize:15}}>
+          {category?CAT_EMOJI[category]+' '+category:'선택해 주세요'} {I.chevron({width:18,height:18})}</span>
+      </button>
+      <div className="field" style={{borderBottom:'none'}}><label>자세한 설명</label>
+        <textarea className="inp" style={{minHeight:170,lineHeight:1.6}}
+          placeholder={`${user.region||'우리 동네'}에 올릴 게시글 내용을 작성해 주세요.\n(상품 상태, 사용 기간, 거래 방법 등)`}
+          value={desc} onChange={e=>setDesc(e.target.value)}/>
+      </div>
+    </React.Fragment>}
+    <div className="detailbar">
+      <button className="btn" disabled={busy||!loaded} onClick={submit}>{busy?'저장 중…':(editing?'수정 완료':'작성 완료')}</button>
+    </div>
+    {catSheet && <Sheet title="카테고리를 선택해 주세요" onClose={()=>setCatSheet(false)}
+      options={CATEGORIES.map(c=>({label:CAT_EMOJI[c]+'  '+c, onClick:()=>{setCategory(c); setCatSheet(false);}}))}/>}
+    <Toast msg={msg}/>
+  </div>;
+}
+function ChatList(){
+  const [chats,setChats]=useState(null);
+  useEffect(()=>{ api('GET','/api/chats').then(r=>setChats(r.chats)).catch(()=>setChats([])); },[]);
+  return <div className="screen pad-nav">
+    <div className="topbar plain"><span className="ttl" style={{paddingLeft:10}}>채팅</span></div>
+    {chats===null ? <Spinner/> :
+     chats.length===0 ? <Empty icon="💬" title="아직 채팅이 없어요" sub="관심 있는 상품에서 판매자와 대화를 시작해 보세요."/> :
+     <div>{chats.map(c=>
+       <button className="chat-item" key={c.id} onClick={()=>go('#/chat/'+c.id)}>
+         <div className="avatar" style={{width:52,height:52,borderRadius:'50%',fontSize:19}}>{(c.other.nickname||'?').slice(0,1)}</div>
+         <div className="cbody">
+           <div className="crow"><span className="cnm">{c.other.nickname}</span>
+             <span className="crg">{c.other.region}</span>
+             <span className="ctime">{timeAgo(c.last_at||undefined)}</span></div>
+           <div className="cmsg">{c.last_body || '대화를 시작해 보세요'}</div>
+         </div>
+         {c.thumb ? <img className="cpro" src={c.thumb} alt=""/> : <div className="cpro" style={{display:'grid',placeItems:'center',color:'var(--gray2)',fontSize:18}}>🥕</div>}
+       </button>)}</div>}
+    <BottomNav tab="chats"/>
+  </div>;
+}
+
+function ChatRoom({id}){
+  const [chat,setChat]=useState(null);
+  const [msgs,setMsgs]=useState([]);
+  const [text,setText]=useState('');
+  const [err,setErr]=useState('');
+  const [sending,setSending]=useState(false);
+  const lastId=useRef(0);
+  const endRef=useRef();
+  const taRef=useRef();
+
+  useEffect(()=>{
+    let alive=true;
+    api('GET','/api/chats/'+id).then(r=>{ if(alive) setChat(r.chat); }).catch(e=>setErr(e.message));
+    async function poll(){
+      try{
+        const r=await api('GET','/api/chats/'+id+'/messages?after='+lastId.current);
+        if(alive && r.messages.length){
+          lastId.current=r.messages[r.messages.length-1].id;
+          setMsgs(prev=>[...prev, ...r.messages]);
+        }
+      }catch(e){}
+    }
+    poll();
+    const t=setInterval(poll, 2500);
+    return ()=>{ alive=false; clearInterval(t); };
+  },[id]);
+
+  useEffect(()=>{ if(endRef.current) endRef.current.scrollIntoView({block:'end'}); },[msgs.length, chat]);
+
+  async function send(e){
+    if(e) e.preventDefault();
+    const body=text.trim(); if(!body||sending) return;
+    setSending(true); setText('');
+    if(taRef.current) taRef.current.style.height='auto';
+    try{
+      const r=await api('POST','/api/chats/'+id+'/messages',{body});
+      lastId.current=r.message.id;
+      setMsgs(prev=>[...prev, r.message]);
+    }catch(ex){ setErr(ex.message); setText(body); }
+    setSending(false);
+  }
+
+  if(err) return <SimpleError msg={err}/>;
+  if(!chat) return <div className="screen"><div className="topbar plain"><button className="iconbtn" onClick={()=>go('#/chats')}>{I.back({})}</button></div><Spinner/></div>;
+
+  let lastDay=null;
+  return <div className="screen" style={{paddingBottom:70}}>
+    <div className="chat-head">
+      <div className="row1">
+        <button className="iconbtn" onClick={()=>{ if(history.length>1) history.back(); else go('#/chats'); }}>{I.back({})}</button>
+        <span className="nm">{chat.other.nickname}</span>
+        <span style={{fontSize:12,color:'var(--gray2)',marginLeft:4}}>{chat.other.region}</span>
+      </div>
+      <button className="chat-prod" onClick={()=>go('#/product/'+chat.product.id)} style={{width:'100%',border:0,borderBottom:'1px solid var(--line)',cursor:'pointer'}}>
+        {chat.product.thumb ? <img src={chat.product.thumb} alt=""/> : <div style={{width:40,height:40,borderRadius:6,background:'var(--line)',display:'grid',placeItems:'center'}}>🥕</div>}
+        <span className={'tag '+(STATUS[chat.product.status].cls||'')} style={{background:chat.product.status==='selling'?'var(--carrot-l)':undefined,color:chat.product.status==='selling'?'var(--carrot-d)':undefined,marginBottom:0}}>{STATUS[chat.product.status].label}</span>
+        <span className="pt">{chat.product.title}</span>
+        <span className="pp">{priceText(chat.product.price)}</span>
+      </button>
+    </div>
+
+    <div className="msgs">
+      {msgs.length===0 && <div style={{textAlign:'center',color:'var(--gray2)',fontSize:13,margin:'30px 0'}}>
+        {chat.i_am_buyer?'판매자에게 첫 메시지를 보내보세요 🙂':'구매자의 문의를 기다리고 있어요'}</div>}
+      {msgs.map((m,idx)=>{
+        const d=dayText(m.created_at); const showDay=d!==lastDay; lastDay=d;
+        return <React.Fragment key={m.id||('t'+idx)}>
+          {showDay && <div className="daysep">{d}</div>}
+          <div className={'msg '+(m.mine?'me':'you')}>
+            <div className="bubble">{m.body}</div>
+            <span className="time">{clockText(m.created_at)}</span>
+          </div>
+        </React.Fragment>;
+      })}
+      <div ref={endRef}/>
+    </div>
+
+    <form className="chat-input" onSubmit={send}>
+      <textarea ref={taRef} rows={1} placeholder="메시지를 입력하세요" value={text}
+        onChange={e=>{ setText(e.target.value); e.target.style.height='auto'; e.target.style.height=Math.min(100,e.target.scrollHeight)+'px'; }}
+        onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } }}/>
+      <button className="send-btn" type="submit" disabled={!text.trim()||sending}>{I.send({})}</button>
+    </form>
+    {err && <Toast msg={err}/>}
+  </div>;
+}
+function MyPage(){
+  const [user,setUser]=useState(()=>JSON.parse(localStorage.getItem('dangun.user')||'null'));
+  useEffect(()=>{ const h=()=>setUser(JSON.parse(localStorage.getItem('dangun.user')||'null'));
+    window.addEventListener('dangun:auth',h); return ()=>window.removeEventListener('dangun:auth',h); },[]);
+  const [mine,setMine]=useState(null);
+  const [favN,setFavN]=useState(null);
+  const [sheet,setSheet]=useState(false);
+  const [msg,toast]=useToast();
+  useEffect(()=>{ api('GET','/api/me/products').then(r=>setMine(r.products)).catch(()=>setMine([])); },[]);
+  useEffect(()=>{ api('GET','/api/me/favorites').then(r=>setFavN(r.products.length)).catch(()=>{}); },[]);
+  function doLogout(){ if(window.confirm('로그아웃 할까요?')){ logout(); go('#/login'); } }
+  if(!user) return null;
+  const Ic=({children})=><span className="ic" style={{display:'grid',placeItems:'center'}}>{children}</span>;
+  const Ct=()=><span className="ct">{I.chevron({width:18,height:18})}</span>;
+
+  return <div className="screen pad-nav">
+    <div className="topbar plain"><span className="ttl" style={{paddingLeft:10}}>나의 단군</span></div>
+
+    <div className="me-head">
+      <div className="avatar">{(user.nickname||'?').slice(0,1)}</div>
+      <div style={{flex:1}}>
+        <div className="nm">{user.nickname}</div>
+        <div className="rg">📍 {user.region} · 가입일 {user.joined_on}</div>
+        <div style={{marginTop:9,display:'flex',alignItems:'center',gap:8}}>
+          <span style={{fontSize:12,color:'var(--gray)'}}>매너온도</span>
+          <div className="mbar" style={{width:120}}><i style={{width:mannerPct(user.manner_temp),background:mannerColor(user.manner_temp)}}/></div>
+          <b style={{color:mannerColor(user.manner_temp),fontSize:13}}>{user.manner_temp}°C</b>
+        </div>
+      </div>
+    </div>
+
+    <button className="menu-row" onClick={()=>go('#/favorites')}>
+      <Ic>{I.heart({width:20,height:20})}</Ic><span>관심 목록</span><span className="ct">{favN!=null?favN:''} {I.chevron({width:18,height:18,style:{verticalAlign:-4}})}</span></button>
+    <button className="menu-row" onClick={()=>go('#/chats')}>
+      <Ic>{I.chat({width:20,height:20})}</Ic><span>채팅</span><Ct/></button>
+    <button className="menu-row" onClick={()=>setSheet(true)}>
+      <Ic>{I.loc({width:20,height:20})}</Ic><span>내 동네 설정</span><span className="ct">{user.region} {I.chevron({width:18,height:18,style:{verticalAlign:-4}})}</span></button>
+    <button className="menu-row" onClick={doLogout} style={{color:'var(--gray)'}}>
+      <Ic><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M14 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 8l-4 4 4 4M6 12h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg></Ic>
+      <span>로그아웃</span></button>
+
+    <div className="section-t">나의 판매 상품 {mine?'· '+mine.length+'개':''}</div>
+    {mine===null ? <Spinner/> :
+     mine.length===0 ?
+       <Empty icon="📦" title="판매 중인 상품이 없어요" sub="사용하지 않는 물건을 이웃에게 판매해 보세요."
+         action={<button className="btn sm" style={{color:'#fff'}} onClick={()=>go('#/new')}>+ 상품 등록하기</button>}/> :
+       <div>{mine.map(p=><ProductItem key={p.id} p={p}/>)}</div>}
+
+    <BottomNav tab="me"/>
+    {sheet && <RegionSheet onClose={()=>setSheet(false)} toast={toast}/>}
+    <Toast msg={msg}/>
+  </div>;
+}
+
+/* ═══════════ App (라우터) ═══════════ */
+function useAuthState(){
+  const [a,setA]=useState(()=>({token:jwt(), user:JSON.parse(localStorage.getItem('dangun.user')||'null')}));
+  useEffect(()=>{ const h=()=>setA({token:jwt(), user:JSON.parse(localStorage.getItem('dangun.user')||'null')});
+    window.addEventListener('dangun:auth',h); return ()=>window.removeEventListener('dangun:auth',h); },[]);
+  return a;
+}
+function useRoute(){
+  const [hash,setHash]=useState(()=>location.hash||'#/');
+  useEffect(()=>{ const h=()=>setHash(location.hash||'#/'); window.addEventListener('hashchange',h); return ()=>window.removeEventListener('hashchange',h); },[]);
+  return (hash.replace(/^#\/?/,'').split('?')[0]).split('/');
+}
+function App(){
+  const {user}=useAuthState();
+  const parts=useRoute();
+  const [s0,s1,s2]=parts;
+  useEffect(()=>{ window.scrollTo(0,0); },[parts.join('/')]);
+  useEffect(()=>{ if(user && (s0==='login'||s0==='signup')) go('#/'); },[user,s0]);
+
+  let view;
+  if(!user){ view = s0==='signup' ? <Signup/> : <Login/>; }
+  else if(!s0) view=<Home/>;
+  else if(s0==='new') view=<ProductForm/>;
+  else if(s0==='product'&&s2==='edit') view=<ProductForm id={s1}/>;
+  else if(s0==='product') view=<ProductDetail id={s1}/>;
+  else if(s0==='favorites') view=<Favorites/>;
+  else if(s0==='chats') view=<ChatList/>;
+  else if(s0==='chat') view=<ChatRoom id={s1}/>;
+  else if(s0==='me') view=<MyPage/>;
+  else view=<Home/>;
+  return <div className="app">{view}</div>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+})();
+</script>
+</body>
+</html>
