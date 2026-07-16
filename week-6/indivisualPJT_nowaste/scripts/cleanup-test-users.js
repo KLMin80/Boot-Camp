@@ -2,8 +2,10 @@
 // fridge_items는 user_id ON DELETE CASCADE라 재고도 함께 삭제된다.
 const { pool } = require('../db');
 
-const TEST_EMAILS_LIKE = ['%@nowaste.app', '%@test.com'];
-const TEST_EMAILS_EXACT = ['jeilmin@naver.com']; // 개발 중 테스트로 만든 계정(비번 노출)
+// 테스트 스크립트가 쓰는 도메인만 정리 (@test.com / @t.com / @nowaste.app).
+// ⚠️ 실제 사용자 이메일(예: 개인 네이버 메일)은 절대 넣지 말 것 — 진짜 계정·데이터가 지워진다.
+const TEST_EMAILS_LIKE = ['%@nowaste.app', '%@test.com', '%@t.com'];
+const TEST_EMAILS_EXACT = [];
 
 (async () => {
   const like = TEST_EMAILS_LIKE.map((_, i) => `email LIKE $${i + 1}`).join(' OR ');
