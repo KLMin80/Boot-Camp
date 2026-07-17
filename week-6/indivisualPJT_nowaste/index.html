@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>남김없이</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🧺%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#16191A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="남김없이">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="description" content="장 본 것부터 다 먹는 것까지 — 버리는 음식과 식비를 함께 줄이는 냉장고 관리 앱">
+<meta property="og:title" content="남김없이">
+<meta property="og:description" content="냉장고 재료를 남김없이 소진해 음식물 쓰레기와 식비를 줄여요">
+<meta property="og:type" content="website">
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -178,6 +188,43 @@ function fileToDataUrl(file, maxDim = 2048, quality = 0.82) {
   });
 }
 
+/* ===== 폰 뒤로가기 처리 =====
+   화면 전환·시트 열기마다 히스토리 항목을 쌓고, 뒤로가기는 앱 안에서 한 단계 되돌린다.
+   (안 하면 폰 뒤로가기가 웹앱을 통째로 떠나버린다) */
+const _backGuards = [];
+let _backSelf = false; // 우리가 부른 history.back() (그 popstate는 무시)
+
+function useBackGuard(active, onBack) {
+  const cb = useRef(onBack);
+  cb.current = onBack;
+  useEffect(() => {
+    if (!active) return;
+    // poppedByBack: 뒤로가기로 닫혔는지 표시(각 guard에 둔다).
+    // 상태변경→cleanup은 비동기라 전역 플래그로는 못 잡는다(한 칸 더 back 되는 버그).
+    const g = { poppedByBack: false, close: () => cb.current && cb.current() };
+    _backGuards.push(g);
+    try { history.pushState({ nw: _backGuards.length }, ''); } catch (e) {}
+    return () => {
+      const i = _backGuards.indexOf(g);
+      if (i >= 0) _backGuards.splice(i, 1);
+      // 정상 닫기(X버튼 등)면 우리가 쌓은 히스토리 항목을 소비. 뒤로가기로 닫혔으면 이미 소비됨.
+      if (!g.poppedByBack) { _backSelf = true; try { history.back(); } catch (e) { _backSelf = false; } }
+    };
+  }, [active]);
+}
+
+function useBackListener() {
+  useEffect(() => {
+    const onPop = () => {
+      if (_backSelf) { _backSelf = false; return; }     // 우리가 부른 back → 무시
+      const g = _backGuards[_backGuards.length - 1];
+      if (g) { g.poppedByBack = true; g.close(); }       // 닫기는 상태변경(비동기), 플래그는 지금 세팅
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+}
+
 /* ==== SECTION:PRIMITIVES ====
    색은 오직 '남은 시간'에만 배정한다. 브랜드 색은 중립.
    그래야 냉장고를 열었을 때 빨간 게 먼저 보인다. */
@@ -250,6 +297,7 @@ function Toast({ msg }) {
 
 /* 하단 시트 — 재고를 탭하면 여기서 소진·폐기·냉동을 정한다 */
 function Sheet({ open, onClose, children }) {
+  useBackGuard(open, onClose); // 폰 뒤로가기로 시트 닫기 (모든 시트 공통)
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center" onClick={onClose}>
@@ -1685,6 +1733,11 @@ function NowasteApp() {
   });
 
   const goto = (v) => { setAddMode('menu'); setView(v); };
+
+  // 폰 뒤로가기: 시트(Sheet 내부) → 담기 하위화면 → 비홈 탭 → 홈 순으로 되돌린다
+  useBackListener();
+  useBackGuard(Boolean(getToken()) && view !== 'home', () => goto('home'));
+  useBackGuard(Boolean(getToken()) && view === 'add' && addMode !== 'menu', () => setAddMode('menu'));
 
   if (!booted) return <div className="phone" />;
 

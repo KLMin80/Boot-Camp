@@ -82,6 +82,7 @@ async function generate({ focus, invNames, vocab, tag, need, avoid }) {
     '- 소금·간장·참기름 같은 양념은 uses가 아니라 seasonings에 넣는다 (집에 있다고 가정).',
     '- uses에는 사전 재료 중 없는 것을 최대 1개까지만 포함할 수 있다 (부족분 유도). 대부분은 보유 재료로 채운다.',
     tagLine,
+    '- **남은 음식(김치·전·잡채·치킨·밥 등)이 보유 재료에 있으면 그걸 데우거나 새 요리로 변신시키는 아이디어를 우선** (예: 남은 전 → 전 찌개, 남은 잡채 → 잡채 유부초밥, 남은 치킨 → 치킨 마요덮밥).',
     '- **steps는 4~6단계, 각 단계에 재료 양·불세기·시간을 구체적으로** (예: "중불에서 5분간 볶는다"). 실제로 따라 할 수 있게.',
     '- 서로 다른, 겹치지 않는 요리를 만든다.',
   ].join('\n');
@@ -163,20 +164,25 @@ async function suggest({ inventory, vocab, tag, want = 6 }) {
 
   let ranked = rank(await fromCache(focus, tag), inventory);
 
-  // 캐시가 이 정도만 있어도 LLM을 부르지 않는다 (첫 방문 외엔 항상 즉시 응답).
-  // want(6개)를 다 못 채워도, 최소치(3)만 넘으면 캐시 것만 준다.
+  // 커버 안 된 재료 = 보유 중인데 어떤 추천 레시피에도 안 쓰인 것 (남은 음식·새 재료).
+  // 이게 있으면 캐시가 충분해도 그 재료를 위해 생성한다 (안 그러면 잡채 같은 남은 음식이 영영 안 뜬다).
+  const covered = new Set(ranked.flatMap((r) => r.uses.filter((u) => u.days_left != null).map((u) => u.ing)));
+  const uncovered = invNames.filter((n) => !covered.has(n));
+
   const MIN_FRESH = 3;
   let generatedNow = false;
-  if (ranked.length < MIN_FRESH && invNames.length && client) {
+  const shouldGen = client && invNames.length && (ranked.length < MIN_FRESH || uncovered.length > 0);
+  if (shouldGen) {
     try {
+      const genFocus = uncovered.length ? uncovered : focus; // 커버 안 된 것부터
       const made = await generate({
-        focus, invNames, vocab, tag,
-        need: want - ranked.length,
+        focus: genFocus, invNames, vocab, tag,
+        need: Math.max(want - ranked.length, Math.min(uncovered.length, 4)),
         avoid: ranked.map((r) => r.title),
       });
       if (made.length) {
         await store(made);
-        ranked = rank(await fromCache(focus, tag), inventory);
+        ranked = rank(await fromCache([...new Set([...focus, ...uncovered])], tag), inventory);
         generatedNow = true;
       }
     } catch (e) {
@@ -207,6 +213,7 @@ async function byName({ dish, inventory, vocab, tag }) {
   const sys = [
     '너는 한국 가정식 요리사다. 사용자가 지정한 요리의 레시피를 만든다.',
     `- uses의 재료는 반드시 주어진 "재료 사전" 안의 이름만 쓴다.`,
+    '- **이 요리에 반드시 들어가는 핵심 재료는 사용자가 없어도 uses에 꼭 넣어라** (예: 김치찌개→김치, 부대찌개→햄·소시지·김치, 잡채→당면). 없으면 앱이 부족분으로 표시한다.',
     '- servings는 2(2인분), uses의 amt는 2인분 기준 현실적인 양.',
     '- 양념(소금·간장 등)은 seasonings에, 사전에 있는 주재료만 uses에.',
     '- steps는 4~6단계, 재료 양·불세기·시간 구체적으로.',
@@ -216,7 +223,7 @@ async function byName({ dish, inventory, vocab, tag }) {
     `재료 사전(uses는 이 안에서만): ${vocab.join(', ')}`,
     `사용자 보유 재료: ${invNames.join(', ') || '없음'}`,
     `만들 요리: "${name}"`,
-    '이 요리의 레시피 1개를 만들어라. 보유 재료를 최대한 활용하되, 이 요리에 꼭 필요한 재료는 없어도 uses에 넣어라(앱이 부족분을 표시한다).',
+    '이 요리의 레시피 1개를 만들어라. 이 요리의 핵심 재료를 빠뜨리지 말고, 보유 재료도 최대한 활용해라.',
   ].join('\n');
 
   const unit = { type: 'string', enum: ['g', 'ml', '개'] };

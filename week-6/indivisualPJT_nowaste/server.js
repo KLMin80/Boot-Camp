@@ -369,16 +369,29 @@ async function inventoryForRecipes(userId, includeOrdered) {
   );
   return inv.rows;
 }
-async function recipeVocab() {
-  const r = await pool.query('SELECT DISTINCT ingredient FROM fridge_shelf_life ORDER BY 1');
-  return r.rows.map((x) => x.ingredient);
+// 프리셋(유통기한 사전)에 없지만 요리에 흔한 재료 + 남은 음식(직접 입력).
+// 이게 없으면 김치찌개에 김치가, 남은 전/잡채/치킨 활용 레시피가 안 나온다.
+const COMMON_INGREDIENTS = [
+  '김치', '밥', '라면', '국수', '소면', '우동', '당면', '떡', '만두', '유부',
+  '어묵', '햄', '소시지', '스팸', '참치', '김', '미역', '멸치', '순두부',
+  '콩나물', '숙주', '양배추', '깻잎', '청양고추', '고추', '카레', '치킨',
+  '피자', '전', '잡채', '나물', '옥수수', '완두콩', '아보카도', '빵', '식빵',
+];
+
+// 레시피 어휘 = 프리셋 ∪ 흔한 재료 ∪ 사용자 실제 재고(남은 음식 포함).
+// 사용자가 담은 것은 뭐든 레시피에 활용될 수 있어야 한다.
+async function recipeVocab(inventory = []) {
+  const r = await pool.query('SELECT DISTINCT ingredient FROM fridge_shelf_life');
+  const set = new Set([...r.rows.map((x) => x.ingredient), ...COMMON_INGREDIENTS]);
+  for (const it of inventory) if (it.ing) set.add(it.ing);
+  return [...set];
 }
 
 /* ───────────────── 레시피 (하이브리드: 캐시 + LLM) ───────────────── */
 app.post('/api/recipes/suggest', auth, async (req, res) => {
   const tag = req.body.tag || '전체';
   const inventory = await inventoryForRecipes(req.userId, Boolean(req.body.includeOrdered));
-  const vocab = await recipeVocab();
+  const vocab = await recipeVocab(inventory);
   const out = await recipes.suggest({ inventory, vocab, tag, want: 6 });
   res.json(out);
 });
@@ -386,7 +399,7 @@ app.post('/api/recipes/suggest', auth, async (req, res) => {
 /* 음식명으로 레시피 만들기 — 추천에 없는 요리를 직접 입력 */
 app.post('/api/recipes/byname', auth, async (req, res) => {
   const inventory = await inventoryForRecipes(req.userId, Boolean(req.body.includeOrdered));
-  const vocab = await recipeVocab();
+  const vocab = await recipeVocab(inventory);
   const out = await recipes.byName({ dish: req.body.dish, inventory, vocab, tag: req.body.tag || '전체' });
   if (!out.recipe) return res.status(out.error ? 422 : 404).json({ error: out.error || '레시피를 못 만들었어요.' });
   res.json(out);
