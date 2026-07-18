@@ -208,6 +208,48 @@ async function addDaysKST(days) {
   return d.rows[0].d;
 }
 
+/* 영수증 사진 → OCR → 품목·가격 여러 건을 확인 대기(pending)로.
+   영수증엔 유통기한이 없다: 재료 프리셋으로 임시로 잡아두고, 확인 화면에서 사진/수기로 보충한다.
+   가격·품목이 정확히 들어와야 '식비 절감' 리포트가 실효성을 가진다. */
+app.post('/api/receipt/parse', auth, async (req, res) => {
+  const image = req.body.image;
+  if (!image) return res.status(400).json({ error: '영수증 이미지가 필요합니다.' });
+
+  let read;
+  try {
+    read = await ocr.readReceipt(image);
+  } catch (e) {
+    console.error('[ocr receipt]', e.status || '', e.message);
+    return res.status(502).json({ error: '영수증을 읽지 못했어요. 밝은 곳에서 반듯하게 다시 찍어주세요.' });
+  }
+  if (!read.items.length) {
+    return res.status(422).json({ error: '영수증에서 식료품을 찾지 못했어요. 품목이 보이게 다시 찍어주세요.' });
+  }
+
+  const created = [];
+  for (const it of read.items) {
+    // 재료 프리셋이 있으면 그 보관법·기간으로 유통기한을 임시로(냉장 우선), 없으면 냉장 7일.
+    const p = await pool.query(
+      `SELECT storage, days FROM fridge_shelf_life WHERE ingredient = $1
+        ORDER BY (storage = 'fridge') DESC, days ASC LIMIT 1`,
+      [it.ingredient]
+    );
+    const storage = p.rows[0]?.storage || 'fridge';
+    const expiry = await addDaysKST(p.rows[0]?.days ?? 7);
+    // 전부 'preset'으로 둬서 확인 화면이 "임시로 잡았어요, 유통기한 봐주세요"로 안내하게 한다.
+    const r = await pool.query(
+      `INSERT INTO fridge_items
+         (user_id, name, ingredient, capacity, remaining, unit, price,
+          expiry_date, expiry_source, storage, status, ocr_text)
+       VALUES ($1,$2,$3,$4,$4,'개',$5,$6,'preset',$7,'pending','영수증에서 담음')
+       RETURNING ${ITEM_COLS}`,
+      [req.userId, it.name, it.ingredient, it.qty, it.price, expiry, storage]
+    );
+    created.push(r.rows[0]);
+  }
+  res.status(201).json({ count: created.length, items: created });
+});
+
 const PATCHABLE = ['name', 'ingredient', 'capacity', 'remaining', 'unit', 'price',
                    'expiry_date', 'expiry_source', 'storage', 'status'];
 
@@ -382,6 +424,36 @@ app.get('/api/stats/waste', auth, async (req, res) => {
   );
 
   res.json({ monthly: monthly.rows, top: top.rows, ...saved.rows[0] });
+});
+
+/* 소비 예측 — 부분 차감(consume) 데이터로 "언제 다 떨어질지"를 추정한다.
+   상하기 전(유통기한)만이 아니라 '떨어지기 전'에 미리 담게 해서 멀티마켓 주문으로 잇는다.
+   하루 소비량 = 쓴 양(capacity-remaining) / 산 뒤 지난 날. 남은 양 / 소비량 = 며칠 남았나. */
+app.get('/api/stats/predict', auth, async (req, res) => {
+  const within = Math.min(Math.max(Number(req.query.within) || 4, 1), 30);
+  const rows = (await pool.query(
+    `SELECT id, name, ingredient, unit,
+            remaining::float8 AS remaining, capacity::float8 AS capacity,
+            GREATEST(1, (${TODAY_KST} - purchased_on))::int AS days_used,
+            (expiry_date - ${TODAY_KST})::int AS days_left
+       FROM fridge_items
+      WHERE user_id = $1 AND outcome IS NULL AND status = 'confirmed'
+        AND remaining > 0 AND remaining < capacity`,
+    [req.userId]
+  )).rows;
+
+  const soon = rows.map((r) => {
+    const rate = (r.capacity - r.remaining) / r.days_used;          // 하루 소비량
+    const dte = rate > 0 ? Math.round(r.remaining / rate) : Infinity;
+    return { id: r.id, name: r.name, ingredient: r.ingredient, unit: r.unit,
+             remaining: r.remaining, days_to_empty: Math.max(0, dte), days_left: r.days_left };
+  })
+    // 곧 떨어지고(within 이내) + 유통기한보다 먼저 소진(=상해서가 아니라 다 써서 떨어질 것). 상할 것은 급함카드 몫.
+    .filter((r) => r.days_to_empty <= within && r.days_to_empty <= r.days_left)
+    .sort((a, b) => a.days_to_empty - b.days_to_empty)
+    .slice(0, 5);
+
+  res.json({ items: soon, within });
 });
 
 /* 레시피용 재고 집계. includeOrdered면 '곧 도착'(ordered)도 포함(주말 미리 주문 대비). */

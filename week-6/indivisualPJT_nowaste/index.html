@@ -135,6 +135,7 @@ const API = {
   items:   (status) => api('GET', `/api/items${status ? `?status=${status}` : ''}`),
   addItem: (body)   => api('POST', '/api/items', body),
   parseLabel: (image, storage) => api('POST', '/api/label/parse', { image, storage }),
+  parseReceipt: (image) => api('POST', '/api/receipt/parse', { image }),
   patch:   (id, b)  => api('PATCH', `/api/items/${id}`, b),
   freeze:  (id)     => api('POST', `/api/items/${id}/freeze`),
   receive: (id)     => api('POST', `/api/items/${id}/receive`),
@@ -144,6 +145,7 @@ const API = {
   remove:  (id)     => api('DELETE', `/api/items/${id}`),
 
   waste:    (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
+  predict:  () => api('GET', '/api/stats/predict'),
   recipes:  (tag, includeOrdered) => api('POST', '/api/recipes/suggest', { tag, includeOrdered }),
   recipeByName: (dish, tag, includeOrdered) => api('POST', '/api/recipes/byname', { dish, tag, includeOrdered }),
   buyLinks: (names) => api('POST', '/api/buy-links', { items: names }),
@@ -591,14 +593,24 @@ const TABS = [
   { key: 'room',    label: '실온' },
 ];
 
-function HomeView({ items, ordered = [], loading, presets, pendingCount, setView, onFreezeAll, onItemAction, onReceive, busy, email, onLogout }) {
+function HomeView({ items, ordered = [], loading, presets, pendingCount, setView, onFreezeAll, onItemAction, onReceive, busy, email, onLogout, toast, onAddOrdered }) {
   const [tab, setTab] = useState('all');
   const [sheet, setSheet] = useState(null);
+  const [predict, setPredict] = useState([]);   // 소비 예측: 곧 떨어질 재료
+  const [buyData, setBuyData] = useState(null);
 
   const doomed = useMemo(
     () => items.filter((i) => i.days_left <= 1 && i.storage !== 'freezer'),
     [items]
   );
+
+  // 부분 차감으로 남은 양이 바뀔 때마다 예측 갱신
+  useEffect(() => { API.predict().then((r) => setPredict(r.items || [])).catch(() => {}); }, [items]);
+
+  const buyOne = async (ing) => {
+    try { const d = await API.buyLinks([ing]); setBuyData({ items: [ing], ...d }); }
+    catch (e) { toast?.(e.message, 'bad'); }
+  };
 
   const shown = useMemo(() => {
     if (tab === 'all') return items;
@@ -634,6 +646,33 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
         <>
           <RescueCard doomed={doomed} presets={presets} busy={busy}
             onFreezeAll={onFreezeAll} onCook={() => setView('cook')} />
+
+          {/* 곧 떨어져요 — 소비 속도로 예측. 상하기 전이 아니라 '떨어지기 전에' 미리 담기. */}
+          {predict.length > 0 && (
+            <section className="rise mx-4 mt-4 rounded-2xl border border-warn/40 bg-warn/[.06] overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+                <span className="text-[13px]">📉</span>
+                <span className="text-[13px] font-bold text-warn">곧 떨어져요</span>
+                <span className="text-[11px] text-muted">쓰는 속도로 보면</span>
+              </div>
+              <div className="divide-y divide-warn/15">
+                {predict.map((p) => (
+                  <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold truncate">{p.name}</p>
+                      <p className="tnum text-[12px] text-muted">
+                        {p.days_to_empty <= 0 ? '오늘내일 다 써요' : `약 ${p.days_to_empty}일 뒤 다 써요`} · {p.remaining}{p.unit} 남음
+                      </p>
+                    </div>
+                    <button disabled={busy} onClick={() => buyOne(p.ingredient)}
+                      className="tap text-[12px] font-bold text-white bg-warn px-3 py-1.5 rounded-lg active:opacity-80 disabled:opacity-50 shrink-0">
+                      미리 담기
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* 곧 도착 — 주문했지만 아직 안 온 재료. 도착하면 냉장고로. */}
           {ordered.length > 0 && (
@@ -704,6 +743,8 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
 
       <div className="h-6" />
       <ItemSheet item={sheet} presets={presets} busy={busy} onClose={() => setSheet(null)} onAction={act} />
+      <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
+        onPick={(url, market, ing) => { window.open(url, '_blank', 'noopener'); toast?.(`${market}에서 ${ing} 찾는 중`); }} />
     </>
   );
 }
@@ -716,6 +757,18 @@ function AddView({ setMode }) {
       <Header title="담기" sub="장 본 걸 냉장고에 넣습니다" />
 
       <div className="px-4 pt-5 space-y-2.5">
+        <button onClick={() => setMode('receipt')}
+          className="tap w-full rounded-2xl border-2 border-calm bg-calm/[.06] p-4 text-left active:bg-paper transition-colors">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-surface grid place-items-center text-[21px]">🧾</div>
+            <div className="flex-1">
+              <p className="font-bold">영수증으로 한 번에</p>
+              <p className="text-[12px] text-muted mt-0.5">장 본 영수증을 찍으면 품목·가격을 한꺼번에 담아요</p>
+            </div>
+            <span className="text-calm font-bold text-[11px] border border-calm rounded-full px-2 py-0.5">추천</span>
+          </div>
+        </button>
+
         <button onClick={() => setMode('photo')}
           className="tap w-full rounded-2xl border-2 border-ink bg-surface p-4 text-left active:bg-paper transition-colors">
           <div className="flex items-center gap-3">
@@ -872,6 +925,86 @@ function PhotoCaptureView({ onDone, back }) {
       )}
 
       <div className="h-8" />
+    </>
+  );
+}
+
+/* 영수증으로 한 번에 — 사진/갤러리 → OCR로 품목·가격을 여러 건 담는다.
+   영수증엔 유통기한이 없으니 임시로 잡아두고, 확인 화면에서 사진/수기로 보충한다. */
+function ReceiptCaptureView({ onDone, back }) {
+  const inputRef = useRef();
+  const [status, setStatus] = useState('idle'); // idle | reading | done | fail
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState('');
+
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setStatus('reading'); setErr('');
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const r = await API.parseReceipt(dataUrl);
+      setResult(r); setStatus('done');
+    } catch (ex) { setErr(ex.message); setStatus('fail'); }
+  };
+
+  return (
+    <>
+      <Header title="영수증으로 한 번에" sub="찍으면 품목·가격을 한꺼번에 담아요"
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <input ref={inputRef} type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" />
+
+      <div className="px-4 pt-5">
+        {(status === 'idle' || status === 'fail') && (
+          <>
+            <button onClick={() => inputRef.current?.click()}
+              className="tap w-full rounded-2xl border-2 border-dashed border-line bg-surface py-10 grid place-items-center gap-2 active:bg-paper">
+              <span className="text-[40px] leading-none">🧾</span>
+              <span className="font-bold">영수증 찍기 · 갤러리에서 고르기</span>
+              <span className="text-[12px] text-muted">밝은 곳에서 품목이 다 보이게</span>
+            </button>
+            {status === 'fail' && <p className="text-[13px] text-urgent font-semibold mt-3 text-center">{err}</p>}
+            <div className="rounded-xl bg-paper border border-line p-3.5 mt-4">
+              <p className="text-[12px] text-muted leading-relaxed">
+                가격·품목은 영수증에서 자동으로 가져와요. <span className="font-semibold text-ink">유통기한만</span> 담은 뒤
+                확인 화면에서 사진이나 손으로 채우면 됩니다.
+              </p>
+            </div>
+          </>
+        )}
+
+        {status === 'reading' && (
+          <div className="rise flex flex-col items-center py-16">
+            <Spinner />
+            <p className="text-[14px] text-muted mt-3">영수증에서 품목·가격을 읽는 중…</p>
+          </div>
+        )}
+
+        {status === 'done' && result && (
+          <div className="rise">
+            <p className="font-extrabold text-[18px]">{result.count}개 담았어요 🧺</p>
+            <p className="text-[12px] text-muted mt-1 mb-3">유통기한만 확인 화면에서 채워주세요.</p>
+            <div className="rounded-xl border border-line bg-surface divide-y divide-line max-h-[46vh] overflow-y-auto">
+              {result.items.map((it) => (
+                <div key={it.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <span className="font-semibold truncate">{it.name}</span>
+                  <span className="tnum text-[13px] text-muted shrink-0">{it.price != null ? `${won(it.price)}원` : '가격 확인'}</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => onDone(result.count, true)}
+              className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-4 active:opacity-80">
+              유통기한 확인하러 가기 →
+            </button>
+            <button onClick={() => { setStatus('idle'); setResult(null); }}
+              className="tap w-full h-[46px] rounded-xl border-2 border-line font-semibold mt-2 active:bg-paper">
+              영수증 더 담기
+            </button>
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -1852,9 +1985,10 @@ function NowasteApp() {
         {view === 'home' && (
           <HomeView items={items} ordered={ordered} loading={loading} presets={presets} pendingCount={pending.length}
             setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} onReceive={receiveItem} busy={busy}
-            email={email || '내 계정'} onLogout={logout} />
+            email={email || '내 계정'} onLogout={logout} toast={toast} onAddOrdered={addOrdered} />
         )}
         {view === 'add' && addMode === 'menu'   && <AddView setMode={setAddMode} />}
+        {view === 'add' && addMode === 'receipt' && <ReceiptCaptureView onDone={photosDone} back={() => setAddMode('menu')} />}
         {view === 'add' && addMode === 'photo'  && <PhotoCaptureView onDone={photosDone} back={() => setAddMode('menu')} />}
         {view === 'add' && addMode === 'fresh'  && <FreshView presets={presets} onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}
         {view === 'add' && addMode === 'manual' && <ManualView onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}

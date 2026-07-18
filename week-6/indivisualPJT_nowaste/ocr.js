@@ -91,4 +91,66 @@ async function readLabel(image) {
   };
 }
 
-module.exports = { readLabel, normalizeExpiry, hasOCR: () => Boolean(client) };
+// ── 영수증 → 품목·가격 여러 건 ──
+// 영수증엔 유통기한이 없다. 여기선 제품명·재료·가격·수량만 뽑고, 유통기한은 앱이 뒤에서 보충한다.
+const RECEIPT_PROMPT = [
+  '이 영수증(또는 영수증 캡처) 사진에서 "식료품·식자재" 항목만 뽑아라.',
+  '- 각 항목: name(영수증에 적힌 상품명 그대로), ingredient(핵심 재료명 한두 단어 — 우유/두부/돼지고기/달걀/양파 등, 요리 매칭용. 모르면 상품명에서 추정),',
+  '  price(그 줄의 결제금액, 원, 정수), qty(수량, 안 보이면 1).',
+  '- 비닐봉투·종량제봉투·할인·포인트적립·부가세·합계·거스름돈처럼 냉장고에 안 들어가는 건 제외.',
+  '- 애매하면 빼라. 확실한 식료품만.',
+  '항목이 하나도 없으면 items를 빈 배열로.',
+].join('\n');
+
+const RECEIPT_SCHEMA = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'receipt', strict: true,
+    schema: {
+      type: 'object', additionalProperties: false, required: ['items'],
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object', additionalProperties: false,
+            required: ['name', 'ingredient', 'price', 'qty'],
+            properties: {
+              name: { type: 'string' },
+              ingredient: { type: 'string' },
+              price: { type: ['integer', 'null'] },
+              qty: { type: ['integer', 'null'] },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+async function readReceipt(image) {
+  if (!client) throw new Error('OCR이 설정되지 않았습니다 (.env의 OPEN_AI_API).');
+  const url = image.startsWith('data:') ? image : `data:image/jpeg;base64,${image}`;
+
+  const r = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    max_tokens: 1500, // 영수증은 항목이 많다
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: RECEIPT_PROMPT },
+      { type: 'image_url', image_url: { url, detail: 'high' } },
+    ]}],
+    response_format: RECEIPT_SCHEMA,
+  });
+
+  const p = JSON.parse(r.choices[0].message.content);
+  const items = (p.items || [])
+    .map((it) => ({
+      name: (it.name || '').trim() || null,
+      ingredient: (it.ingredient || it.name || '').trim() || null,
+      price: it.price != null && it.price >= 0 ? Math.round(it.price) : null,
+      qty: it.qty && it.qty > 0 ? Math.round(it.qty) : 1,
+    }))
+    .filter((it) => it.name);
+  return { items, tokens: r.usage?.prompt_tokens ?? null };
+}
+
+module.exports = { readLabel, readReceipt, normalizeExpiry, hasOCR: () => Boolean(client) };
