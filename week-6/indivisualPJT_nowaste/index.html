@@ -850,8 +850,9 @@ function PhotoCaptureView({ onDone, back }) {
       <Header title="사진으로 담기" sub="라벨을 찍기만 하세요. 확인은 나중에."
         right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
 
-      <input ref={camRef} type="file" accept="image/*" capture="environment" multiple onChange={onFiles} className="hidden" />
-      <input ref={galRef} type="file" accept="image/*" multiple onChange={onFiles} className="hidden" />
+      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onFiles} className="hidden" />
+      {/* 갤러리: multiple을 빼야 안드로이드가 파일매니저 대신 '갤러리(사진)'를 연다. 여러 장은 다시 눌러 추가. */}
+      <input ref={galRef} type="file" accept="image/*" onChange={onFiles} className="hidden" />
 
       <div className="px-4 pt-5">
         {/* 보관 위치 — 기본 냉장, 확인 화면에서 바꿀 수 있음 */}
@@ -873,7 +874,7 @@ function PhotoCaptureView({ onDone, back }) {
           <div className="text-center">
             <div className="text-[32px] leading-none">📷</div>
             <p className="font-bold mt-2">{running ? '읽는 중…' : '라벨 사진 찍기'}</p>
-            <p className="text-[11px] text-muted mt-0.5">여러 장 한 번에 · 제품명·용량·유통기한이 보이게</p>
+            <p className="text-[11px] text-muted mt-0.5">한 장씩 · 제품명·용량·유통기한이 보이게</p>
           </div>
         </button>
         <button onClick={() => galRef.current?.click()} disabled={running}
