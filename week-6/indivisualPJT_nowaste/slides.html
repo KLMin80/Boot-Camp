@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F2F4F2; --ink:#16191A; --calm:#5B7A6B; --urgent:#E23A2E;
+    --warn:#E08A12; --frost:#4E86B4; --line:#E4E7E4; --muted:#8A918D; --surface:#FFFFFF;
+    --sans:'Pretendard','Malgun Gothic',sans-serif; --mono:'IBM Plex Mono',monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sans);-webkit-font-smoothing:antialiased;background:#20241f}
+  .slide{width:1920px;height:1080px;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:center;padding:0 130px}
+  .slide.paper{background:var(--paper);color:var(--ink)}
+  .slide.dark{background:var(--ink);color:#fff}
+  .slide.sage{background:var(--calm);color:#fff}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .kicker{font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;margin-bottom:26px}
+  .paper .kicker{color:var(--calm)} .dark .kicker{color:#9aa39c} .sage .kicker{color:#dbe6df}
+  h2.title{font-weight:800;font-size:76px;letter-spacing:-.035em;line-height:1.1}
+  .title .hl{color:var(--calm)}
+  .dark .title .hl,.sage .title .hl{color:#a9c9b8}
+  .sub{font-size:30px;line-height:1.5;margin-top:26px;max-width:1180px;font-weight:500}
+  .paper .sub{color:#3d443f} .dark .sub{color:#cdd3ce} .sage .sub{color:#eaf1ec}
+  .sub b{font-weight:800}
+  .paper .sub b{color:var(--ink)} .dark .sub b,.sage .sub b{color:#fff}
+  .pageno{position:absolute;right:56px;bottom:44px;font-family:var(--mono);font-size:20px;opacity:.5}
+  .brandmini{position:absolute;left:130px;bottom:44px;font-family:var(--mono);font-size:20px;opacity:.55;display:flex;align-items:center;gap:8px}
+
+  .stamp{font-family:var(--mono);font-weight:700;font-size:17px;letter-spacing:.02em;border:2px solid currentColor;padding:4px 11px 3px;border-radius:4px;display:inline-block}
+  .s-urgent{color:var(--urgent)} .s-warn{color:var(--warn)} .s-calm{color:var(--calm)}
+
+  /* S2 문제 */
+  .prob{align-items:center;text-align:center}
+  .bignum{font-family:var(--mono);font-weight:700;font-size:150px;letter-spacing:-.02em;line-height:1;position:relative;display:inline-block;margin:14px 0}
+  .bignum::after{content:"";position:absolute;left:-5%;right:-5%;top:52%;height:9px;background:var(--urgent);transform:rotate(-3.5deg);border-radius:5px}
+  .prob .re{font-family:var(--mono);font-size:30px;color:var(--calm);font-weight:700;margin-top:44px}
+
+  /* 3-STEP FLOW (S3) */
+  .flow{display:flex;align-items:stretch;gap:0;margin-top:60px}
+  .fstep{flex:1;text-align:center;padding:0 26px}
+  .fstep .ic{font-size:64px;display:block;margin-bottom:22px}
+  .fstep h3{font-size:34px;font-weight:800;letter-spacing:-.02em;margin-bottom:12px}
+  .fstep p{font-size:22px;color:var(--muted);line-height:1.45}
+  .farrow{display:flex;align-items:center;color:#c4ccc5;font-size:48px;font-weight:300;padding-top:30px}
+
+  /* 6 CARDS (S4) */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:52px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:32px 30px}
+  .card .ic{font-size:44px;display:block;margin-bottom:18px;line-height:1}
+  .card h3{font-size:27px;font-weight:800;letter-spacing:-.01em;margin-bottom:9px}
+  .card p{font-size:19px;color:var(--muted);line-height:1.5}
+
+  /* TWO-COL (S5) */
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:50px}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:44px}
+  .panel .plabel{font-size:24px;font-weight:800;margin-bottom:8px}
+  .panel .pnote{font-size:20px;color:var(--muted);margin-bottom:30px;line-height:1.4}
+  .verdict{display:flex;align-items:center;gap:18px;padding:18px 0;border-top:1px solid var(--line)}
+  .verdict:first-of-type{border-top:0}
+  .verdict .who{font-size:24px;font-weight:700;width:220px}
+  .verdict .score{font-family:var(--mono);font-size:40px;font-weight:700}
+  .verdict .bad{color:var(--urgent)} .verdict .good{color:var(--calm)}
+  .verdict .tail{font-size:18px;color:var(--muted);flex:1}
+  .flywheel{display:flex;align-items:center;justify-content:center;gap:20px;margin-top:6px}
+  .flywheel .fx{text-align:center}
+  .flywheel .fx .n{font-family:var(--mono);font-size:44px;font-weight:700}
+  .flywheel .fx .l{font-size:18px;color:var(--muted);margin-top:6px}
+  .flywheel .fx.slow .n{color:var(--warn)} .flywheel .fx.fast .n{color:var(--calm)}
+  .flywheel .to{font-size:38px;color:#c4ccc5}
+
+  /* MARKETS (S6) */
+  .markets{display:flex;gap:20px;margin-top:52px;flex-wrap:wrap}
+  .mk{background:#fff;color:var(--ink);border-radius:20px;padding:26px 30px;display:flex;align-items:center;gap:16px;min-width:300px;flex:1}
+  .mk .e{font-size:40px} .mk .n{font-size:28px;font-weight:800} .mk .t{font-size:17px;color:var(--muted);margin-top:2px}
+  .mk .rev{margin-left:auto;font-family:var(--mono);font-size:15px;font-weight:700;color:var(--calm);border:1.5px solid var(--calm);border-radius:8px;padding:5px 11px}
+
+  /* COST (S7) */
+  .costrow{display:flex;align-items:baseline;gap:20px;margin-top:20px}
+  .costrow .big{font-family:var(--mono);font-size:120px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .costrow .u{font-size:34px;color:#9aa39c;font-weight:600}
+  .costnotes{margin-top:52px;display:flex;flex-direction:column;gap:22px}
+  .costnotes .cn{display:flex;align-items:center;gap:20px;font-size:26px}
+  .costnotes .cn .tag{font-family:var(--mono);font-size:19px;font-weight:700;color:var(--ink);background:#e7efe9;border-radius:8px;padding:7px 14px;white-space:nowrap}
+  .costnotes .cn.zero .tag{background:var(--calm);color:#fff}
+
+  /* FINAL (S8) */
+  .final{align-items:center;text-align:center}
+  .final .leaf{font-size:70px;margin-bottom:24px}
+  .final h2{font-weight:800;font-size:84px;letter-spacing:-.04em;line-height:1.15}
+  .final .url{font-family:var(--mono);font-size:32px;color:var(--ink);margin-top:34px;font-weight:600}
+  .final .badge{display:inline-block;font-family:var(--mono);font-size:20px;font-weight:700;color:var(--calm);border:2px solid var(--calm);border-radius:10px;padding:9px 18px;margin-top:26px}
+  .final .next{font-size:22px;color:var(--muted);margin-top:40px}
+</style>
+</head>
+<body>
+
+<!-- S2 · 문제 -->
+<section class="slide dark prob" id="s2">
+  <div class="kicker">한 달에 이만큼</div>
+  <div class="bignum">₩38,000</div>
+  <p class="sub" style="max-width:1000px">냉장고 뒤에서 곤죽이 된 채소, 유통기한 지난 두부…<br>매달 이렇게 버려요. <b>‘깜빡해서’가 아니라, 관리가 귀찮아서죠.</b></p>
+  <p class="re">문제는 냉장고 안이 아니라 — 장 보는 순간과 ‘입력의 귀찮음’</p>
+  <div class="brandmini mono">🧺 남김없이</div>
+  <div class="pageno mono">02</div>
+</section>
+
+<!-- S3 · 무엇을 하나 -->
+<section class="slide paper" id="s3">
+  <div class="kicker">무엇을 하나</div>
+  <h2 class="title">담기 쉽게 → 계속 쓰고 → <span class="hl">남김없이</span></h2>
+  <p class="sub">두 가지에 집중했어요 — <b>담는 걸 최대한 편하게</b>, 그리고 <b>그 재료로 뭘 해먹을지까지.</b></p>
+  <div class="flow">
+    <div class="fstep"><span class="ic">📷</span><h3>쉽게 담고</h3><p>사진 한 장, 또는<br>두 번의 탭이면 끝</p></div>
+    <div class="farrow">→</div>
+    <div class="fstep"><span class="ic">🔴</span><h3>상하기 전에 알려주고</h3><p>색으로 남은 시간을<br>한눈에</p></div>
+    <div class="farrow">→</div>
+    <div class="fstep"><span class="ic">🍲</span><h3>다 쓰게</h3><p>있는 재료로 만들 요리를<br>급한 것부터</p></div>
+  </div>
+  <div class="brandmini mono">🧺 남김없이</div>
+  <div class="pageno mono">03</div>
+</section>
+
+<!-- S4 · 핵심 기능 한눈에 -->
+<section class="slide paper" id="s4">
+  <div class="kicker">핵심 기능 한눈에</div>
+  <h2 class="title">냉장고를 여는 순간부터, 버리는 순간까지</h2>
+  <div class="cards">
+    <div class="card"><span class="ic">📷</span><h3>찍으면 끝</h3><p>제품명·용량·유통기한을 AI가 읽어 담아줘요</p></div>
+    <div class="card"><span class="ic">🔴</span><h3>상하기 전에</h3><p>임박은 빨강, 여유는 초록 — 색이 곧 남은 시간</p></div>
+    <div class="card"><span class="ic">🧊</span><h3>냉동실로 구제</h3><p>오늘 못 쓰면 버튼 하나로 기한 연장</p></div>
+    <div class="card"><span class="ic">🍲</span><h3>오늘 뭐 먹지</h3><p>있는 재료로 만들 요리를 급한 것부터</p></div>
+    <div class="card"><span class="ic">🛒</span><h3>비교해서 주문</h3><p>쿠팡·컬리·이마트몰·네이버를 나란히</p></div>
+    <div class="card"><span class="ic">📊</span><h3>아낀 돈이 보여요</h3><p>이번 달 얼마나 덜 버렸는지 한눈에</p></div>
+  </div>
+  <div class="brandmini mono">🧺 남김없이</div>
+  <div class="pageno mono">04</div>
+</section>
+
+<!-- S5 · 배운 것 -->
+<section class="slide paper" id="s5">
+  <div class="kicker">만들며 배운 것</div>
+  <h2 class="title">재보기 전엔, 믿지 않는다</h2>
+  <div class="twocol">
+    <div class="panel">
+      <div class="plabel">① OCR — 실제 사진 10장으로 재봤어요</div>
+      <div class="pnote">무료 라이브러리로 하려다가, 실사용 사진으로 실측</div>
+      <div class="verdict"><span class="who">Tesseract</span><span class="score bad">0/7</span><span class="tail">날짜 못 읽음</span></div>
+      <div class="verdict"><span class="who">GPT 비전</span><span class="score good">6/7</span><span class="tail">→ 채택</span></div>
+    </div>
+    <div class="panel">
+      <div class="plabel">② 레시피 — 캐시로 0에 수렴</div>
+      <div class="pnote">매번 AI를 부르면 느리고 비싸다 → 캐시에 쌓고 없을 때만 생성</div>
+      <div class="flywheel">
+        <div class="fx slow"><div class="n">~13초</div><div class="l">첫 생성</div></div>
+        <div class="to">→</div>
+        <div class="fx fast"><div class="n">~0.2초</div><div class="l">캐시 히트</div></div>
+      </div>
+      <p class="pnote" style="margin:26px 0 0;text-align:center">쓸수록 빨라지고 공짜에 가까워져요</p>
+    </div>
+  </div>
+  <div class="brandmini mono">🧺 남김없이</div>
+  <div class="pageno mono">05</div>
+</section>
+
+<!-- S6 · 차별점 -->
+<section class="slide sage" id="s6">
+  <div class="kicker">차별점 · 전략</div>
+  <h2 class="title">쿠팡이 <span class="hl">못 하는</span> 자리</h2>
+  <p class="sub">부족한 재료를 한 곳이 아니라 <b>여러 마켓으로 비교해서</b> 보내줘요. 쿠팡 앱은 자기 것만 팔아야 하니 구조적으로 못 하는 일 — <b>그게 우리 자리예요.</b></p>
+  <div class="markets">
+    <div class="mk"><span class="e">🚀</span><div><div class="n">쿠팡프레시</div><div class="t">로켓프레시</div></div><span class="rev">제휴 수익</span></div>
+    <div class="mk"><span class="e">🥬</span><div><div class="n">마켓컬리</div><div class="t">신선식품</div></div></div>
+    <div class="mk"><span class="e">🏪</span><div><div class="n">이마트몰</div><div class="t">장보기</div></div></div>
+    <div class="mk"><span class="e">🔎</span><div><div class="n">네이버쇼핑</div><div class="t">최저가 비교</div></div><span class="rev">제휴 수익</span></div>
+  </div>
+  <div class="brandmini mono">🧺 남김없이</div>
+  <div class="pageno mono">06</div>
+</section>
+
+<!-- S7 · 운영비 -->
+<section class="slide dark" id="s7">
+  <div class="kicker">돈은 얼마나 드나</div>
+  <h2 class="title">AI 비용, <span class="hl">실측</span>해봤어요</h2>
+  <div class="costrow"><span class="big">₩233</span><span class="u">/ 한 가구 · 월 (OCR + 레시피)</span></div>
+  <div class="costnotes">
+    <div class="cn"><span class="tag">손익분기</span><span>쿠팡 제휴로 월 <b style="color:#fff">1만 2천 원</b>어치만 사도 상쇄돼요</span></div>
+    <div class="cn zero"><span class="tag">앞으로</span><span>앱으로 감싸 <b style="color:#fff">온디바이스 OCR</b>로 가면 이 비용마저 <b style="color:#a9c9b8">₩0</b></span></div>
+  </div>
+  <p class="sub" style="margin-top:44px;font-size:24px;color:#7f8781">추정이 아니라 실제 호출 토큰으로 계산 · 비용이 아니라 ‘쿠팡 전환율’이 관건</p>
+  <div class="brandmini mono">🧺 남김없이</div>
+  <div class="pageno mono">07</div>
+</section>
+
+<!-- S8 · 마무리 -->
+<section class="slide paper final" id="s8">
+  <div class="leaf">🌿</div>
+  <h2>오늘 산 재료,<br>하나도 <span class="hl">남김없이</span>.</h2>
+  <div class="url">nowaste-app-seven.vercel.app</div>
+  <div class="badge">웹 베타 · 실제 배포됨</div>
+  <p class="next">다음은 — 실기기 촬영 테스트 · 앱으로 감싸기(Capacitor) · 제휴 신청</p>
+  <div class="pageno mono">08</div>
+</section>
+
+</body>
+</html>
