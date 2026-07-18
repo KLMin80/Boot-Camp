@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>남김없이 — 사놓고 잊은 재료, 남김없이 다 쓰세요</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🧺%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F2F4F2; --ink:#16191A; --calm:#5B7A6B; --urgent:#E23A2E;
+    --warn:#E08A12; --frost:#4E86B4; --line:#E1E5E1; --muted:#8A918D; --surface:#FFFFFF;
+    --sans:'Pretendard','Malgun Gothic',system-ui,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--sans);background:#E4E8E4;color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.6}
+  .wrap{max-width:520px;margin:0 auto;background:var(--paper);overflow:hidden;box-shadow:0 0 60px -20px rgba(0,0,0,.18)}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  section{padding:56px 28px}
+
+  /* 유통기한 도장 — 이 앱의 시그니처. 시간이 흐르면 색이 변한다. */
+  .stamp{font-family:var(--mono);font-weight:700;font-size:13px;letter-spacing:.02em;
+    border:1.6px solid currentColor;padding:3px 8px 2px;display:inline-block;line-height:1.1;border-radius:3px}
+  .s-urgent{color:var(--urgent)} .s-warn{color:var(--warn)} .s-calm{color:var(--calm)} .s-frost{color:var(--frost)}
+
+  /* HERO */
+  .hero{padding:64px 28px 48px;text-align:center;position:relative}
+  .brandrow{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:26px}
+  .brandrow .bag{font-size:26px}
+  .brandrow .wm{font-weight:800;font-size:20px;letter-spacing:-.02em}
+  .hero h1{font-weight:800;font-size:40px;line-height:1.18;letter-spacing:-.035em;margin-bottom:16px}
+  .hero h1 .hl{color:var(--calm)}
+  .hero p.lead{font-size:16px;color:#3d443f;max-width:400px;margin:0 auto 30px}
+
+  /* 히어로 카드 — 앱의 재고 행 미니 목업 + 구제 전/후 */
+  .demo{background:var(--surface);border:1px solid var(--line);border-radius:18px;
+    box-shadow:0 18px 40px -22px rgba(0,0,0,.28);padding:14px;max-width:360px;margin:0 auto 32px;text-align:left}
+  .row{display:flex;align-items:center;gap:12px;padding:11px 10px;border-radius:12px}
+  .row .bar{width:4px;align-self:stretch;border-radius:3px}
+  .row .nm{font-weight:700;flex:1}
+  .row .qty{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .demo .divider{height:1px;background:var(--line);margin:2px 4px}
+  .demo .arrowline{display:flex;align-items:center;gap:8px;padding:8px 10px 2px;color:var(--muted);font-size:12px;font-weight:600}
+  .demo .arrowline b{color:var(--calm)}
+
+  .cta{display:inline-flex;align-items:center;gap:9px;background:var(--ink);color:#fff;font-weight:800;
+    font-size:16px;padding:16px 30px;border-radius:14px;text-decoration:none;box-shadow:0 10px 26px -12px rgba(22,25,26,.7)}
+  .cta:hover{opacity:.9}
+  .cta .go{font-family:var(--mono);opacity:.7;font-weight:600}
+  .hero .hint{font-size:12.5px;color:var(--muted);margin-top:14px}
+
+  /* PROBLEM */
+  .problem{background:var(--ink);color:#fff;text-align:center;border-radius:0}
+  .problem .eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;color:#9aa39c;text-transform:uppercase;margin-bottom:18px}
+  .bignum{font-family:var(--mono);font-weight:700;font-size:58px;letter-spacing:-.02em;line-height:1;position:relative;display:inline-block}
+  .bignum .won{font-size:30px;vertical-align:top}
+  .bignum::after{content:"";position:absolute;left:-6%;right:-6%;top:52%;height:4px;background:var(--urgent);transform:rotate(-4deg);border-radius:3px}
+  .problem .sub{font-size:16px;color:#cdd3ce;margin-top:26px;max-width:380px;margin-left:auto;margin-right:auto}
+  .problem .sub b{color:#fff}
+  .problem .flip{font-family:var(--mono);font-size:14px;color:var(--calm);font-weight:700;margin-top:20px}
+
+  /* SECTION TITLE */
+  .stitle{font-weight:800;font-size:26px;letter-spacing:-.03em;margin-bottom:6px}
+  .ssub{font-size:14px;color:var(--muted);margin-bottom:26px}
+
+  /* BENEFITS */
+  .benefits{background:var(--paper)}
+  .bgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .bcard{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px 16px}
+  .bcard .ic{font-size:24px;display:block;margin-bottom:10px;line-height:1}
+  .bcard h3{font-size:15px;font-weight:800;letter-spacing:-.01em;margin-bottom:5px}
+  .bcard p{font-size:12.5px;color:var(--muted);line-height:1.5}
+
+  /* COLOR LAW — 시그니처 설명 */
+  .law{background:var(--calm);color:#fff;text-align:center}
+  .law .stitle{color:#fff}
+  .law .ssub{color:#dbe6df}
+  .lawrow{display:flex;justify-content:center;gap:10px;margin:8px 0 22px;flex-wrap:wrap}
+  .chip{background:#fff;border-radius:13px;padding:14px 12px;min-width:92px}
+  .chip .st{margin-bottom:8px}
+  .chip .lab{font-size:12px;font-weight:700;color:var(--ink)}
+  .chip .day{font-size:11px;color:var(--muted);font-family:var(--mono)}
+  .law .note{font-size:13px;color:#eaf1ec;max-width:400px;margin:0 auto}
+
+  /* STEPS */
+  .steps{background:var(--paper)}
+  .step{display:flex;gap:16px;padding:16px 0;border-top:1px solid var(--line)}
+  .step:first-of-type{border-top:0}
+  .step .no{font-family:var(--mono);font-weight:700;font-size:14px;color:#fff;background:var(--ink);
+    width:30px;height:30px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;margin-top:2px}
+  .step .body{flex:1}
+  .step .body .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px}
+  .step h3{font-size:16px;font-weight:800;letter-spacing:-.01em}
+  .navtag{font-size:11px;font-family:var(--mono);font-weight:600;color:var(--calm);background:#eaf1ec;padding:2px 7px;border-radius:6px}
+  .step p{font-size:13.5px;color:#4a514b;line-height:1.55}
+  .step p em{font-style:normal;font-weight:700;color:var(--ink)}
+
+  /* REPORT */
+  .report{background:var(--ink);color:#fff;text-align:center}
+  .report .stitle{color:#fff}
+  .report .ssub{color:#9aa39c}
+  .chart{display:flex;align-items:flex-end;justify-content:center;gap:9px;height:140px;margin:26px 0 6px}
+  .chart .col{display:flex;flex-direction:column;align-items:center;gap:7px;flex:1;max-width:46px;height:100%}
+  .chart .col .v{font-family:var(--mono);font-size:10px;font-weight:700;color:#7f8781}
+  .chart .col.last .v{color:var(--calm)}
+  .chart .col .b{width:100%;border-radius:5px 5px 0 0;background:#2c322d}
+  .chart .col.last .b{background:var(--calm)}
+  .chart .col .m{font-size:11px;font-weight:600;color:#7f8781}
+  .chart .col.last .m{color:#fff}
+  .report .save{margin-top:14px;font-size:14px;color:#cdd3ce}
+  .report .save b{font-family:var(--mono);color:var(--calm);font-weight:700}
+
+  /* FINAL CTA */
+  .final{background:var(--paper);text-align:center;padding-bottom:70px}
+  .final .leaf{font-size:34px;margin-bottom:14px}
+  .final h2{font-weight:800;font-size:28px;letter-spacing:-.03em;line-height:1.25;margin-bottom:26px}
+  .final h2 .hl{color:var(--calm)}
+  .foot{text-align:center;font-size:12px;color:var(--muted);padding:0 28px 40px}
+  .foot .wm{font-weight:800;color:var(--ink)}
+
+  /* motion */
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .reveal{animation:rise .6s ease-out both}
+  @media (prefers-reduced-motion:reduce){.reveal{animation:none}}
+  @media (max-width:400px){.hero h1{font-size:34px}.bignum{font-size:48px}.bgrid{gap:9px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="brandrow"><span class="bag">🧺</span><span class="wm">남김없이</span></div>
+    <h1>사놓고 잊은 재료,<br><span class="hl">남김없이</span> 다 쓰세요</h1>
+    <p class="lead">사진 한 장으로 담고, 상하기 전에 알려주고,<br>그 재료로 뭘 해 먹을지까지 알려줘요.</p>
+
+    <div class="demo">
+      <div class="row" style="background:rgba(226,58,46,.05)">
+        <span class="bar" style="background:var(--urgent)"></span>
+        <span class="nm">두부 <span class="qty">300g</span></span>
+        <span class="stamp s-urgent">D-1</span>
+      </div>
+      <div class="arrowline">오늘 안 쓰면 버려요 →&nbsp; <b>냉동실로 · 오늘 요리로</b></div>
+      <div class="divider"></div>
+      <div class="row" style="background:rgba(91,122,107,.07)">
+        <span class="bar" style="background:var(--calm)"></span>
+        <span class="nm">두부 <span class="qty">다 씀</span></span>
+        <span class="stamp s-calm">✓ 소진</span>
+      </div>
+    </div>
+
+    <a class="cta" href="https://nowaste-app-seven.vercel.app">지금 냉장고 열기 <span class="go">→</span></a>
+    <p class="hint">📱 휴대폰 브라우저로 여는 걸 추천해요 (사진 촬영 때문에요)</p>
+  </section>
+
+  <!-- PROBLEM -->
+  <section class="problem" data-reveal>
+    <p class="eyebrow">한 달에 이만큼</p>
+    <div class="bignum">₩38,000</div>
+    <p class="sub">냉장고 뒤에서 곤죽이 된 채소, 유통기한 지난 두부…<br>매달 이렇게 버려요. <b>‘깜빡해서’가 아니라 관리가 귀찮아서죠.</b></p>
+    <p class="flip">남김없이가 그 귀찮음을 대신 해드려요</p>
+  </section>
+
+  <!-- BENEFITS -->
+  <section class="benefits" data-reveal>
+    <h2 class="stitle">이렇게 좋아져요</h2>
+    <p class="ssub">냉장고를 여는 순간부터, 버리는 순간까지</p>
+    <div class="bgrid">
+      <div class="bcard"><span class="ic">📷</span><h3>찍으면 끝</h3><p>제품명·용량·유통기한을 알아서 읽어 담아줘요</p></div>
+      <div class="bcard"><span class="ic">🔴</span><h3>상하기 전에</h3><p>임박하면 빨갛게, 여유 있으면 초록으로 한눈에</p></div>
+      <div class="bcard"><span class="ic">🧊</span><h3>냉동실로 구제</h3><p>오늘 못 쓰면 버튼 하나로 기한 연장</p></div>
+      <div class="bcard"><span class="ic">🥘</span><h3>오늘 뭐 먹지</h3><p>있는 재료로 만들 요리를 급한 것부터 추천</p></div>
+      <div class="bcard"><span class="ic">🛒</span><h3>비교해서 주문</h3><p>쿠팡·컬리·이마트몰·네이버를 나란히</p></div>
+      <div class="bcard"><span class="ic">📊</span><h3>아낀 돈이 보여요</h3><p>이번 달 얼마나 덜 버렸는지 한눈에</p></div>
+    </div>
+  </section>
+
+  <!-- COLOR LAW (signature) -->
+  <section class="law" data-reveal>
+    <h2 class="stitle">색이 곧 시간이에요</h2>
+    <p class="ssub">냉장고를 열면, 급한 것부터 눈에 들어와요</p>
+    <div class="lawrow">
+      <div class="chip"><div class="st"><span class="stamp s-urgent">D-1</span></div><div class="lab">지금 써요</div><div class="day">하루 남음</div></div>
+      <div class="chip"><div class="st"><span class="stamp s-warn">D-4</span></div><div class="lab">곧이에요</div><div class="day">나흘 남음</div></div>
+      <div class="chip"><div class="st"><span class="stamp s-calm">D-30</span></div><div class="lab">여유 있어요</div><div class="day">한 달 남음</div></div>
+    </div>
+    <p class="note">빨강은 오늘, 노랑은 이번 주, 초록은 나중. 유통기한을 숫자로 외울 필요 없이 색으로 알아채요.</p>
+  </section>
+
+  <!-- STEPS -->
+  <section class="steps" data-reveal>
+    <h2 class="stitle">이렇게 써요</h2>
+    <p class="ssub">처음이어도 5분이면 익혀요</p>
+
+    <div class="step"><span class="no">1</span><div class="body">
+      <div class="top"><h3>가입하기</h3></div>
+      <p>이메일·비밀번호로 시작하면 바로 내 냉장고가 열려요. <em>홈 화면에 추가</em>하면 앱처럼 쓸 수 있어요.</p></div></div>
+
+    <div class="step"><span class="no">2</span><div class="body">
+      <div class="top"><h3>장 본 걸 담기</h3><span class="navtag">담기</span></div>
+      <p>라벨 있는 건 <em>📷 사진으로</em>, 없는 건 <em>🥬 재료로</em>. 남은 김치·전·잡채도 담아두면 레시피에 써먹어요.</p></div></div>
+
+    <div class="step"><span class="no">3</span><div class="body">
+      <div class="top"><h3>확인하기</h3><span class="navtag">확인</span></div>
+      <p>정리 끝나고 앉아서, 읽은 값이 맞는지 카드로 넘기며 확인. 틀리면 <em>그 자리서 수정</em>해요.</p></div></div>
+
+    <div class="step"><span class="no">4</span><div class="body">
+      <div class="top"><h3>오늘 뭐 먹지</h3><span class="navtag">요리</span></div>
+      <p>급한 재료부터 쓰는 요리를 추천해요. <em>인분</em>을 고르면 재료 양도 맞춰지고, 먹고 싶은 요리는 직접 검색해요.</p></div></div>
+
+    <div class="step"><span class="no">5</span><div class="body">
+      <div class="top"><h3>부족한 재료 주문</h3><span class="navtag">주문</span></div>
+      <p>여러 마켓을 비교해 바로 주문. 미리 산 재료는 <em>‘곧 도착’</em>으로 챙겨 레시피에 미리 반영해요.</p></div></div>
+
+    <div class="step"><span class="no">6</span><div class="body">
+      <div class="top"><h3>다 쓰면 정리</h3><span class="navtag">냉장고</span></div>
+      <p><em>다 먹었어요 / 버렸어요</em>를 기록하면, 그게 쌓여 다음 칸의 절감 리포트가 돼요.</p></div></div>
+  </section>
+
+  <!-- REPORT -->
+  <section class="report" data-reveal>
+    <h2 class="stitle">아낀 게 눈에 보여요</h2>
+    <p class="ssub">버린 걸 기록할수록 이 숫자가 줄어들어요</p>
+    <div class="chart">
+      <div class="col"><span class="v">42</span><span class="b" style="height:96%"></span><span class="m">2월</span></div>
+      <div class="col"><span class="v">40</span><span class="b" style="height:90%"></span><span class="m">3월</span></div>
+      <div class="col"><span class="v">35</span><span class="b" style="height:79%"></span><span class="m">4월</span></div>
+      <div class="col"><span class="v">32</span><span class="b" style="height:72%"></span><span class="m">5월</span></div>
+      <div class="col"><span class="v">27</span><span class="b" style="height:61%"></span><span class="m">6월</span></div>
+      <div class="col last"><span class="v">25</span><span class="b" style="height:56%"></span><span class="m">7월</span></div>
+    </div>
+    <p class="save" style="font-size:11px;color:#7f8781;margin-top:2px">단위: 천원 · 월별 버린 금액</p>
+    <p class="save"><b>▼ 41%</b> — 2월보다 <b>₩17,400</b> 덜 버렸어요</p>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="final" data-reveal>
+    <div class="leaf">🌿</div>
+    <h2>오늘 산 재료,<br>하나도 <span class="hl">남김없이</span>.</h2>
+    <a class="cta" href="https://nowaste-app-seven.vercel.app">지금 시작하기 <span class="go">→</span></a>
+  </section>
+
+  <div class="foot"><span class="wm">🧺 남김없이</span> · nowaste-app-seven.vercel.app<br>버리는 음식과 식비를, 함께 줄여요.</div>
+
+</div>
+<script>
+  // 스크롤 시 섹션 부드럽게 등장 (한 번만)
+  const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('reveal');io.unobserve(e.target)}})},{threshold:.12});
+  document.querySelectorAll('[data-reveal]').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
