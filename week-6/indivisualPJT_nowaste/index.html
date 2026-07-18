@@ -140,6 +140,7 @@ const API = {
   receive: (id)     => api('POST', `/api/items/${id}/receive`),
   close:   (id, outcome, amount) =>
              api('POST', `/api/items/${id}/close`, { outcome, discarded_amount: amount ?? null }),
+  consume: (id, amount) => api('POST', `/api/items/${id}/consume`, { amount }),
   remove:  (id)     => api('DELETE', `/api/items/${id}`),
 
   waste:    (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
@@ -484,9 +485,21 @@ function RescueCard({ doomed, presets, onFreezeAll, onCook, busy }) {
 
 /* 재고를 탭하면 뜨는 시트. 여기서 소진·폐기·냉동이 기록된다. */
 function ItemSheet({ item, presets, onClose, onAction, busy }) {
+  const [showUse, setShowUse] = useState(false);
+  const [amt, setAmt] = useState('');
+  useEffect(() => { setShowUse(false); setAmt(''); }, [item?.id]);
   if (!item) return null;
   const freezable = Boolean(presets[item.ingredient]?.freezer) && item.storage !== 'freezer';
   const worth = Math.round((item.price || 0) * (item.remaining / item.capacity));
+  // 빠른 버튼: 남은 양 기준 비율 → 숫자 칸에 채워 넣고, '빼기'로 확정
+  const fillFrac = (frac) => {
+    const v = item.remaining * frac;
+    setAmt(String(item.unit === '개' ? Math.max(1, Math.round(v)) : Math.round(v)));
+  };
+  const doUse = () => {
+    const n = Number(amt);
+    if (n > 0) { onAction('consume', item, n); setShowUse(false); setAmt(''); }
+  };
 
   return (
     <Sheet open onClose={onClose}>
@@ -516,6 +529,40 @@ function ItemSheet({ item, presets, onClose, onAction, busy }) {
           버렸어요
         </button>
       </div>
+
+      {/* 부분 차감 — 앱 없이 요리해서 일부만 썼을 때 남은 양을 맞춘다 */}
+      {!showUse ? (
+        <button disabled={busy} onClick={() => setShowUse(true)}
+          className="tap w-full h-[50px] rounded-xl border-2 border-line font-bold mt-2 active:bg-paper disabled:opacity-50">
+          ✏️ 조금 썼어요
+        </button>
+      ) : (
+        <div className="rounded-xl border-2 border-line p-3 mt-2">
+          <p className="text-[12px] font-bold text-muted mb-2">
+            얼마나 썼어요? <span className="font-normal opacity-80">— 남은 {item.remaining}{item.unit} 중</span>
+          </p>
+          <div className="grid grid-cols-4 gap-2 mb-2">
+            {[['¼', 0.25], ['½', 0.5], ['¾', 0.75], ['전량', 1]].map(([lbl, frac]) => (
+              <button key={lbl} onClick={() => fillFrac(frac)}
+                className="tap h-[42px] rounded-lg border-2 border-line font-bold text-[14px] active:bg-paper">
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 flex items-center rounded-lg border-2 border-line focus-within:border-ink px-3 h-[46px]">
+              <input type="number" min="0" inputMode="decimal" value={amt} autoFocus
+                onChange={(e) => setAmt(e.target.value)} placeholder="직접 입력"
+                className="tnum w-full bg-transparent font-semibold outline-none" />
+              <span className="text-[13px] text-muted font-semibold ml-1">{item.unit}</span>
+            </div>
+            <button disabled={busy || !(Number(amt) > 0)} onClick={doUse}
+              className="tap h-[46px] px-5 rounded-lg bg-ink text-white font-bold active:opacity-80 disabled:opacity-40">
+              빼기
+            </button>
+          </div>
+        </div>
+      )}
 
       {freezable && (
         <button disabled={busy} onClick={() => onAction('freeze', item)}
@@ -564,9 +611,9 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
     { label: '여유 있어요',  test: (d) => d > 7 },
   ];
 
-  const act = async (kind, item) => {
+  const act = async (kind, item, extra) => {
     setSheet(null);
-    await onItemAction(kind, item);
+    await onItemAction(kind, item, extra);
   };
 
   return (
@@ -836,6 +883,7 @@ function FreshView({ presets, onAdd, back, busy }) {
   const [storage, setStorage] = useState(null);
   const [unit, setUnit] = useState('개');
   const [amount, setAmount] = useState(1);
+  const [price, setPrice] = useState('');
 
   const names = useMemo(() => Object.keys(presets), [presets]);
   const [q, setQ] = useState('');
@@ -933,6 +981,16 @@ function FreshView({ presets, onAdd, back, busy }) {
             </div>
           </div>
 
+          <div className="mt-4">
+            <p className="text-[13px] font-bold mb-2">얼마 주고 샀어요? <span className="font-normal text-muted">— 선택, 아낀 돈 리포트에 쓰여요</span></p>
+            <div className="flex items-center rounded-lg border-2 border-line focus-within:border-ink px-3 h-11 w-44">
+              <input type="number" min="0" inputMode="numeric" value={price}
+                onChange={(e) => setPrice(e.target.value)} placeholder="3150"
+                className="tnum w-full bg-transparent font-semibold outline-none" />
+              <span className="text-[13px] text-muted font-semibold ml-1">원</span>
+            </div>
+          </div>
+
           <div className="rounded-xl border-2 border-calm bg-calm/[.06] px-4 py-4 flex items-center gap-3 mt-3">
             <span className="text-[26px] leading-none">{STORAGE[storage].icon}</span>
             <div className="flex-1">
@@ -945,7 +1003,7 @@ function FreshView({ presets, onAdd, back, busy }) {
           </div>
 
           <button disabled={busy}
-            onClick={() => onAdd({ name: ing, ingredient: ing, capacity: amount, remaining: amount, unit, storage })}
+            onClick={() => onAdd({ name: ing, ingredient: ing, capacity: amount, remaining: amount, unit, storage, price: price ? Number(price) : null })}
             className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-3 active:opacity-80 disabled:opacity-50">
             {busy ? '담는 중…' : '담기'}
           </button>
@@ -1080,7 +1138,7 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
 
   const guessed = card.expiry_source === 'preset';
   const editing = edit !== null;
-  const startEdit = () => setEdit({ name: card.name, capacity: card.capacity, unit: card.unit, expiry_date: card.expiry_date, storage: card.storage });
+  const startEdit = () => setEdit({ name: card.name, capacity: card.capacity, unit: card.unit, price: card.price ?? '', expiry_date: card.expiry_date, storage: card.storage });
   const unitOpts = ['g', 'ml', '개'].includes(card.unit) ? ['g', 'ml', '개'] : [card.unit, 'g', 'ml', '개'];
   const patch = (k) => (v) => setEdit((e) => ({ ...e, [k]: v }));
 
@@ -1114,7 +1172,18 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
                 </div>
               </div>
             ) : <Row label="용량" value={`${card.capacity}${card.unit}`} tnum />}
-            {card.price != null && <Row label="가격" value={`${won(card.price)}원`} tnum />}
+
+            {editing ? (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1">가격 <span className="font-normal opacity-70">— 라벨엔 없어요. 아낀 돈 리포트에 쓰여요</span></label>
+                <div className="flex items-center rounded-lg border-2 border-line focus-within:border-ink px-3 h-[46px]">
+                  <input type="number" min="0" inputMode="numeric" value={edit.price}
+                    onChange={(e) => patch('price')(e.target.value)} placeholder="가격 입력"
+                    className="tnum w-full bg-transparent font-semibold outline-none" />
+                  <span className="text-[13px] text-muted font-semibold ml-1">원</span>
+                </div>
+              </div>
+            ) : (card.price != null && <Row label="가격" value={`${won(card.price)}원`} tnum />)}
 
             {/* 유통기한 — 이 카드의 주인공. 수정 모드면 날짜 입력. */}
             <div className={`rounded-xl border-2 px-3.5 py-3 ${
@@ -1695,10 +1764,15 @@ function NowasteApp() {
     if (failed) toast(failed.reason.message, 'bad');
   });
 
-  const itemAction = (kind, item) => guard(async () => {
+  const itemAction = (kind, item, extra) => guard(async () => {
     if (kind === 'freeze') {
       await API.freeze(item.id);
       toast(`${item.name} — 냉동실로 옮겼어요`);
+    } else if (kind === 'consume') {
+      const { item: after, closed } = await API.consume(item.id, extra);
+      toast(closed
+        ? `${item.name} — 다 썼어요, 냉장고에서 뺐어요 👏`
+        : `${item.name} — ${extra}${item.unit} 뺐어요 · ${after.remaining}${after.unit} 남음`);
     } else if (kind === 'eaten') {
       await API.close(item.id, 'eaten');
       toast(`${item.name} — 다 먹었어요 👏`);
@@ -1722,6 +1796,8 @@ function NowasteApp() {
         body.remaining = cap; // 갓 담는 재고는 가득 찬 상태 — 남은 양도 같이 맞춘다
       }
       if (edits.unit && edits.unit !== card.unit) body.unit = edits.unit;
+      const pr = edits.price === '' || edits.price == null ? null : Number(edits.price);
+      if (pr !== (card.price ?? null) && !(pr != null && Number.isNaN(pr))) body.price = pr;
       if (edits.expiry_date && edits.expiry_date !== card.expiry_date) {
         body.expiry_date = edits.expiry_date; body.expiry_source = 'manual';
       }

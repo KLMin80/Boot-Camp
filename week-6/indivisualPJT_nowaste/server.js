@@ -312,6 +312,35 @@ app.post('/api/items/:id/close', auth, async (req, res) => {
   res.json({ item: r.rows[0] });
 });
 
+/* 부분 차감 — 앱으로 요리하지 않고 그냥 써도 남은 양을 맞춘다.
+   남은 양을 다 쓰면(0 이하) 버린 게 아니라 '다 먹음'으로 자동 마감한다. */
+app.post('/api/items/:id/consume', auth, async (req, res) => {
+  const amount = Number(req.body.amount);
+  if (!(amount > 0)) return res.status(400).json({ error: '사용한 양을 입력해 주세요.' });
+
+  const cur = await pool.query(
+    'SELECT remaining::float8 AS remaining FROM fridge_items WHERE id = $1 AND user_id = $2 AND outcome IS NULL',
+    [req.params.id, req.userId]
+  );
+  if (!cur.rowCount) return res.status(404).json({ error: '없거나 이미 정리된 항목입니다.' });
+
+  const left = Math.max(0, cur.rows[0].remaining - amount);
+  const r = left <= 0
+    ? await pool.query(
+        `UPDATE fridge_items
+            SET remaining = 0, outcome = 'eaten', closed_on = ${TODAY_KST}, discarded_amount = 0
+          WHERE id = $1 AND user_id = $2 AND outcome IS NULL
+          RETURNING ${ITEM_COLS}`,
+        [req.params.id, req.userId])
+    : await pool.query(
+        `UPDATE fridge_items SET remaining = $1
+          WHERE id = $2 AND user_id = $3 AND outcome IS NULL
+          RETURNING ${ITEM_COLS}`,
+        [left, req.params.id, req.userId]);
+
+  res.json({ item: r.rows[0], closed: left <= 0 });
+});
+
 app.delete('/api/items/:id', auth, async (req, res) => {
   const r = await pool.query('DELETE FROM fridge_items WHERE id = $1 AND user_id = $2', [
     req.params.id, req.userId,
