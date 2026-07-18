@@ -148,6 +148,7 @@ const API = {
   predict:  () => api('GET', '/api/stats/predict'),
   recipes:  (tag, includeOrdered) => api('POST', '/api/recipes/suggest', { tag, includeOrdered }),
   recipeByName: (dish, tag, includeOrdered) => api('POST', '/api/recipes/byname', { dish, tag, includeOrdered }),
+  recipesWith: (ingredients, tag) => api('POST', '/api/recipes/with', { ingredients, tag }),
   buyLinks: (names) => api('POST', '/api/buy-links', { items: names }),
 };
 
@@ -812,12 +813,11 @@ function AddView({ setMode }) {
 /* 사진으로 담기 — 라벨을 찍으면(또는 골라 올리면) GPT가 읽어 확인 대기에 쌓는다.
    찍기만 하고 확인은 나중에. 카메라는 file input(capture)로 — 안정적이고 HTTPS 없이도 됨. */
 function PhotoCaptureView({ onDone, back }) {
-  const inputRef = useRef();
+  const camRef = useRef();   // 카메라(capture) / 갤러리(capture 없음) 분리
+  const galRef = useRef();
   const [storage, setStorage] = useState('fridge');
   const [rows, setRows] = useState([]); // { name, status:'reading'|'done'|'fail', read }
   const [running, setRunning] = useState(false);
-
-  const pickFiles = () => inputRef.current?.click();
 
   const onFiles = async (e) => {
     const files = [...(e.target.files || [])].slice(0, 12);
@@ -849,8 +849,8 @@ function PhotoCaptureView({ onDone, back }) {
       <Header title="사진으로 담기" sub="라벨을 찍기만 하세요. 확인은 나중에."
         right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
 
-      <input ref={inputRef} type="file" accept="image/*" capture="environment" multiple
-        onChange={onFiles} className="hidden" />
+      <input ref={camRef} type="file" accept="image/*" capture="environment" multiple onChange={onFiles} className="hidden" />
+      <input ref={galRef} type="file" accept="image/*" multiple onChange={onFiles} className="hidden" />
 
       <div className="px-4 pt-5">
         {/* 보관 위치 — 기본 냉장, 확인 화면에서 바꿀 수 있음 */}
@@ -867,13 +867,17 @@ function PhotoCaptureView({ onDone, back }) {
           ))}
         </div>
 
-        <button onClick={pickFiles} disabled={running}
+        <button onClick={() => camRef.current?.click()} disabled={running}
           className="tap w-full h-[120px] rounded-2xl border-2 border-dashed border-ink/40 bg-surface grid place-items-center active:bg-paper disabled:opacity-50">
           <div className="text-center">
             <div className="text-[32px] leading-none">📷</div>
             <p className="font-bold mt-2">{running ? '읽는 중…' : '라벨 사진 찍기'}</p>
             <p className="text-[11px] text-muted mt-0.5">여러 장 한 번에 · 제품명·용량·유통기한이 보이게</p>
           </div>
+        </button>
+        <button onClick={() => galRef.current?.click()} disabled={running}
+          className="tap w-full h-11 rounded-xl border-2 border-line font-bold text-[14px] mt-2 active:bg-paper disabled:opacity-50">
+          🖼 갤러리에서 고르기
         </button>
 
         {/* 촬영 안내 — OCR 실측에서 나온 그대로 */}
@@ -932,7 +936,8 @@ function PhotoCaptureView({ onDone, back }) {
 /* 영수증으로 한 번에 — 사진/갤러리 → OCR로 품목·가격을 여러 건 담는다.
    영수증엔 유통기한이 없으니 임시로 잡아두고, 확인 화면에서 사진/수기로 보충한다. */
 function ReceiptCaptureView({ onDone, back }) {
-  const inputRef = useRef();
+  const camRef = useRef();   // 카메라(capture) / 갤러리(capture 없음) 분리 — capture가 있으면 모바일서 갤러리를 못 고름
+  const galRef = useRef();
   const [status, setStatus] = useState('idle'); // idle | reading | done | fail
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -954,17 +959,23 @@ function ReceiptCaptureView({ onDone, back }) {
       <Header title="영수증으로 한 번에" sub="찍으면 품목·가격을 한꺼번에 담아요"
         right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
 
-      <input ref={inputRef} type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" />
+      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" />
+      <input ref={galRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
 
       <div className="px-4 pt-5">
         {(status === 'idle' || status === 'fail') && (
           <>
-            <button onClick={() => inputRef.current?.click()}
-              className="tap w-full rounded-2xl border-2 border-dashed border-line bg-surface py-10 grid place-items-center gap-2 active:bg-paper">
+            <div className="rounded-2xl border-2 border-dashed border-line bg-surface py-8 grid place-items-center gap-1.5">
               <span className="text-[40px] leading-none">🧾</span>
-              <span className="font-bold">영수증 찍기 · 갤러리에서 고르기</span>
+              <span className="font-bold">영수증을 담아요</span>
               <span className="text-[12px] text-muted">밝은 곳에서 품목이 다 보이게</span>
-            </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5 mt-3">
+              <button onClick={() => camRef.current?.click()}
+                className="tap h-[52px] rounded-xl bg-ink text-white font-bold active:opacity-80">📷 사진 찍기</button>
+              <button onClick={() => galRef.current?.click()}
+                className="tap h-[52px] rounded-xl border-2 border-ink font-bold active:bg-paper">🖼 갤러리에서</button>
+            </div>
             {status === 'fail' && <p className="text-[13px] text-urgent font-semibold mt-3 text-center">{err}</p>}
             <div className="rounded-xl bg-paper border border-line p-3.5 mt-4">
               <p className="text-[12px] text-muted leading-relaxed">
@@ -1409,7 +1420,7 @@ function Row({ label, value, tnum }) {
 
 const COOK_TAGS = ['전체', '아이', '어른', '건강'];
 
-function CookView({ toast, onAddOrdered, hasOrdered }) {
+function CookView({ toast, onAddOrdered, hasOrdered, items = [] }) {
   const [tag, setTag] = useState('전체');
   const [includeOrdered, setIncludeOrdered] = useState(false);
   const [list, setList] = useState([]);
@@ -1419,6 +1430,26 @@ function CookView({ toast, onAddOrdered, hasOrdered }) {
   const [buying, setBuying] = useState(false);
   const [dish, setDish] = useState('');
   const [finding, setFinding] = useState(false);
+  // 오늘 쓸 재료 직접 고르기 (냉장고 다중선택 + 직접 입력) → 그걸 꼭 쓰는 추가 레시피
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [picks, setPicks] = useState([]);
+  const [custom, setCustom] = useState('');
+  const [pickBusy, setPickBusy] = useState(false);
+  const [pickResults, setPickResults] = useState(null);   // null이면 추천 목록, 배열이면 고른 재료 결과
+
+  const invIngredients = useMemo(() => [...new Set(items.map((i) => i.ingredient).filter(Boolean))], [items]);
+  const togglePick = (n) => setPicks((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n]);
+  const addCustom = () => { const v = custom.trim(); if (v && !picks.includes(v)) setPicks((p) => [...p, v]); setCustom(''); };
+  const runPicks = async () => {
+    if (!picks.length || pickBusy) return;
+    setPickBusy(true);
+    try {
+      const r = await API.recipesWith(picks, tag);
+      if (!r.recipes.length) toast('그 재료로 만들 레시피를 못 찾았어요. 재료를 바꿔보세요.', 'bad');
+      else { setPickResults(r.recipes); setPickerOpen(false); }
+    } catch (e) { toast(e.message, 'bad'); }
+    finally { setPickBusy(false); }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -1473,6 +1504,12 @@ function CookView({ toast, onAddOrdered, hasOrdered }) {
             {finding ? '…' : '레시피'}
           </button>
         </div>
+
+        {/* 오늘 쓸 재료를 직접 골라 추가 레시피 (냉장고 다중선택 + 직접 입력) */}
+        <button onClick={() => setPickerOpen(true)}
+          className="tap w-full mt-2 h-11 rounded-xl border-2 border-calm bg-calm/[.06] text-calm font-bold text-[14px] active:bg-calm/10">
+          🧺 냉장고에서 골라 레시피 만들기
+        </button>
       </div>
 
       <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
@@ -1494,14 +1531,21 @@ function CookView({ toast, onAddOrdered, hasOrdered }) {
         )}
       </div>
 
-      {loading ? (
+      {pickResults && (
+        <div className="mx-4 mt-3 flex items-center gap-2 rounded-xl bg-calm/[.08] border border-calm/30 px-3 py-2">
+          <span className="text-[12px] font-bold text-calm flex-1">🧺 고른 재료로 만든 레시피 · {pickResults.length}개</span>
+          <button onClick={() => setPickResults(null)} className="tap text-[12px] font-semibold text-muted active:text-ink">추천으로 ✕</button>
+        </div>
+      )}
+
+      {loading && !pickResults ? (
         <div className="text-center py-16">
           <p className="text-[14px] text-muted">냉장고를 보고 요리를 고르는 중…</p>
           <p className="text-[12px] text-muted/70 mt-1.5">처음 보는 재료 조합이면 몇 초 걸려요</p>
         </div>
       ) : (
         <div className="px-4 pt-3 space-y-2.5">
-          {list.map((r) => (
+          {(pickResults || list).map((r) => (
             <article key={r.title} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
               <button onClick={() => setDetail(r)} className="tap w-full text-left active:bg-paper transition-colors">
                 <div className="flex gap-3 p-4 pb-3">
@@ -1547,7 +1591,7 @@ function CookView({ toast, onAddOrdered, hasOrdered }) {
               </div>
             </article>
           ))}
-          {!list.length && (
+          {!(pickResults || list).length && (
             <p className="text-center text-muted text-[14px] py-14 leading-relaxed">
               지금 재료로 추천할 게 없어요.<br />재료를 더 담으면 요리가 나와요.
             </p>
@@ -1556,6 +1600,56 @@ function CookView({ toast, onAddOrdered, hasOrdered }) {
       )}
 
       <div className="h-6" />
+
+      {/* 오늘 쓸 재료 고르기 — 냉장고 다중선택 + 직접 입력 */}
+      {pickerOpen && (
+        <Sheet open onClose={() => setPickerOpen(false)}>
+          <h3 className="text-[18px] font-extrabold">오늘 쓸 재료 고르기</h3>
+          <p className="text-[12px] text-muted mt-1">냉장고에서 고르거나, 직접 적어요 (예: 어제 남은 치킨)</p>
+
+          <div className="flex gap-2 mt-4">
+            <input value={custom} onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCustom()}
+              placeholder="직접 추가 (예: 남은 치킨 반마리)"
+              className="flex-1 h-11 px-3.5 rounded-xl border-2 border-line bg-surface text-[14px] font-medium focus:border-ink outline-none" />
+            <button onClick={addCustom} disabled={!custom.trim()}
+              className="tap px-4 h-11 rounded-xl border-2 border-line font-bold text-[14px] active:bg-paper disabled:opacity-40">추가</button>
+          </div>
+
+          {picks.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {picks.map((p) => (
+                <button key={p} onClick={() => togglePick(p)}
+                  className="tap inline-flex items-center gap-1 h-9 px-3 rounded-full bg-ink text-white text-[13px] font-bold active:opacity-80">
+                  {p} <span className="opacity-70">✕</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <p className="text-[12px] font-bold text-muted mt-5 mb-2">냉장고에서 고르기 <span className="font-normal opacity-70">(여러 개 가능)</span></p>
+          {invIngredients.length ? (
+            <div className="flex flex-wrap gap-2 max-h-[32vh] overflow-y-auto">
+              {invIngredients.map((n) => {
+                const on = picks.includes(n);
+                return (
+                  <button key={n} onClick={() => togglePick(n)}
+                    className={`tap px-3.5 h-10 rounded-full text-[14px] font-semibold border-2 transition-colors ${
+                      on ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'}`}>
+                    {n}
+                  </button>
+                );
+              })}
+            </div>
+          ) : <p className="text-[13px] text-muted">냉장고가 비어 있어요. 직접 입력으로 추가해 보세요.</p>}
+
+          <button onClick={runPicks} disabled={!picks.length || pickBusy}
+            className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-6 active:opacity-80 disabled:opacity-40">
+            {pickBusy ? '레시피 만드는 중…' : `이 재료로 레시피 만들기${picks.length ? ` (${picks.length})` : ''}`}
+          </button>
+        </Sheet>
+      )}
+
       <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy} busy={buying} />
       <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
         onPick={(url, market, ing) => {
@@ -1996,7 +2090,7 @@ function NowasteApp() {
           <ConfirmView queue={pending} loading={loading} setView={goto}
             onConfirm={confirmCard} onDrop={dropCard} busy={busy} />
         )}
-        {view === 'cook'   && <CookView toast={toast} onAddOrdered={addOrdered} hasOrdered={ordered.length > 0} />}
+        {view === 'cook'   && <CookView toast={toast} onAddOrdered={addOrdered} hasOrdered={ordered.length > 0} items={items} />}
         {view === 'report' && <ReportView toast={toast} />}
       </main>
 

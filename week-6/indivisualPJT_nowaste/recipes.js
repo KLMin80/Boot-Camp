@@ -66,8 +66,9 @@ function rank(recipes, inventory) {
     );
 }
 
-/* ── LLM 생성 ── 재료를 우리 어휘 안에서만 고르게 강제한다 */
-async function generate({ focus, invNames, vocab, tag, need, avoid }) {
+/* ── LLM 생성 ── 재료를 우리 어휘 안에서만 고르게 강제한다.
+   must가 있으면 "사용자가 꼭 쓰고 싶은 재료"를 반드시 쓰게 한다(어제 남은 치킨 등). */
+async function generate({ focus, invNames, vocab, tag, need, avoid, must = [] }) {
   if (!client) return [];
   const tagLine = tag && tag !== '전체'
     ? `- 대상은 "${tag}"용이다 (아이=순하고 부드럽게 / 어른=일반 / 건강=저염·기름 적게).`
@@ -77,7 +78,9 @@ async function generate({ focus, invNames, vocab, tag, need, avoid }) {
     '너는 한국 가정식 요리사다. 냉장고에서 곧 상할 재료를 남김없이 소진시키는 것이 목적이다.',
     '규칙:',
     `- uses의 재료는 반드시 주어진 "재료 사전" 안의 이름만 쓴다. 사전에 없는 재료는 절대 uses에 넣지 않는다.`,
-    '- 급한 재료를 최대한 많이, 최대한 많은 양으로 쓰는 요리를 우선한다.',
+    must.length
+      ? '- **사용자가 "꼭 쓸 재료"를 직접 골랐다. 각 요리는 그 재료 중 하나 이상(가능하면 여러 개)을 반드시 uses에 넣는다.**'
+      : '- 급한 재료를 최대한 많이, 최대한 많은 양으로 쓰는 요리를 우선한다.',
     '- **servings는 2로 고정(2인분 기준). uses의 amt는 정확히 2인분 기준의 현실적인 양이다** (예: 대파 100g, 두부 300g, 달걀 3개).',
     '- 소금·간장·참기름 같은 양념은 uses가 아니라 seasonings에 넣는다 (집에 있다고 가정).',
     '- uses에는 사전 재료 중 없는 것을 최대 1개까지만 포함할 수 있다 (부족분 유도). 대부분은 보유 재료로 채운다.',
@@ -90,7 +93,9 @@ async function generate({ focus, invNames, vocab, tag, need, avoid }) {
   const usr = [
     `재료 사전(이 안에서만 고를 것): ${vocab.join(', ')}`,
     `지금 보유한 재료: ${invNames.join(', ') || '없음'}`,
-    `특히 급한(먼저 써야 할) 재료: ${focus.join(', ')}`,
+    must.length
+      ? `꼭 쓸 재료(각 요리에 반드시 하나 이상 포함): ${must.join(', ')}`
+      : `특히 급한(먼저 써야 할) 재료: ${focus.join(', ')}`,
     avoid.length ? `이미 추천한 것(피할 것): ${avoid.join(', ')}` : '',
     `${need}개의 서로 다른 요리를 제안하라.`,
   ].filter(Boolean).join('\n');
@@ -259,4 +264,49 @@ async function byName({ dish, inventory, vocab, tag }) {
   return { recipe: annotate(saved.rows[0] || made, haveMap(inventory)), generated: true };
 }
 
-module.exports = { suggest, byName, PANTRY };
+/* ── 고른 재료로 랭킹 ── 사용자가 고른 재료를 많이 쓰는 순.
+   고른 재료(picks)는 "가진 것"으로 취급(직접 입력한 남은 음식도 부족으로 안 뜨게). */
+function rankByPicks(recipes, inventory, picks) {
+  const have = { ...haveMap(inventory) };
+  for (const p of picks) if (!have[p]) have[p] = { ing: p, remaining: 999, unit: '개', days_left: 3 };
+  const pset = new Set(picks);
+  return recipes
+    .map((r) => annotate(r, have))
+    .map((r) => ({ ...r, pickUses: r.uses.filter((u) => pset.has(u.ing)).length }))
+    .filter((r) => r.pickUses > 0 && r.missing.length <= 2)
+    .sort((a, b) =>
+      b.pickUses - a.pickUses ||            // 고른 재료를 더 많이 쓰는 것
+      a.missing.length - b.missing.length ||
+      b.consumed - a.consumed
+    );
+}
+
+/* ── 진입점: 고른 재료로 레시피 ── 냉장고에서 다중선택 + 직접 입력한 재료를 꼭 쓰는 레시피.
+   추천(급한 재료 우선)과 별개로, 사용자가 오늘 쓰고 싶은 걸 지정해 추가로 받는다. */
+async function withPicks({ picks, inventory, vocab, tag, want = 6 }) {
+  const clean = [...new Set((picks || []).map((s) => String(s).trim()).filter(Boolean))];
+  if (!clean.length) return { recipes: [], generated: false, picks: [], hasLLM: Boolean(client) };
+
+  const cached = rankByPicks(await fromCache(clean, tag), inventory, clean);
+
+  // '추가 레시피'가 목적이므로 항상 새로 생성한다(고른 재료를 꼭 쓰게). 직접 입력 재료도 보유로 취급.
+  let generatedNow = false;
+  if (client) {
+    try {
+      const invNames = [...new Set([...inventory.map((i) => i.ing), ...clean])];
+      const made = await generate({
+        focus: clean, must: clean, invNames, vocab, tag,
+        need: Math.min(Math.max(want - cached.length, 2), 4),
+        avoid: cached.map((r) => r.title),
+      });
+      if (made.length) { await store(made); generatedNow = true; }
+    } catch (e) {
+      console.error('[recipes withPicks] 생성 실패:', e.status || '', e.message);
+    }
+  }
+
+  const all = rankByPicks(await fromCache(clean, tag), inventory, clean);
+  return { recipes: all.slice(0, want), generated: generatedNow, picks: clean, hasLLM: Boolean(client) };
+}
+
+module.exports = { suggest, byName, withPicks, PANTRY };

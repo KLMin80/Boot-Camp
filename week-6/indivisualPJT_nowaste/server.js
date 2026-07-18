@@ -506,6 +506,20 @@ app.post('/api/recipes/byname', auth, async (req, res) => {
   res.json(out);
 });
 
+/* 고른 재료로 레시피 — 냉장고에서 다중선택 + 직접 입력(어제 남은 치킨 등)을 꼭 쓰는 추가 레시피.
+   추천(급한 재료 우선)과 별개로, 오늘 쓰고 싶은 걸 사용자가 지정한다. */
+app.post('/api/recipes/with', auth, async (req, res) => {
+  const picks = (Array.isArray(req.body.ingredients) ? req.body.ingredients : [])
+    .map((s) => String(s).trim()).filter(Boolean);
+  if (!picks.length) return res.status(400).json({ error: '재료를 하나 이상 골라 주세요.' });
+
+  const inventory = await inventoryForRecipes(req.userId, Boolean(req.body.includeOrdered));
+  // 직접 입력한 재료는 사전에 없을 수 있으니 vocab에 더해 준다(안 그러면 LLM이 못 씀).
+  const vocab = [...new Set([...(await recipeVocab(inventory)), ...picks])];
+  const out = await recipes.withPicks({ picks, inventory, vocab, tag: req.body.tag || '전체', want: 6 });
+  res.json(out);
+});
+
 /* ───────────────── 멀티 마켓 구매 링크 ─────────────────
    쿠팡 하나가 아니라 여러 마켓으로 보내 "직접 비교"하게 한다.
    → 쿠팡이 구조적으로 못 하는 자리(중립 비교)를 차지하는 게 이 앱의 해자 (STRATEGY.md).

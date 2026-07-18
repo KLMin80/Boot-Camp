@@ -65,7 +65,8 @@ const ok = (c, l, e = '') => { c ? (pass++, console.log('  ✓', l)) : (fail++, 
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.locator('nav button:has-text("담기")').click();
   await page.locator('button:has-text("영수증으로 한 번에")').click();
-  await page.setInputFiles('input[type="file"]', IMG);           // 갤러리 업로드처럼
+  await page.locator('button:has-text("갤러리에서")').isVisible();  // 갤러리 버튼 존재 확인
+  await page.setInputFiles('input[type="file"]:not([capture])', IMG);  // 갤러리(capture 없는) 인풋으로 업로드
   await page.waitForSelector('text=담았어요', { timeout: 60000 });  // OCR 대기
   ok(await page.locator('text=담았어요').first().isVisible(), 'UI: N개 담았어요 결과가 뜬다');
   await page.locator('button:has-text("유통기한 확인하러 가기")').click();
