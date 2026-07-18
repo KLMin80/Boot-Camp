@@ -520,6 +520,51 @@ app.post('/api/recipes/with', auth, async (req, res) => {
   res.json(out);
 });
 
+/* 이걸로 요리 — 실제로 만든 레시피의 재료를 냉장고에서 차감한다.
+   유통기한 임박 순으로, 단위가 맞는 재고만(50g를 '3개'에서 빼는 오차 방지). 0 이하면 자동 '다 먹음' 마감.
+   부족하거나 단위가 다른 재료는 건드리지 않는다(사용자가 '조금 썼어요'로 직접). */
+app.post('/api/recipes/cook', auth, async (req, res) => {
+  const uses = Array.isArray(req.body.uses) ? req.body.uses : [];
+  if (!uses.length) return res.status(400).json({ error: '차감할 재료가 없습니다.' });
+
+  const deducted = [];
+  const skipped = [];   // 보유하지만 단위가 달라 자동 차감 못 한 재료
+  for (const u of uses) {
+    const ing = String(u.ing || '').trim();
+    const amt = Number(u.amt);
+    if (!ing || !(amt > 0)) continue;
+
+    const items = (await pool.query(
+      `SELECT id, remaining::float8 AS remaining, unit FROM fridge_items
+        WHERE user_id = $1 AND ingredient = $2 AND outcome IS NULL AND status = 'confirmed'
+        ORDER BY expiry_date ASC`,
+      [req.userId, ing]
+    )).rows;
+    if (!items.length) continue;                     // 없는 재료 → 차감 대상 아님
+
+    let need = amt, took = 0, sawMatch = false;
+    for (const it of items) {
+      if (need <= 0) break;
+      if (it.unit !== u.unit) continue;              // 단위 다르면 양 비교 불가
+      sawMatch = true;
+      const take = Math.min(need, it.remaining);
+      if (take <= 0) continue;
+      const left = it.remaining - take;
+      await pool.query(
+        left <= 0
+          ? `UPDATE fridge_items SET remaining = 0, outcome = 'eaten', closed_on = ${TODAY_KST}, discarded_amount = 0
+               WHERE id = $1 AND user_id = $2 AND outcome IS NULL`
+          : `UPDATE fridge_items SET remaining = $3 WHERE id = $1 AND user_id = $2 AND outcome IS NULL`,
+        left <= 0 ? [it.id, req.userId] : [it.id, req.userId, left]
+      );
+      need -= take; took += take;
+    }
+    if (took > 0) deducted.push({ ing, amt: took, unit: u.unit });
+    else if (!sawMatch) skipped.push(ing);           // 보유하지만 단위 불일치
+  }
+  res.json({ deducted, skipped });
+});
+
 /* ───────────────── 멀티 마켓 구매 링크 ─────────────────
    쿠팡 하나가 아니라 여러 마켓으로 보내 "직접 비교"하게 한다.
    → 쿠팡이 구조적으로 못 하는 자리(중립 비교)를 차지하는 게 이 앱의 해자 (STRATEGY.md).
