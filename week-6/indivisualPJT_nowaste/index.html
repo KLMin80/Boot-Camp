@@ -1080,7 +1080,8 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
 
   const guessed = card.expiry_source === 'preset';
   const editing = edit !== null;
-  const startEdit = () => setEdit({ name: card.name, expiry_date: card.expiry_date, storage: card.storage });
+  const startEdit = () => setEdit({ name: card.name, capacity: card.capacity, unit: card.unit, expiry_date: card.expiry_date, storage: card.storage });
+  const unitOpts = ['g', 'ml', '개'].includes(card.unit) ? ['g', 'ml', '개'] : [card.unit, 'g', 'ml', '개'];
   const patch = (k) => (v) => setEdit((e) => ({ ...e, [k]: v }));
 
   return (
@@ -1099,7 +1100,20 @@ function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
               </div>
             ) : <Row label="제품명" value={card.name} />}
 
-            <Row label="용량" value={`${card.capacity}${card.unit}`} tnum />
+            {editing ? (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1">용량</label>
+                <div className="grid grid-cols-[1fr_88px] gap-2">
+                  <input type="number" min="1" inputMode="decimal" value={edit.capacity}
+                    onChange={(e) => patch('capacity')(e.target.value)}
+                    className="w-full h-[46px] px-3 rounded-lg border-2 border-line bg-surface font-semibold tnum focus:border-ink outline-none" />
+                  <select value={edit.unit} onChange={(e) => patch('unit')(e.target.value)}
+                    className="w-full h-[46px] px-2 rounded-lg border-2 border-line bg-surface font-semibold focus:border-ink outline-none">
+                    {unitOpts.map((u) => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              </div>
+            ) : <Row label="용량" value={`${card.capacity}${card.unit}`} tnum />}
             {card.price != null && <Row label="가격" value={`${won(card.price)}원`} tnum />}
 
             {/* 유통기한 — 이 카드의 주인공. 수정 모드면 날짜 입력. */}
@@ -1702,6 +1716,12 @@ function NowasteApp() {
     const body = { status: 'confirmed' };
     if (edits) {
       if (edits.name && edits.name !== card.name) body.name = edits.name.trim();
+      const cap = Number(edits.capacity);
+      if (edits.capacity != null && cap > 0 && cap !== card.capacity) {
+        body.capacity = cap;
+        body.remaining = cap; // 갓 담는 재고는 가득 찬 상태 — 남은 양도 같이 맞춘다
+      }
+      if (edits.unit && edits.unit !== card.unit) body.unit = edits.unit;
       if (edits.expiry_date && edits.expiry_date !== card.expiry_date) {
         body.expiry_date = edits.expiry_date; body.expiry_source = 'manual';
       }
