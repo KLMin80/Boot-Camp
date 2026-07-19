@@ -86,6 +86,20 @@
   .costnotes .cn .tag{font-family:var(--mono);font-size:19px;font-weight:700;color:var(--ink);background:#e7efe9;border-radius:8px;padding:7px 14px;white-space:nowrap}
   .costnotes .cn.zero .tag{background:var(--calm);color:#fff}
 
+  /* COMPARE (S3b) */
+  .cmp{margin-top:40px;border:1px solid var(--line);border-radius:22px;overflow:hidden;box-shadow:0 20px 50px -30px rgba(22,25,26,.25)}
+  .cmp-head,.cmp-row{display:grid;grid-template-columns:210px 1fr 1.25fr;align-items:stretch}
+  .cmp-head{color:#fff;font-weight:800;font-size:25px}
+  .cmp-head span{padding:20px 32px;display:flex;align-items:center;background:var(--ink)}
+  .cmp-head .c-k{background:#2a2f29}
+  .cmp-head .c-us{background:var(--calm)}
+  .cmp-row{border-top:1px solid var(--line);font-size:25px}
+  .cmp-row span{padding:23px 32px;display:flex;align-items:center}
+  .cmp-row .c-k{font-weight:800;color:#6b726c;font-size:21px;background:#eef1ee}
+  .cmp-row .c-them{color:var(--muted)}
+  .cmp-row .c-us{background:rgba(91,122,107,.09);font-weight:600;color:var(--ink)}
+  .cmp-row .c-us b{color:var(--calm);font-weight:800}
+
   /* FINAL (S8) */
   .final{align-items:center;text-align:center}
   .final .leaf{font-size:70px;margin-bottom:24px}
@@ -123,20 +137,36 @@
   <div class="pageno mono">03</div>
 </section>
 
-<!-- S4 · 핵심 기능 한눈에 -->
-<section class="slide paper" id="s4">
-  <div class="kicker">핵심 기능 한눈에</div>
-  <h2 class="title">냉장고를 여는 순간부터, 버리는 순간까지</h2>
-  <div class="cards">
-    <div class="card"><span class="ic">📷</span><h3>찍으면 끝</h3><p>제품명·용량·유통기한을 AI가 읽어 담아줘요</p></div>
-    <div class="card"><span class="ic">🔴</span><h3>상하기 전에</h3><p>임박은 빨강, 여유는 초록 — 색이 곧 남은 시간</p></div>
-    <div class="card"><span class="ic">🧊</span><h3>냉동실로 구제</h3><p>오늘 못 쓰면 버튼 하나로 기한 연장</p></div>
-    <div class="card"><span class="ic">🍲</span><h3>오늘 뭐 먹지</h3><p>있는 재료로 만들 요리를 급한 것부터</p></div>
-    <div class="card"><span class="ic">🛒</span><h3>비교해서 주문</h3><p>쿠팡·컬리·이마트몰·네이버를 나란히</p></div>
-    <div class="card"><span class="ic">📊</span><h3>아낀 돈이 보여요</h3><p>이번 달 얼마나 덜 버렸는지 한눈에</p></div>
+<!-- S3b · 경쟁 비교 -->
+<section class="slide paper" id="s3b">
+  <div class="kicker">왜 남김없이인가</div>
+  <h2 class="title">유통기한 알림에서 <span class="hl">멈추지 않아요</span></h2>
+  <div class="cmp">
+    <div class="cmp-head"><span class="c-k"></span><span class="c-them">보통 냉장고 앱</span><span class="c-us">🧺 남김없이</span></div>
+    <div class="cmp-row"><span class="c-k">담기</span><span class="c-them">품목을 하나씩 수기 입력</span><span class="c-us"><b>영수증 한 장</b>이면 품목·가격 한꺼번에</span></div>
+    <div class="cmp-row"><span class="c-k">알림</span><span class="c-them">유통기한만 알려주고 끝</span><span class="c-us">상하기 전 <b>+ 떨어지기 전</b>까지 미리</span></div>
+    <div class="cmp-row"><span class="c-k">레시피</span><span class="c-them">없거나 따로 검색</span><span class="c-us">지금 재료로 추천 → <b>만들면 자동 차감</b></span></div>
+    <div class="cmp-row"><span class="c-k">주문</span><span class="c-them">있어도 한 쇼핑몰에 묶임</span><span class="c-us"><b>쿠팡·컬리·이마트몰·네이버</b> 비교</span></div>
+    <div class="cmp-row"><span class="c-k">절감</span><span class="c-them">얼마 아꼈는지 모름</span><span class="c-us"><b>아낀 돈이 숫자로</b> 보여요</span></div>
   </div>
   <div class="brandmini mono">🧺 남김없이</div>
   <div class="pageno mono">04</div>
+</section>
+
+<!-- S4 · 핵심 기능 한눈에 -->
+<section class="slide paper" id="s4">
+  <div class="kicker">핵심 기능 한눈에</div>
+  <h2 class="title">장 보는 순간부터, 다 쓸 때까지</h2>
+  <div class="cards">
+    <div class="card"><span class="ic">🧾</span><h3>찍으면 끝</h3><p>영수증 한 장, 또는 라벨 사진으로 품목·가격·유통기한을 자동으로</p></div>
+    <div class="card"><span class="ic">🔴</span><h3>상하기 전에</h3><p>임박은 빨강, 여유는 초록 — 색이 곧 남은 시간</p></div>
+    <div class="card"><span class="ic">📉</span><h3>떨어지기 전에</h3><p>쓰는 속도를 보고 “곧 떨어져요”를 미리 — 상하기 전 알림과 별개로</p></div>
+    <div class="card"><span class="ic">🍲</span><h3>만들면 자동 차감</h3><p>급한 재료로 레시피 추천, 만들면 그 재료가 냉장고서 빠져요</p></div>
+    <div class="card"><span class="ic">🛒</span><h3>비교해서 주문</h3><p>쿠팡·컬리·이마트몰·네이버를 나란히 놓고</p></div>
+    <div class="card"><span class="ic">📊</span><h3>아낀 돈이 보여요</h3><p>이번 달 얼마나 덜 버렸는지 한눈에</p></div>
+  </div>
+  <div class="brandmini mono">🧺 남김없이</div>
+  <div class="pageno mono">05</div>
 </section>
 
 <!-- S5 · 배운 것 -->
@@ -162,7 +192,7 @@
     </div>
   </div>
   <div class="brandmini mono">🧺 남김없이</div>
-  <div class="pageno mono">05</div>
+  <div class="pageno mono">06</div>
 </section>
 
 <!-- S6 · 차별점 -->
@@ -177,7 +207,7 @@
     <div class="mk"><span class="e">🔎</span><div><div class="n">네이버쇼핑</div><div class="t">최저가 비교</div></div><span class="rev">제휴 수익</span></div>
   </div>
   <div class="brandmini mono">🧺 남김없이</div>
-  <div class="pageno mono">06</div>
+  <div class="pageno mono">07</div>
 </section>
 
 <!-- S7 · 운영비 -->
@@ -191,7 +221,7 @@
   </div>
   <p class="sub" style="margin-top:44px;font-size:24px;color:#7f8781">추정이 아니라 실제 호출 토큰으로 계산 · 비용이 아니라 ‘쿠팡 전환율’이 관건</p>
   <div class="brandmini mono">🧺 남김없이</div>
-  <div class="pageno mono">07</div>
+  <div class="pageno mono">08</div>
 </section>
 
 <!-- S8 · 마무리 -->
@@ -201,7 +231,7 @@
   <div class="url">nowaste-app-seven.vercel.app</div>
   <div class="badge">웹 베타 · 실제 배포됨</div>
   <p class="next">다음은 — 실기기 촬영 테스트 · 앱으로 감싸기(Capacitor) · 제휴 신청</p>
-  <div class="pageno mono">08</div>
+  <div class="pageno mono">09</div>
 </section>
 
 </body>

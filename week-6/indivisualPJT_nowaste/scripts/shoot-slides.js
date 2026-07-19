@@ -5,8 +5,9 @@ const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const FILE = 'file:///' + path.resolve(__dirname, '..', 'slides.html').replace(/\\/g, '/');
 const OUT = path.resolve(__dirname, '..');
 
-const NAMES = { s2: '슬라이드2_문제', s3: '슬라이드3_솔루션', s4: '슬라이드4_핵심기능',
-  s5: '슬라이드5_배운것', s6: '슬라이드6_차별점', s7: '슬라이드7_비용', s8: '슬라이드8_마무리' };
+const NAMES = { s2: '슬라이드2_문제', s3: '슬라이드3_솔루션', s3b: '슬라이드4_비교',
+  s4: '슬라이드5_핵심기능', s5: '슬라이드6_배운것', s6: '슬라이드7_차별점',
+  s7: '슬라이드8_비용', s8: '슬라이드9_마무리' };
 
 (async () => {
   const browser = await chromium.launch({ executablePath: CHROME, headless: true });

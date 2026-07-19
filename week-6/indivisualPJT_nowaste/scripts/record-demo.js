@@ -76,40 +76,61 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     await wait(600);
   }
   async function tapNav(label, caption) {
-    const sel = `nav button:has-text("${label}")`;
+    await tap(`nav button:has-text("${label}")`, caption);
+  }
+  // 일반 요소 탭 (커서 이동 + 클릭 애니메이션 + 클릭)
+  async function tap(sel, caption) {
+    const loc = page.locator(sel).first();
+    await loc.scrollIntoViewIfNeeded().catch(() => {});
     await moveTo(sel);
     await page.evaluate(() => window.__click());
-    await wait(180);
-    await page.locator(sel).first().click();
-    if (caption) await say(caption);
+    await wait(170);
+    await loc.click();
+    if (caption != null) await say(caption);
   }
 
-  // ── 타임라인 (≈24초, 부팅 여백은 후처리에서 잘라냄) ──
+  // ── 타임라인 (≈28초, 부팅 여백은 후처리에서 잘라냄) ──
   await page.waitForSelector('text=오늘 안 쓰면 버려요', { timeout: 15000 });
   await wait(600);
-  await say('냉장고를 열면 — 급한 게 빨갛게 먼저');
-  await wait(2100);
-  await scroll(250, 1000);         // 아래로: 이번 주 목록(D-스탬프)
-  await wait(1300);
-  await scroll(-250, 650);
-  await wait(300);
+  await say('냉장고를 열면 — 급한 건 빨강, 곧 떨어질 건 미리 알림');
+  await wait(2700);                       // 급함카드(빨강) + 곧 떨어져요(주황) 둘 다
 
-  await tapNav('요리', '오늘 뭐 먹지 — 급한 재료부터 쓰는 레시피');
-  await page.waitForSelector('text=오늘 뭐 먹지', { timeout: 10000 });
-  await wait(2100);
-  await scroll(300, 1100);
+  // ① 부분 차감 — 앱 없이 요리했어도 쓴 만큼만
+  await scroll(360, 900);                 // 목록 내려 재료 하나 보이게
+  await wait(500);
+  await tap('text=초란 10구', '앱 없이 요리했어도 — 쓴 만큼만 빼요');
+  await page.waitForSelector('button:has-text("조금 썼어요")', { timeout: 5000 });
+  await wait(400);
+  await tap('button:has-text("조금 썼어요")', null);
+  await page.waitForSelector('button:has-text("½")', { timeout: 4000 });
+  await wait(350);
+  await tap('button:has-text("½")', null);
+  await wait(250);
+  await tap('button:has-text("빼기")', null);
+  await wait(900);
+
+  // ② 요리 → 이걸로 요리 → 재료 자동 차감
+  await tapNav('요리', '지금 재료로 만들 요리 — 급한 것부터');
+  await page.waitForSelector('article', { timeout: 12000 });
+  await wait(1900);
+  await tap('article button:has-text("이걸로 요리")', '만들면 재료가 냉장고서 자동으로 빠져요');
+  await page.waitForSelector('text=다 만들었어요', { timeout: 6000 });
+  await wait(1700);
+  await tap('button:has-text("다 만들었어요")', null);
   await wait(1500);
-  await scroll(-300, 650);
 
-  await tapNav('리포트', '버린 돈이 줄어드는 게 보여요');
+  // ③ 리포트 — 아낀 돈
+  await tapNav('리포트', '아낀 돈이 숫자로 보여요');
   await page.waitForSelector('text=버린 돈이', { timeout: 10000 });
-  await wait(3500);
+  await wait(3100);
 
-  await tapNav('담기', '사진 한 장, 또는 두 번의 탭');
-  await wait(2200);
+  // ④ 담기 — 영수증 한 장이면 한꺼번에
+  await tapNav('담기', '영수증 한 장이면 품목·가격 한꺼번에');
+  await page.waitForSelector('text=영수증으로 한 번에', { timeout: 6000 });
+  await wait(2500);
 
   await tapNav('냉장고', '남김없이 — 다 쓰는 그날까지');
-  await wait(1900);
+  await wait(1700);
   await say('');
   await wait(300);
 

@@ -115,7 +115,7 @@ async function addRecipe(r) {
   const items = [
     { name: '대파',          ing: '대파',     cap: 200,  unit: 'g',  price: 2980, d: 0,  storage: 'fridge' }, // D-DAY
     { name: '풀무원 두부',    ing: '두부',     cap: 300,  unit: 'g',  price: 2200, d: 1,  storage: 'fridge' }, // D-1
-    { name: '한돈 앞다리살',  ing: '돼지고기', cap: 600,  unit: 'g',  price: 9800, d: 2,  storage: 'fridge' }, // D-2
+    { name: '한돈 앞다리살',  ing: '돼지고기', cap: 600,  rem: 400, unit: 'g',  price: 9800, d: 2,  storage: 'fridge' }, // D-2, 일부 소비→예측
     { name: '서울우유 1A',    ing: '우유',     cap: 1000, rem: 400, unit: 'ml', price: 3150, d: 3, storage: 'fridge' }, // D-3
     { name: '초란 10구',      ing: '계란',     cap: 10,   unit: '개', price: 6490, d: 12, storage: 'fridge' },
     { name: '종가집 포기김치', ing: '김치',     cap: 500,  unit: 'g',  price: 0,    d: 20, storage: 'fridge' }, // 남은 음식(무료)
