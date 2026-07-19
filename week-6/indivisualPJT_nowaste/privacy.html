@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>개인정보처리방침 · 남김없이</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root{--ink:#16191A;--paper:#F2F4F2;--calm:#5B7A6B;--muted:#6b726c;--line:#E3E5E3}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Pretendard','Malgun Gothic',sans-serif;color:var(--ink);background:var(--paper);line-height:1.7;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:48px 22px 80px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:20px;margin-bottom:6px}
+  h1{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:18px 0 6px}
+  .meta{color:var(--muted);font-size:14px;margin-bottom:8px}
+  .lead{color:#3d443f;font-size:15px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:18px 0 30px}
+  h2{font-size:19px;font-weight:800;margin:34px 0 10px;padding-top:16px;border-top:1px solid var(--line)}
+  h2 .n{color:var(--calm);font-family:'IBM Plex Mono',monospace;margin-right:8px}
+  p,li{font-size:15px;color:#2c322d}
+  ul{margin:8px 0 0 4px;list-style:none}
+  li{position:relative;padding-left:18px;margin:6px 0}
+  li::before{content:"·";position:absolute;left:4px;color:var(--calm);font-weight:800}
+  b{font-weight:700}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:14px;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#eef1ee;font-weight:800;width:34%}
+  tr:last-child td,tr:last-child th{border-bottom:0}
+  .hl{background:#fdf6ea;border:1px solid #f0dcb4;border-radius:12px;padding:14px 16px;margin-top:12px;font-size:14px}
+  .foot{margin-top:44px;color:var(--muted);font-size:13px}
+  a{color:var(--calm)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">🧺 남김없이</div>
+  <h1>개인정보처리방침</h1>
+  <p class="meta">시행일: 2026-07-19 · 웹 베타 서비스</p>
+  <p class="lead">‘남김없이’(이하 “서비스”)는 냉장고 식자재 관리를 위해 최소한의 개인정보만 수집·이용하며, 이용자의 개인정보를 소중히 다룹니다. 본 방침은 서비스가 어떤 정보를 왜 수집하고 어떻게 처리하는지 설명합니다.</p>
+
+  <h2><span class="n">01</span>수집하는 정보</h2>
+  <table>
+    <tr><th>계정</th><td>이메일, 비밀번호(<b>단방향 암호화(bcrypt) 저장</b> — 원문 보관 안 함)</td></tr>
+    <tr><th>냉장고 데이터</th><td>이용자가 입력·촬영한 식자재 정보(제품명·재료·용량·가격·유통기한·보관위치·소진/폐기 기록)</td></tr>
+    <tr><th>사진</th><td>라벨·영수증 사진 — <b>텍스트 추출(OCR) 목적으로만 처리</b></td></tr>
+    <tr><th>자동 수집</th><td>서비스 이용 중 발생하는 최소한의 기술 로그(오류 등). 위치정보·연락처·결제정보는 수집하지 않습니다.</td></tr>
+  </table>
+
+  <h2><span class="n">02</span>이용 목적</h2>
+  <ul>
+    <li>회원 인증 및 로그인 유지</li>
+    <li>냉장고 재고·유통기한 관리, 레시피 추천, 절감 리포트 제공</li>
+    <li>사진에서 제품명·용량·유통기한·가격 등 정보 추출(OCR)</li>
+  </ul>
+
+  <h2><span class="n">03</span>제3자 처리 위탁</h2>
+  <p>서비스 제공을 위해 아래 사업자에 처리를 위탁합니다.</p>
+  <table>
+    <tr><th>OpenAI</th><td><b>업로드한 사진·재료명</b>을 텍스트 추출(OCR)과 레시피 생성을 위해 전송·처리 (OpenAI 처리방침 적용)</td></tr>
+    <tr><th>Supabase</th><td>데이터베이스(PostgreSQL) 저장·관리</td></tr>
+    <tr><th>Vercel</th><td>애플리케이션 호스팅</td></tr>
+    <tr><th>네이버(선택)</th><td>참고 최저가 조회 시 <b>검색어(재료명)</b>만 네이버 검색 API로 전송 (설정된 경우에 한함)</td></tr>
+  </table>
+  <div class="hl">📷 <b>사진 처리 안내</b> — 업로드하신 라벨·영수증 사진은 정보 추출을 위해 OpenAI로 전송됩니다. 민감정보가 담긴 사진(예: 신분증·타인 정보)은 올리지 말아 주세요.</div>
+
+  <h2><span class="n">04</span>보관 및 파기</h2>
+  <ul>
+    <li>계정 및 냉장고 데이터는 <b>회원 탈퇴 또는 삭제 요청 시 지체 없이 파기</b>합니다.</li>
+    <li>사진은 텍스트 추출 처리 목적 달성 후 서비스 서버에 별도 원본으로 장기 보관하지 않습니다.</li>
+    <li>법령에 별도 보관 의무가 있는 경우 해당 기간 동안 보관합니다.</li>
+  </ul>
+
+  <h2><span class="n">05</span>이용자의 권리</h2>
+  <ul>
+    <li>본인 정보의 <b>열람·수정·삭제</b> 및 처리정지를 요청할 수 있습니다.</li>
+    <li>계정 삭제를 원하시면 아래 문의처로 연락 주세요.</li>
+  </ul>
+
+  <h2><span class="n">06</span>안전성 확보 조치</h2>
+  <ul>
+    <li>비밀번호는 bcrypt로 단방향 암호화하여 저장하고, 원문을 보관하지 않습니다.</li>
+    <li>모든 통신은 HTTPS로 암호화합니다.</li>
+    <li>데이터 접근은 인증된 본인 계정으로만 제한합니다.</li>
+  </ul>
+
+  <h2><span class="n">07</span>광고·제휴 링크</h2>
+  <p>부족한 재료 구매 화면의 일부 마켓(쿠팡 등) 링크는 <b>제휴(어필리에이트) 링크</b>일 수 있으며, 이를 통해 구매 시 운영자가 일정 수수료를 받을 수 있습니다. <b>이용자의 구매 가격은 동일</b>하며, 해당 링크에는 ‘제휴’로 표시됩니다.</p>
+
+  <h2><span class="n">08</span>만 14세 미만 아동</h2>
+  <p>서비스는 만 14세 미만 아동을 대상으로 하지 않으며, 아동의 개인정보를 알면서 수집하지 않습니다.</p>
+
+  <h2><span class="n">09</span>문의처</h2>
+  <p>개인정보 관련 문의·요청: <b>[운영자 이메일 — 배포 전 입력]</b></p>
+
+  <h2><span class="n">10</span>변경 고지</h2>
+  <p>본 방침이 변경되는 경우 시행일과 변경 내용을 이 페이지에 공지합니다.</p>
+
+  <p class="foot">© 남김없이 · 웹 베타 · <a href="/">앱으로 돌아가기</a></p>
+</div>
+</body>
+</html>

@@ -420,6 +420,9 @@ function AuthView({ onDone }) {
         className="tap mt-5 text-[13px] text-muted font-semibold active:text-ink">
         {mode === 'login' ? '처음이신가요? 가입하기' : '이미 계정이 있어요 → 로그인'}
       </button>
+      <p className="mt-6 text-[11px] text-muted">
+        가입 시 <a href="/privacy" target="_blank" rel="noopener" className="underline underline-offset-2">개인정보처리방침</a>에 동의하게 됩니다.
+      </p>
     </div>
   );
 }
@@ -1710,6 +1713,7 @@ function BuySheet({ data, onClose, onPick, onAddOrdered }) {
                   className="tap flex items-center gap-2 h-[50px] px-3 rounded-xl border-2 border-line bg-surface active:bg-paper transition-colors">
                   <span className="text-[18px]">{m.icon}</span>
                   <span className="font-bold text-[14px] flex-1 text-left">{m.label}</span>
+                  {m.affiliate && <span className="text-[9px] font-bold text-calm border border-calm rounded px-1 leading-[14px]">제휴</span>}
                   <span className="text-muted text-[13px]">→</span>
                 </button>
               ))}
@@ -1718,11 +1722,17 @@ function BuySheet({ data, onClose, onPick, onAddOrdered }) {
         ))}
       </div>
 
-      {!Object.keys(priceHint || {}).length && (
-        <p className="text-[11px] text-muted mt-3 leading-relaxed">
-          가격은 마켓마다 달라요. 눌러서 직접 확인하세요. <span className="opacity-70">(네이버 참고가는 설정 시 표시)</span>
-        </p>
+      {/* 제휴 고지 (표시·광고의 공정화에 관한 법률) — 제휴 마켓이 있으면 반드시 노출 */}
+      {markets.some((m) => m.affiliate) && (
+        <div className="mt-4 rounded-xl bg-paper border border-line px-3.5 py-2.5">
+          <p className="text-[11px] text-muted leading-relaxed">
+            🔗 <b className="text-ink">제휴 안내</b> — ‘제휴’ 표시 마켓(쿠팡·네이버) 링크로 구매하시면 운영자가 일정 <b className="text-ink">수수료</b>를 받을 수 있어요. <b className="text-ink">구매 가격은 동일</b>합니다.
+          </p>
+        </div>
       )}
+      <p className="text-[11px] text-muted mt-2 leading-relaxed">
+        가격은 마켓마다 달라요. 눌러서 직접 확인하세요.{!Object.keys(priceHint || {}).length && ' (네이버 참고가는 설정 시 표시)'}
+      </p>
     </Sheet>
   );
 }

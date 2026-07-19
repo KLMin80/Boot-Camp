@@ -574,16 +574,24 @@ app.post('/api/recipes/cook', auth, async (req, res) => {
      - 네이버 쇼핑 생태계에 쿠팡·G마켓·11번가 배제됨
    → 그래서 각 마켓 '검색 딥링크' + (네이버 키 있으면) 네이버 참고 최저가.
 
-   각 마켓 URL은 이 함수 한 곳에서만 만든다. 제휴 승인되면 여기만 딥링크로 교체. */
+   각 마켓 URL은 이 함수 한 곳에서만 만든다.
+   ★ 제휴 승인 후: .env에 MARKET_URL_<KEY> 템플릿(검색어 자리 {q})만 넣으면 코드 수정 없이 딥링크로 교체된다.
+     예) MARKET_URL_COUPANG=https://link.coupang.com/re/AFFSEARCH?q={q}&subId=nowaste
+         MARKET_URL_NAVER=https://.../?query={q}&NaPm=...  (쇼핑파트너 트래킹)
+     제휴 신청·적용법은 제휴신청_가이드.md 참고. */
+function marketUrl(key, fallback) {
+  const tmpl = process.env[`MARKET_URL_${key.toUpperCase()}`];
+  return (q) => (tmpl ? tmpl.replace(/\{q\}/g, encodeURIComponent(q)) : fallback(q));
+}
 const MARKETS = [
-  { key: 'coupang', label: '쿠팡프레시', icon: '🚀', affiliate: true,   // 파트너스 확정 (승인 후 딥링크로 교체)
-    url: (q) => `https://www.coupang.com/np/search?q=${encodeURIComponent(q)}&channel=user` },
+  { key: 'coupang', label: '쿠팡프레시', icon: '🚀', affiliate: true,   // 파트너스 (승인 후 MARKET_URL_COUPANG로 교체)
+    url: marketUrl('coupang', (q) => `https://www.coupang.com/np/search?q=${encodeURIComponent(q)}&channel=user`) },
   { key: 'kurly',   label: '마켓컬리',   icon: '🥬', affiliate: false,  // 제휴 미확인 — 확인 후 true
-    url: (q) => `https://www.kurly.com/search?sword=${encodeURIComponent(q)}` },
+    url: marketUrl('kurly', (q) => `https://www.kurly.com/search?sword=${encodeURIComponent(q)}`) },
   { key: 'ssg',     label: '이마트몰',   icon: '🏪', affiliate: false,  // 제휴 미확인
-    url: (q) => `https://emart.ssg.com/search.ssg?query=${encodeURIComponent(q)}` },
-  { key: 'naver',   label: '네이버쇼핑', icon: '🔎', affiliate: true,   // 쇼핑커넥트 확정
-    url: (q) => `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(q)}` },
+    url: marketUrl('ssg', (q) => `https://emart.ssg.com/search.ssg?query=${encodeURIComponent(q)}`) },
+  { key: 'naver',   label: '네이버쇼핑', icon: '🔎', affiliate: true,   // 쇼핑파트너 (승인 후 MARKET_URL_NAVER로 교체)
+    url: marketUrl('naver', (q) => `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(q)}`) },
 ];
 
 /* 네이버 쇼핑 검색 API로 참고 최저가. 키가 있을 때만 동작(없으면 조용히 건너뜀). */
@@ -631,8 +639,11 @@ app.post('/api/buy-links', auth, async (req, res) => {
 // (Vercel 번들러가 런타임 sendFile 경로를 추적 못 해 파일을 안 넣는 문제 회피 +
 //  매 요청 디스크 stat 제거. 배포는 불변이라 시작 시 1회 읽으면 충분.)
 const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+// 개인정보처리방침 — 스토어 등록에 URL이 필요. 같은 방식(시작 시 1회 읽기 + vercel.json includeFiles).
+const PRIVACY_HTML = fs.readFileSync(path.join(__dirname, 'privacy.html'), 'utf8');
 
 app.get(['/', '/index.html'], (req, res) => res.type('html').send(INDEX_HTML));
+app.get(['/privacy', '/privacy.html'], (req, res) => res.type('html').send(PRIVACY_HTML));
 
 app.get('/api/health', async (req, res) => {
   await pool.query('SELECT 1');
