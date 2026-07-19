@@ -1,0 +1,9 @@
+{
+  "appId": "com.nowaste.app",
+  "appName": "남김없이",
+  "webDir": "www",
+  "server": {
+    "url": "https://nowaste-app-seven.vercel.app",
+    "cleartext": false
+  }
+}
