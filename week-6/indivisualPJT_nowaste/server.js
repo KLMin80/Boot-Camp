@@ -423,7 +423,18 @@ app.get('/api/stats/waste', auth, async (req, res) => {
     [req.userId]
   );
 
-  res.json({ monthly: monthly.rows, top: top.rows, ...saved.rows[0] });
+  // 월별 식비(구매액) — 담은 재료의 price 합, 산 달(purchased_on) 기준. 낭비 촉진 → 전반적 식비관리로.
+  const spend = await pool.query(
+    `SELECT to_char(date_trunc('month', purchased_on), 'YYYY-MM') AS month,
+            COALESCE(SUM(price), 0)::float8 AS spent, COUNT(*) FILTER (WHERE price IS NOT NULL)::int AS n
+       FROM fridge_items
+      WHERE user_id = $1 AND price IS NOT NULL
+        AND purchased_on >= date_trunc('month', ${TODAY_KST}) - make_interval(months => $2::int - 1)
+      GROUP BY 1 ORDER BY 1`,
+    [req.userId, months]
+  );
+
+  res.json({ monthly: monthly.rows, spend: spend.rows, top: top.rows, ...saved.rows[0] });
 });
 
 /* 소비 예측 — 부분 차감(consume) 데이터로 "언제 다 떨어질지"를 추정한다.
@@ -629,6 +640,60 @@ app.post('/api/buy-links', auth, async (req, res) => {
     markets: MARKETS.map(({ key, label, icon, affiliate }) => ({ key, label, icon, affiliate })),
     links, priceHint,
   });
+});
+
+/* 밀키트 링크 — 레시피를 직접 요리 대신 '밀키트로 편하게'. 쿠팡 밀키트 검색으로 보내
+   쿠팡파트너스(coupang) 제휴에 그대로 얹힌다(식재료보다 마진·수수료 큼). */
+const COUPANG = MARKETS.find((m) => m.key === 'coupang');
+app.post('/api/mealkit-link', auth, (req, res) => {
+  const dish = String(req.body.dish || '').trim().slice(0, 40);
+  if (!dish) return res.status(400).json({ error: '요리 이름이 필요합니다.' });
+  res.json({ url: COUPANG.url(`${dish} 밀키트`), label: '쿠팡프레시', affiliate: COUPANG.affiliate });
+});
+
+/* ───────────────── 장보기 리스트 ─────────────────
+   '곧 떨어질 것'(소비 예측 자동) + '직접 추가'(수동). 장 보기 전 확인 → 멀티마켓 한 번에 담기.
+   냉장고 관리(남은 것 소진)에서 '식비 관리'(계획 구매)로 넓히는 다리. */
+app.get('/api/shopping', auth, async (req, res) => {
+  const manual = (await pool.query(
+    'SELECT id, name FROM fridge_shopping WHERE user_id = $1 ORDER BY created_at DESC', [req.userId]
+  )).rows;
+
+  const rows = (await pool.query(
+    `SELECT ingredient, remaining::float8 AS remaining, capacity::float8 AS capacity,
+            GREATEST(1, (${TODAY_KST} - purchased_on))::int AS days_used,
+            (expiry_date - ${TODAY_KST})::int AS days_left
+       FROM fridge_items
+      WHERE user_id = $1 AND outcome IS NULL AND status = 'confirmed'
+        AND remaining > 0 AND remaining < capacity`,
+    [req.userId]
+  )).rows;
+  const seen = new Set(manual.map((m) => m.name));
+  const soon = [];
+  for (const r of rows) {
+    const rate = (r.capacity - r.remaining) / r.days_used;
+    const dte = rate > 0 ? Math.round(r.remaining / rate) : Infinity;
+    if (dte <= 4 && dte <= r.days_left && !seen.has(r.ingredient)) {
+      seen.add(r.ingredient);
+      soon.push({ ingredient: r.ingredient, days_to_empty: Math.max(0, dte) });
+    }
+  }
+  soon.sort((a, b) => a.days_to_empty - b.days_to_empty);
+  res.json({ manual, soon: soon.slice(0, 8) });
+});
+
+app.post('/api/shopping', auth, async (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 40);
+  if (!name) return res.status(400).json({ error: '품목 이름을 입력해 주세요.' });
+  const r = await pool.query(
+    'INSERT INTO fridge_shopping (user_id, name) VALUES ($1, $2) RETURNING id, name', [req.userId, name]
+  );
+  res.status(201).json({ item: r.rows[0] });
+});
+
+app.delete('/api/shopping/:id', auth, async (req, res) => {
+  await pool.query('DELETE FROM fridge_shopping WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
+  res.status(204).end();
 });
 
 /* ───────────────── 정적 서빙 ─────────────────

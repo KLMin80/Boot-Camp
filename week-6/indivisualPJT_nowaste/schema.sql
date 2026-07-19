@@ -141,3 +141,12 @@ ALTER TABLE fridge_recipe_cache ADD CONSTRAINT fridge_recipe_cache_source_check
 -- ordered 항목을 빠르게 (곧 도착 목록)
 CREATE INDEX IF NOT EXISTS idx_fridge_items_user_ordered
   ON fridge_items (user_id) WHERE status = 'ordered' AND outcome IS NULL;
+
+-- 장보기 리스트 — 직접 추가한 '사야 할 것'(공산품·계획구매 포함). 곧 떨어질 재료는 예측에서 자동으로 붙는다.
+CREATE TABLE IF NOT EXISTS fridge_shopping (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid NOT NULL REFERENCES fridge_users(id) ON DELETE CASCADE,
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fridge_shopping_user ON fridge_shopping (user_id, created_at);

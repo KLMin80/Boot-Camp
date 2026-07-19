@@ -152,6 +152,11 @@ const API = {
   recipesWith: (ingredients, tag) => api('POST', '/api/recipes/with', { ingredients, tag }),
   cook: (uses) => api('POST', '/api/recipes/cook', { uses }),
   buyLinks: (names) => api('POST', '/api/buy-links', { items: names }),
+  mealkitLink: (dish) => api('POST', '/api/mealkit-link', { dish }),
+
+  shopping:       () => api('GET', '/api/shopping'),
+  shoppingAdd:  (name) => api('POST', '/api/shopping', { name }),
+  shoppingRemove: (id) => api('DELETE', `/api/shopping/${id}`),
 };
 
 /* ── 날짜 · 표시 ──
@@ -639,13 +644,22 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
       <Header
         title="냉장고"
         sub={<span>{items.length}가지 · <button onClick={onLogout} className="underline underline-offset-2 active:text-ink">{email}</button></span>}
-        right={pendingCount > 0 ? (
-          <button onClick={() => setView('confirm')}
-            className="tap shrink-0 flex items-center gap-1.5 rounded-full bg-ink text-white pl-3 pr-2.5 py-1.5 active:opacity-80">
-            <span className="text-[12px] font-bold">확인할 것</span>
-            <span className="tnum text-[12px] font-bold bg-white text-ink rounded-full w-[18px] h-[18px] leading-[18px] text-center">{pendingCount}</span>
-          </button>
-        ) : null}
+        right={
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={() => setView('shopping')}
+              className="tap flex items-center gap-1 rounded-full border-2 border-line px-2.5 py-1.5 active:bg-paper">
+              <span className="text-[13px] leading-none">🛒</span>
+              <span className="text-[12px] font-bold">장보기</span>
+            </button>
+            {pendingCount > 0 && (
+              <button onClick={() => setView('confirm')}
+                className="tap flex items-center gap-1.5 rounded-full bg-ink text-white pl-3 pr-2.5 py-1.5 active:opacity-80">
+                <span className="text-[12px] font-bold">확인할 것</span>
+                <span className="tnum text-[12px] font-bold bg-white text-ink rounded-full w-[18px] h-[18px] leading-[18px] text-center">{pendingCount}</span>
+              </button>
+            )}
+          </div>
+        }
       />
 
       {loading ? <Spinner /> : (
@@ -751,6 +765,103 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
       <ItemSheet item={sheet} presets={presets} busy={busy} onClose={() => setSheet(null)} onAction={act} />
       <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
         onPick={(url, market, ing) => { window.open(url, '_blank', 'noopener'); toast?.(`${market}에서 ${ing} 찾는 중`); }} />
+    </>
+  );
+}
+
+/* 장보기 리스트 — '곧 떨어질 것'(예측 자동) + '직접 추가'. 장 보기 전 확인 → 멀티마켓 한 번에 담기.
+   남은 재료 소진에서 '전반적 식비 관리'로 넓히는 다리. */
+function ShoppingView({ toast, onAddOrdered, back }) {
+  const [data, setData] = useState({ manual: [], soon: [] });
+  const [sel, setSel] = useState({});
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [buyData, setBuyData] = useState(null);
+
+  const load = useCallback(() => API.shopping().then(setData).catch((e) => toast(e.message, 'bad')), [toast]);
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = (name) => setSel((s) => ({ ...s, [name]: !s[name] }));
+  const add = async () => {
+    const v = input.trim(); if (!v) return;
+    try { await API.shoppingAdd(v); setInput(''); await load(); } catch (e) { toast(e.message, 'bad'); }
+  };
+  const remove = async (id) => { try { await API.shoppingRemove(id); await load(); } catch (e) { toast(e.message, 'bad'); } };
+
+  const allNames = [...data.soon.map((s) => s.ingredient), ...data.manual.map((m) => m.name)];
+  const selected = [...new Set(allNames.filter((n) => sel[n]))];
+  const buyAll = async () => {
+    const names = (selected.length ? selected : allNames).slice(0, 10);
+    if (!names.length) return;
+    setBusy(true);
+    try { const d = await API.buyLinks(names); setBuyData({ items: names, ...d }); }
+    catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); }
+  };
+
+  const Row = ({ name, meta, onDel }) => (
+    <div className="flex items-center gap-2.5 px-4 py-3 border-b border-line last:border-0">
+      <button onClick={() => toggle(name)}
+        className={`w-6 h-6 rounded-md border-2 grid place-items-center shrink-0 ${sel[name] ? 'bg-ink border-ink text-white' : 'border-line'}`}>
+        {sel[name] && <span className="text-[13px] leading-none">✓</span>}
+      </button>
+      <button onClick={() => toggle(name)} className="flex-1 text-left">
+        <span className="font-semibold">{name}</span>
+        {meta && <span className="text-[12px] text-muted ml-2">{meta}</span>}
+      </button>
+      {onDel && <button onClick={onDel} className="tap text-muted text-[13px] px-1 active:text-ink">✕</button>}
+    </div>
+  );
+
+  const empty = !data.soon.length && !data.manual.length;
+  return (
+    <>
+      <Header title="장보기 리스트" sub="장 보기 전에 확인하고, 한 번에 담기"
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <div className="px-4 pt-4">
+        <div className="flex gap-2">
+          <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()}
+            placeholder="살 것 추가 (예: 화장지, 계란)"
+            className="flex-1 h-11 px-3.5 rounded-xl border-2 border-line bg-surface text-[14px] font-medium focus:border-ink outline-none" />
+          <button onClick={add} disabled={!input.trim()}
+            className="tap px-4 h-11 rounded-xl bg-ink text-white font-bold text-[14px] active:opacity-80 disabled:opacity-40">추가</button>
+        </div>
+
+        {data.soon.length > 0 && (
+          <section className="rise mt-5 rounded-2xl border border-warn/40 bg-warn/[.05] overflow-hidden">
+            <p className="text-[13px] font-bold text-warn px-4 pt-3 pb-1">📉 곧 떨어질 것 <span className="text-muted font-normal">쓰는 속도로 보면</span></p>
+            {data.soon.map((s) => (
+              <Row key={s.ingredient} name={s.ingredient} meta={s.days_to_empty <= 0 ? '오늘내일' : `약 ${s.days_to_empty}일 뒤`} />
+            ))}
+          </section>
+        )}
+
+        {data.manual.length > 0 && (
+          <section className="mt-4 rounded-2xl border border-line bg-surface overflow-hidden">
+            <p className="text-[13px] font-bold px-4 pt-3 pb-1">🛒 살 것</p>
+            {data.manual.map((m) => (
+              <Row key={m.id} name={m.name} onDel={() => remove(m.id)} />
+            ))}
+          </section>
+        )}
+
+        {empty && (
+          <p className="text-center text-muted text-[14px] py-16 leading-relaxed">
+            곧 떨어질 재료가 여기 자동으로 모여요.<br />장 볼 것을 직접 추가해도 돼요.
+          </p>
+        )}
+
+        {!empty && (
+          <button onClick={buyAll} disabled={busy}
+            className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-6 active:opacity-80 disabled:opacity-50">
+            🛒 {selected.length ? `고른 ${selected.length}개` : '전체'} 마켓에서 한 번에 담기
+          </button>
+        )}
+        <div className="h-6" />
+      </div>
+
+      <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
+        onPick={(url, market, ing) => { window.open(url, '_blank', 'noopener'); toast(`${market}에서 ${ing} 찾는 중`); }} />
     </>
   );
 }
@@ -1494,6 +1605,15 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
     finally { setBuying(false); }
   };
 
+  // 밀키트로 편하게 — 요리 대신 밀키트 검색으로(쿠팡 밀키트 = 파트너스 제휴)
+  const mealkit = async (dish) => {
+    try {
+      const { url } = await API.mealkitLink(dish);
+      window.open(url, '_blank', 'noopener');
+      toast(`${dish} 밀키트 찾는 중`);
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+
   return (
     <>
       <Header title="오늘 뭐 먹지" sub="급한 재료부터 쓰는 순서로" />
@@ -1657,7 +1777,7 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
       )}
 
       <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy} busy={buying}
-        onCook={(uses, title) => { setDetail(null); onCook(uses, title); }} />
+        onCook={(uses, title) => { setDetail(null); onCook(uses, title); }} onMealkit={mealkit} />
       <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
         onPick={(url, market, ing) => {
           window.open(url, '_blank', 'noopener');
@@ -1738,7 +1858,7 @@ function BuySheet({ data, onClose, onPick, onAddOrdered }) {
 }
 
 /* 레시피 상세 — 만드는 법. 카드를 탭하면 뜬다. */
-function RecipeSheet({ recipe, onClose, onBuy, onCook }) {
+function RecipeSheet({ recipe, onClose, onBuy, onCook, onMealkit }) {
   const base = recipe?.servings > 0 ? recipe.servings : 2;
   const [servings, setServings] = useState(base);
   useEffect(() => { setServings(recipe?.servings > 0 ? recipe.servings : 2); }, [recipe?.title]);
@@ -1822,6 +1942,14 @@ function RecipeSheet({ recipe, onClose, onBuy, onCook }) {
         🍳 다 만들었어요 · 재료 빼기
       </button>
       <p className="text-[11px] text-muted text-center mt-2">누르면 {servings}인분 기준으로 냉장고에서 재료가 차감돼요</p>
+
+      {/* 요리하기 귀찮으면 — 밀키트로 (쿠팡 밀키트 검색) */}
+      {onMealkit && (
+        <button onClick={() => onMealkit(r.title)}
+          className="tap w-full h-[46px] rounded-xl border-2 border-line font-bold text-[14px] mt-2 active:bg-paper">
+          🍱 밀키트로 편하게 주문
+        </button>
+      )}
     </Sheet>
   );
 }
@@ -1846,11 +1974,35 @@ function ReportView({ toast }) {
   const first = rows.length ? rows[0].wasted : 0;
   const cut = first > 0 ? Math.round(((first - last) / first) * 100) : null;
 
+  // 이번 달 식비(구매액) + 낭비율 — 전반적 식비 관리
+  const nowMonth = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()).slice(0, 7);
+  const spentThis = ((d.spend || []).find((r) => r.month === nowMonth) || {}).spent || 0;
+  const wastedThis = (rows.find((r) => r.month === nowMonth) || {}).wasted || 0;
+  const wasteRate = spentThis > 0 ? Math.round((wastedThis / spentThis) * 100) : 0;
+
   return (
     <>
-      <Header title="리포트" sub="버린 돈이 얼마나 줄었나" />
+      <Header title="리포트" sub="얼마 쓰고, 얼마나 버렸나" />
 
+      {/* 이번 달 식비 — 담은 재료 가격 합. 낭비 촉진 → 전반적 식비관리 */}
       <div className="px-4 pt-4">
+        <div className="rise rounded-2xl bg-calm text-white px-5 py-6">
+          <p className="text-[12px] text-white/70 font-semibold">이번 달 식비 <span className="font-normal">· 담은 재료 기준</span></p>
+          <p className="tnum text-[38px] font-extrabold leading-none mt-1.5">
+            {won(spentThis)}<span className="text-[20px] font-bold">원</span>
+          </p>
+          {spentThis > 0 ? (
+            <div className="flex items-center gap-1.5 mt-3">
+              <span className="text-[13px] font-bold text-white">그 중 버린 돈 {wasteRate}%</span>
+              <span className="text-[12px] text-white/70">= {won(wastedThis)}원</span>
+            </div>
+          ) : (
+            <p className="text-[12px] text-white/70 mt-3">가격을 넣고 담으면 식비가 집계돼요. <span className="opacity-80">(영수증으로 담으면 자동)</span></p>
+          )}
+        </div>
+      </div>
+
+      <div className="px-4 pt-3">
         <div className="rise rounded-2xl bg-ink text-white px-5 py-6">
           <p className="text-[12px] text-white/60 font-semibold">이번 달 버린 돈</p>
           <p className="tnum text-[38px] font-extrabold leading-none mt-1.5">
@@ -2123,6 +2275,7 @@ function NowasteApp() {
             onConfirm={confirmCard} onDrop={dropCard} busy={busy} />
         )}
         {view === 'cook'   && <CookView toast={toast} onAddOrdered={addOrdered} hasOrdered={ordered.length > 0} items={items} onCook={cookRecipe} />}
+        {view === 'shopping' && <ShoppingView toast={toast} onAddOrdered={addOrdered} back={() => goto('home')} />}
         {view === 'report' && <ReportView toast={toast} />}
       </main>
 
