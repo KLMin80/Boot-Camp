@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>남김없이 — 프로토타입 v1</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink:     '#16191A',
+          paper:   '#F2F4F2',
+          surface: '#FFFFFF',
+          line:    '#E3E5E3',
+          muted:   '#8A918D',
+          urgent:  '#E23A2E',
+          warn:    '#E08A12',
+          calm:    '#5B7A6B',
+          frost:   '#4E86B4',
+        },
+        fontFamily: {
+          sans: ['Pretendard', 'system-ui', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+
+<!-- React 18 + Babel 7.x (8.x는 백지 화면 이슈 — DEV.md 함정 9) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
+<style>
+  :root { color-scheme: light; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: #DCDFDC;
+    font-family: 'Pretendard', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: #16191A;
+  }
+  /* 데스크톱에서 볼 때 폰 프레임. 실기기에선 전체화면 */
+  #root { display: flex; justify-content: center; min-height: 100%; }
+  .phone {
+    width: 100%;
+    max-width: 420px;
+    min-height: 100vh;
+    background: #F2F4F2;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 24px 60px rgba(0,0,0,.14);
+  }
+  @media (min-width: 460px) {
+    .phone { min-height: 880px; margin: 28px 0; border-radius: 26px; overflow: hidden; }
+  }
+
+  /* 유통기한 도장 — 마트 라벨의 그것 */
+  .stamp {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    letter-spacing: .02em;
+    border: 1.5px solid currentColor;
+    padding: 2px 6px 1px;
+    line-height: 1.1;
+    display: inline-block;
+  }
+  /* 숫자 정렬만. 한글에 모노를 씌우면 폰트가 폴백돼 깨진다. */
+  .tnum { font-variant-numeric: tabular-nums; }
+  /* 순수 숫자·라틴만 — 라벨에 찍힌 날짜 도장의 그 활자 */
+  .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  .tap { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  button:focus-visible, [role="button"]:focus-visible {
+    outline: 2px solid #16191A; outline-offset: 2px;
+  }
+  .noscroll::-webkit-scrollbar { display: none; }
+  .noscroll { scrollbar-width: none; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .rise { animation: rise .22s ease-out both; }
+  @keyframes pop { from { transform: scale(.9); opacity: 0; } to { transform: none; opacity: 1; } }
+  .pop { animation: pop .18s ease-out both; }
+  @media (prefers-reduced-motion: reduce) {
+    .rise, .pop { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useCallback, useRef, useEffect } = React;
+
+/* ==== SECTION:DATA ==== */
+
+/* 오늘 = KST 기준. toISOString()으로 날짜를 다루면 KST 자정이 UTC 전날로 밀린다 (DEV.md 함정 6) */
+const KST = 'Asia/Seoul';
+const todayKST = () => {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: KST, year: 'numeric', month: '2-digit', day: '2-digit' });
+  return p.format(new Date()); // 'YYYY-MM-DD'
+};
+const TODAY = todayKST();
+
+const addDays = (ymd, n) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + n));
+  return dt.toISOString().slice(0, 10); // UTC로만 계산하므로 밀리지 않음
+};
+const daysLeft = (ymd) => {
+  const a = new Date(TODAY + 'T00:00:00Z'), b = new Date(ymd + 'T00:00:00Z');
+  return Math.round((b - a) / 86400000);
+};
+const fmtDate = (ymd) => { const [, m, d] = ymd.split('-'); return `${+m}월 ${+d}일`; };
+const won = (n) => n.toLocaleString('ko-KR');
+
+/* 보관방법 — 아이콘 한 번 탭으로 고른다 */
+const STORAGE = {
+  fridge:     { label: '냉장',      icon: '❄️', tone: 'text-frost' },
+  freezer:    { label: '냉동',      icon: '🧊', tone: 'text-frost' },
+  room:       { label: '실온',      icon: '🌡️', tone: 'text-muted' },
+  room_shade: { label: '실온·그늘', icon: '🌥️', tone: 'text-muted' },
+};
+
+/* 재료 × 보관방법 → 권장 보관일수 (DEV.md의 fridge_shelf_life 프리셋) */
+const SHELF_LIFE = {
+  양파:   { room_shade: 60, fridge: 30 },
+  감자:   { room_shade: 45, fridge: 21 },
+  대파:   { fridge: 14, freezer: 90 },
+  당근:   { fridge: 30, freezer: 90 },
+  사과:   { fridge: 30, room: 7 },
+  애호박: { fridge: 10 },
+  시금치: { fridge: 5, freezer: 60 },
+  돼지고기: { fridge: 3, freezer: 90 },
+  닭고기: { fridge: 2, freezer: 90 },
+  두부:   { fridge: 7 },
+  달걀:   { fridge: 30 },
+  우유:   { fridge: 10 },
+};
+const QUICK_INGREDIENTS = ['양파', '대파', '감자', '당근', '사과', '애호박', '시금치', '두부'];
+
+/* 재고 — 더미 */
+const SEED_ITEMS = [
+  { id: 1, name: '대파',            ingredient: '대파',   capacity: 200, remaining: 200, unit: 'g',  price: 2980, storage: 'fridge',     expiry: addDays(TODAY, 0),  source: 'preset' },
+  { id: 2, name: '풀무원 국산콩 두부', ingredient: '두부',   capacity: 300, remaining: 300, unit: 'g',  price: 2200, storage: 'fridge',     expiry: addDays(TODAY, 1),  source: 'ocr' },
+  { id: 3, name: '서울우유 1A 흰우유', ingredient: '우유',   capacity: 1000, remaining: 400, unit: 'ml', price: 3150, storage: 'fridge',     expiry: addDays(TODAY, 3),  source: 'ocr' },
+  { id: 4, name: '한돈 앞다리살',     ingredient: '돼지고기', capacity: 600, remaining: 600, unit: 'g',  price: 9900, storage: 'fridge',     expiry: addDays(TODAY, 2),  source: 'ocr' },
+  { id: 5, name: '무항생제 달걀 10구', ingredient: '달걀',   capacity: 10,  remaining: 6,   unit: '개', price: 5490, storage: 'fridge',     expiry: addDays(TODAY, 12), source: 'ocr' },
+  { id: 6, name: '양파',            ingredient: '양파',   capacity: 3,   remaining: 3,   unit: '개', price: 3900, storage: 'room_shade', expiry: addDays(TODAY, 51), source: 'preset' },
+  { id: 7, name: '시금치',          ingredient: '시금치', capacity: 200, remaining: 200, unit: 'g',  price: 2500, storage: 'fridge',     expiry: addDays(TODAY, 4),  source: 'preset' },
+  { id: 8, name: '냉동 삼겹살',      ingredient: '돼지고기', capacity: 500, remaining: 500, unit: 'g',  price: 12900, storage: 'freezer',   expiry: addDays(TODAY, 74), source: 'preset' },
+];
+
+/* 확인 대기 — 찍기만 하고 아직 확인 안 한 것들 (백그라운드 OCR 완료) */
+const SEED_PENDING = [
+  { id: 101, shot: '🥛', read: { name: '매일 상하목장 우유', capacity: 900, unit: 'ml', expiry: addDays(TODAY, 9), price: 4200 }, ingredient: '우유', storage: 'fridge', confidence: 'high',
+    raw: '매일 상하목장 유기농우유 900ml\n소비기한 ' + addDays(TODAY, 9).replace(/-/g, '.') + '\n4,200원' },
+  { id: 102, shot: '🥩', read: { name: '호주산 부채살', capacity: 400, unit: 'g', expiry: addDays(TODAY, 2), price: 15800 }, ingredient: '소고기', storage: 'fridge', confidence: 'high',
+    raw: '호주산 부채살 400g\n포장일 ' + addDays(TODAY, -1).replace(/-/g, '.') + '\n소비기한 ' + addDays(TODAY, 2).replace(/-/g, '.') + '\n15,800원' },
+  { id: 103, shot: '🍎', read: { name: '사과', capacity: 5, unit: '개', expiry: null, price: 8900 }, ingredient: '사과', storage: null, confidence: 'low',
+    raw: '부사 사과 5입\n8,900원' },
+];
+
+/* 오늘 만들 수 있는 것 — 보유 재고로 매칭 */
+const SEED_RECIPES = [
+  { id: 'r1', title: '두부 대파 된장찌개', mins: 15, tag: '어른',   emoji: '🍲',
+    uses: [{ ing: '두부', amt: 300, unit: 'g' }, { ing: '대파', amt: 100, unit: 'g' }],
+    missing: [] },
+  { id: 'r2', title: '대파 돼지고기 볶음',  mins: 20, tag: '아이',   emoji: '🥘',
+    uses: [{ ing: '대파', amt: 100, unit: 'g' }, { ing: '돼지고기', amt: 300, unit: 'g' }],
+    missing: ['간장'] },
+  { id: 'r3', title: '시금치 달걀말이',     mins: 12, tag: '아이',   emoji: '🥚',
+    uses: [{ ing: '시금치', amt: 100, unit: 'g' }, { ing: '달걀', amt: 3, unit: '개' }],
+    missing: [] },
+  { id: 'r4', title: '우유 감자 스프',      mins: 25, tag: '건강',   emoji: '🥣',
+    uses: [{ ing: '우유', amt: 400, unit: 'ml' }],
+    missing: ['감자', '양송이'] },
+];
+
+/* 폐기 이력 — 리포트용 (실제로는 outcome='discarded'인 행들) */
+const WASTE_HISTORY = [
+  { month: '2월', wasted: 42300 }, { month: '3월', wasted: 39800 },
+  { month: '4월', wasted: 35100 }, { month: '5월', wasted: 31600 },
+  { month: '6월', wasted: 27400 }, { month: '7월', wasted: 24900 },
+];
+
+/* ==== SECTION:PRIMITIVES ==== */
+
+/* 남은 시간 → 색. 채도 높은 색은 '지금 처리할 것'에만 쓴다. */
+const urgencyOf = (d) => (d <= 1 ? 'urgent' : d <= 4 ? 'warn' : 'calm');
+const TONE = {
+  urgent: { text: 'text-urgent', bg: 'bg-urgent', border: 'border-urgent', soft: 'bg-urgent/[.06]' },
+  warn:   { text: 'text-warn',   bg: 'bg-warn',   border: 'border-warn',   soft: 'bg-warn/[.07]' },
+  calm:   { text: 'text-calm',   bg: 'bg-calm',   border: 'border-calm',   soft: 'bg-calm/[.06]' },
+};
+
+/* 유통기한 도장 — 마트 라벨에 찍힌 그것 */
+function Stamp({ days, className = '' }) {
+  const label = days < 0 ? '지남' : days === 0 ? 'D-DAY' : `D-${days}`;
+  return <span className={`stamp text-[11px] ${TONE[urgencyOf(days)].text} ${className}`}>{label}</span>;
+}
+
+/* 잔량 게이지 — 덜어 쓴 것에만 뜬다.
+   가득 찬 게이지는 아무 말도 안 하면서 취소선처럼 보인다. */
+function Gauge({ remaining, capacity, tone }) {
+  if (remaining >= capacity) return null;
+  const pct = Math.max(6, Math.round((remaining / capacity) * 100));
+  return (
+    <div className="h-[3px] w-10 rounded-full bg-line overflow-hidden shrink-0">
+      <div className={`h-full ${TONE[tone].bg} opacity-70`} style={{ width: pct + '%' }} />
+    </div>
+  );
+}
+
+function ItemRow({ item, onTap }) {
+  const d = daysLeft(item.expiry);
+  const tone = urgencyOf(d);
+  return (
+    <button onClick={() => onTap(item)}
+      className="tap w-full flex items-center gap-3 py-3 pl-3 pr-4 bg-surface text-left active:bg-paper transition-colors">
+      <div className={`w-[3px] self-stretch rounded-full ${TONE[tone].bg} ${tone === 'calm' ? 'opacity-40' : ''}`} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="font-semibold truncate">{item.name}</span>
+          {item.storage === 'freezer' && <span className="text-[11px] shrink-0">🧊</span>}
+        </div>
+        <div className="text-[13px] text-muted tnum mt-0.5">
+          {item.remaining}{item.unit}
+          {item.remaining !== item.capacity && <span className="opacity-50"> / {item.capacity}{item.unit}</span>}
+        </div>
+      </div>
+      <Gauge remaining={item.remaining} capacity={item.capacity} tone={tone} />
+      <Stamp days={d} />
+    </button>
+  );
+}
+
+/* 화면을 가로지르는 시간 구분선. 번호(01/02)가 아니라 시간이 정보다. */
+function TimeDivider({ label, count }) {
+  return (
+    <div className="flex items-center gap-2.5 px-4 pt-6 pb-2">
+      <span className="text-[12px] font-bold tracking-wide text-muted">{label}</span>
+      <span className="tnum text-[12px] text-muted/70">{count}</span>
+      <div className="flex-1 h-px bg-line" />
+    </div>
+  );
+}
+
+function Toast({ msg }) {
+  if (!msg) return null;
+  return (
+    <div className="pop fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-ink text-white text-[14px] font-medium px-4 py-2.5 rounded-full shadow-lg whitespace-nowrap">
+      {msg}
+    </div>
+  );
+}
+
+const NAV = [
+  { key: 'home',    label: '냉장고', icon: '🧺' },
+  { key: 'capture', label: '담기',   icon: '📷' },
+  { key: 'confirm', label: '확인',   icon: '✓'  },
+  { key: 'cook',    label: '요리',   icon: '🥘' },
+  { key: 'report',  label: '리포트', icon: '📊' },
+];
+
+function BottomNav({ view, setView, pendingCount }) {
+  return (
+    <nav className="sticky bottom-0 z-30 grid grid-cols-5 bg-surface/95 backdrop-blur border-t border-line">
+      {NAV.map((n) => {
+        const on = view === n.key;
+        return (
+          <button key={n.key} onClick={() => setView(n.key)}
+            className="tap relative flex flex-col items-center gap-0.5 pt-2.5 pb-3 active:bg-paper">
+            <span className={`text-[17px] leading-none ${on ? '' : 'opacity-45 grayscale'}`}>{n.icon}</span>
+            <span className={`text-[10px] font-semibold ${on ? 'text-ink' : 'text-muted'}`}>{n.label}</span>
+            {n.key === 'confirm' && pendingCount > 0 && (
+              <span className="tnum absolute top-1.5 right-[26%] min-w-[15px] h-[15px] px-1 rounded-full bg-urgent text-white text-[10px] font-bold leading-[15px] text-center">
+                {pendingCount}
+              </span>
+            )}
+            {on && <span className="absolute top-0 inset-x-[26%] h-[2px] bg-ink rounded-full" />}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function Header({ title, right, sub }) {
+  return (
+    <header className="sticky top-0 z-30 bg-paper/92 backdrop-blur px-4 pt-4 pb-3 border-b border-line/70">
+      <div className="flex items-end justify-between">
+        <div>
+          <h1 className="text-[22px] font-extrabold tracking-[-.02em] leading-none">{title}</h1>
+          {sub && <p className="text-[12px] text-muted mt-1.5">{sub}</p>}
+        </div>
+        {right}
+      </div>
+    </header>
+  );
+}
+
+/* ==== SECTION:HOME ==== */
+
+/* 이 앱의 signature.
+   다른 냉장고 앱은 "3개 임박"이라고 알리고 끝난다. 이건 살릴 방법을 준다. */
+/* 얼리면 못 쓰는 재료가 있다 — 두부, 상추, 오이.
+   SHELF_LIFE에 freezer 항목이 있는 것만 냉동 대상이다. */
+const canFreeze = (ing) => Boolean(SHELF_LIFE[ing]?.freezer);
+
+function RescueCard({ doomed, onFreeze, onCook }) {
+  const freezable = doomed.filter((i) => canFreeze(i.ingredient));
+  if (doomed.length === 0) {
+    return (
+      <div className="rise mx-4 mt-4 rounded-2xl border border-calm/30 bg-calm/[.06] px-5 py-6 text-center">
+        <div className="text-[30px] leading-none">🌿</div>
+        <p className="mt-2.5 font-bold text-calm">오늘은 버릴 게 없어요</p>
+        <p className="text-[13px] text-muted mt-1">급한 재료가 하나도 없습니다.</p>
+      </div>
+    );
+  }
+  const totalValue = doomed.reduce((s, it) => s + Math.round(it.price * (it.remaining / it.capacity)), 0);
+  return (
+    <section className="rise mx-4 mt-4 rounded-2xl border-2 border-urgent bg-surface overflow-hidden shadow-[0_6px_24px_-10px_rgba(226,58,46,.5)]">
+      <div className="bg-urgent px-5 py-2.5 flex items-baseline justify-between">
+        <h2 className="text-white font-extrabold text-[15px] tracking-[-.01em]">오늘 안 쓰면 버려요</h2>
+        <span className="tnum text-white/85 text-[12px] font-semibold">{won(totalValue)}원어치</span>
+      </div>
+
+      <ul className="px-5 pt-3.5 pb-1">
+        {doomed.map((it) => {
+          const d = daysLeft(it.expiry);
+          const ice = canFreeze(it.ingredient);
+          return (
+            <li key={it.id} className="flex items-center gap-2 py-1.5">
+              <span className="font-bold">{it.name}</span>
+              <span className="tnum text-[13px] text-muted">{it.remaining}{it.unit}</span>
+              {ice && <span className="text-[11px]" title="얼려도 괜찮아요">🧊</span>}
+              <div className="flex-1 border-b border-dotted border-line self-end mb-1" />
+              <Stamp days={d} />
+            </li>
+          );
+        })}
+      </ul>
+
+      {freezable.length < doomed.length && (
+        <p className="px-5 pb-1 text-[11px] text-muted leading-relaxed">
+          🧊 없는 건 얼리면 못 써요. <span className="font-semibold text-ink">오늘 요리로 쓰는 수밖에 없습니다.</span>
+        </p>
+      )}
+
+      <div className="grid grid-cols-2 gap-2 p-3 pt-2.5">
+        <button onClick={onFreeze} disabled={!freezable.length}
+          className={`tap flex items-center justify-center gap-1.5 h-[52px] rounded-xl border-2 font-bold transition-colors ${
+            freezable.length
+              ? 'border-frost text-frost active:bg-frost/10'
+              : 'border-line text-muted/40 cursor-not-allowed'
+          }`}>
+          <span className="text-[17px]">🧊</span>
+          냉동실로{freezable.length > 0 && freezable.length < doomed.length ? ` (${freezable.length})` : ''}
+        </button>
+        <button onClick={onCook}
+          className="tap flex items-center justify-center gap-1.5 h-[52px] rounded-xl bg-ink text-white font-bold active:opacity-80 transition-opacity">
+          <span className="text-[17px]">🥘</span> 오늘 요리로
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function HomeView({ items, pendingCount, setView, onFreezeDoomed, toast }) {
+  const [tab, setTab] = useState('all');
+
+  const doomed = useMemo(
+    () => items.filter((i) => daysLeft(i.expiry) <= 1 && i.storage !== 'freezer')
+               .sort((a, b) => daysLeft(a.expiry) - daysLeft(b.expiry)),
+    [items]
+  );
+
+  const TABS = [
+    { key: 'all',        label: '전체' },
+    { key: 'fridge',     label: '냉장' },
+    { key: 'freezer',    label: '냉동' },
+    { key: 'room',       label: '실온' },
+  ];
+
+  const shown = useMemo(() => {
+    const f = tab === 'all' ? items
+      : tab === 'room' ? items.filter((i) => i.storage === 'room' || i.storage === 'room_shade')
+      : items.filter((i) => i.storage === tab);
+    return [...f].sort((a, b) => daysLeft(a.expiry) - daysLeft(b.expiry));
+  }, [items, tab]);
+
+  const groups = [
+    { label: '이번 주 안에', test: (d) => d <= 7 },
+    { label: '여유 있어요',  test: (d) => d > 7 },
+  ];
+
+  return (
+    <>
+      <Header
+        title="냉장고"
+        sub={`${items.length}가지 · ${fmtDate(TODAY)}`}
+        right={
+          pendingCount > 0 ? (
+            <button onClick={() => setView('confirm')}
+              className="tap flex items-center gap-1.5 rounded-full bg-ink text-white pl-3 pr-2.5 py-1.5 active:opacity-80">
+              <span className="text-[12px] font-bold">확인할 것</span>
+              <span className="tnum text-[12px] font-bold bg-white text-ink rounded-full w-[18px] h-[18px] leading-[18px] text-center">{pendingCount}</span>
+            </button>
+          ) : null
+        }
+      />
+
+      <RescueCard doomed={doomed} onFreeze={onFreezeDoomed} onCook={() => setView('cook')} />
+
+      <div className="flex gap-1.5 px-4 pt-5 pb-1 overflow-x-auto noscroll">
+        {TABS.map((t) => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`tap shrink-0 px-3.5 h-8 rounded-full text-[13px] font-semibold border transition-colors ${
+              tab === t.key ? 'bg-ink text-white border-ink' : 'bg-surface text-muted border-line active:bg-paper'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {groups.map((g) => {
+        const list = shown.filter((i) => g.test(daysLeft(i.expiry)));
+        if (!list.length) return null;
+        return (
+          <div key={g.label}>
+            <TimeDivider label={g.label} count={list.length} />
+            <div className="mx-4 rounded-xl overflow-hidden border border-line divide-y divide-line">
+              {list.map((it) => <ItemRow key={it.id} item={it} onTap={toast} />)}
+            </div>
+          </div>
+        );
+      })}
+
+      {shown.length === 0 && (
+        <p className="text-center text-muted text-[14px] py-16">여기엔 아직 아무것도 없어요.</p>
+      )}
+
+      <div className="h-6" />
+    </>
+  );
+}
+
+/* ==== SECTION:CAPTURE ==== */
+
+const SHOT_POOL = ['🥬', '🧀', '🍗', '🥓', '🧅', '🥛', '🍞', '🥕'];
+
+/* 라벨 있는 것 — 찰칵만. 확인하지 않는다. 그게 30초의 비결이다. */
+function CaptureView({ onDone, setMode }) {
+  const [shots, setShots] = useState([]);
+  const [flash, setFlash] = useState(false);
+
+  const snap = () => {
+    setFlash(true);
+    setTimeout(() => setFlash(false), 90);
+    setShots((s) => [...s, SHOT_POOL[s.length % SHOT_POOL.length]]);
+  };
+
+  return (
+    <>
+      <Header title="담기" sub="라벨을 비추고 찍기만 하세요. 확인은 나중에." />
+
+      <div className="px-4 pt-4">
+        <div className="relative rounded-2xl bg-ink overflow-hidden aspect-[4/5] flex items-center justify-center">
+          {/* 뷰파인더 (프로토타입이라 카메라 대신 안내) */}
+          <div className="absolute inset-6 border-2 border-dashed border-white/25 rounded-xl" />
+          <div className="relative text-center px-8">
+            <div className="text-[40px] leading-none">🏷️</div>
+            <p className="text-white/85 text-[14px] font-semibold mt-3">라벨이 네모 안에 들어오게</p>
+            <p className="text-white/40 text-[12px] mt-1">제품명 · 용량 · 유통기한을 함께</p>
+          </div>
+          {flash && <div className="absolute inset-0 bg-white" />}
+          {shots.length > 0 && (
+            <div className="tnum absolute top-3 right-3 bg-white/15 backdrop-blur text-white text-[12px] font-bold px-2.5 py-1 rounded-full">
+              {shots.length}장
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 찍은 것들 — 스트립 */}
+      <div className="px-4 pt-3 min-h-[54px]">
+        {shots.length === 0 ? (
+          <p className="text-center text-[12px] text-muted pt-2.5">찍은 사진은 여기 쌓여요</p>
+        ) : (
+          <div className="flex gap-1.5 overflow-x-auto noscroll">
+            {shots.map((s, i) => (
+              <div key={i} className="pop shrink-0 w-11 h-11 rounded-lg bg-surface border border-line grid place-items-center text-[20px]">{s}</div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 셔터 — 화면에서 제일 큰 타깃 */}
+      <div className="flex flex-col items-center pt-3 pb-1">
+        <button onClick={snap} aria-label="사진 찍기"
+          className="tap w-[76px] h-[76px] rounded-full bg-surface border-[5px] border-ink grid place-items-center active:scale-95 transition-transform">
+          <span className="w-[54px] h-[54px] rounded-full bg-ink" />
+        </button>
+      </div>
+
+      <div className="px-4 pt-4 pb-2">
+        {shots.length > 0 && (
+          <button onClick={() => onDone(shots)}
+            className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold active:opacity-80 mb-3">
+            <span className="tnum">{shots.length}장</span> 담기 — 확인은 나중에
+          </button>
+        )}
+
+        <div className="rounded-xl border border-line bg-surface p-3.5">
+          <p className="text-[13px] font-semibold">라벨이 없는 재료인가요?</p>
+          <p className="text-[12px] text-muted mt-0.5 mb-2.5">양파, 사과처럼 그냥 담아온 것들</p>
+          <button onClick={() => setMode('fresh')}
+            className="tap w-full h-[46px] rounded-lg border-2 border-ink font-bold text-[14px] active:bg-paper">
+            재료로 담기 →
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* 라벨 없는 신선식품 — 재료 탭 + 보관방법 탭, 두 번이면 끝. 유통기한은 자동. */
+function FreshView({ onAdd, back }) {
+  const [ing, setIng] = useState(null);
+  const [storage, setStorage] = useState(null);
+
+  const options = ing ? Object.keys(SHELF_LIFE[ing] || {}) : [];
+  const days = ing && storage ? SHELF_LIFE[ing]?.[storage] : null;
+  const expiry = days != null ? addDays(TODAY, days) : null;
+
+  const pickIng = (v) => {
+    setIng(v);
+    const opts = Object.keys(SHELF_LIFE[v] || {});
+    setStorage(opts.length === 1 ? opts[0] : null);
+  };
+
+  return (
+    <>
+      <Header title="재료로 담기" sub="두 번만 고르면 유통기한까지 잡아드려요"
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <div className="px-4 pt-5">
+        <p className="text-[13px] font-bold mb-2.5">어떤 재료예요?</p>
+        <div className="flex flex-wrap gap-2">
+          {QUICK_INGREDIENTS.map((v) => (
+            <button key={v} onClick={() => pickIng(v)}
+              className={`tap px-4 h-11 rounded-full text-[15px] font-semibold border-2 transition-colors ${
+                ing === v ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+              }`}>
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {ing && (
+        <div className="rise px-4 pt-6">
+          <p className="text-[13px] font-bold mb-2.5">어디에 둘 거예요?</p>
+          <div className="grid grid-cols-4 gap-2">
+            {Object.entries(STORAGE).map(([key, s]) => {
+              const ok = options.includes(key);
+              const on = storage === key;
+              return (
+                <button key={key} disabled={!ok} onClick={() => setStorage(key)}
+                  className={`tap h-[76px] rounded-xl border-2 grid place-items-center gap-1 transition-colors ${
+                    on ? 'bg-ink text-white border-ink'
+                       : ok ? 'bg-surface border-line active:bg-paper'
+                            : 'bg-paper border-transparent opacity-30 cursor-not-allowed'
+                  }`}>
+                  <span className="text-[21px] leading-none">{s.icon}</span>
+                  <span className="text-[11px] font-bold">{s.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-muted mt-2">흐린 건 {ing}에 권하지 않는 보관법이에요.</p>
+        </div>
+      )}
+
+      {expiry && (
+        <div className="rise px-4 pt-6">
+          <div className="rounded-xl border-2 border-calm bg-calm/[.06] px-4 py-4 flex items-center gap-3">
+            <span className="text-[26px] leading-none">{STORAGE[storage].icon}</span>
+            <div className="flex-1">
+              <p className="font-extrabold">{ing} · {STORAGE[storage].label}</p>
+              <p className="tnum text-[13px] text-calm font-semibold mt-0.5">
+                {fmtDate(expiry)}까지 <span className="text-muted font-normal">({days}일)</span>
+              </p>
+            </div>
+            <Stamp days={days} />
+          </div>
+          <button onClick={() => onAdd({ ing, storage, expiry })}
+            className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-3 active:opacity-80">
+            담기
+          </button>
+        </div>
+      )}
+
+      <div className="h-8" />
+    </>
+  );
+}
+
+/* ==== SECTION:CONFIRM ==== */
+
+/* 정리 다 끝내고 앉아서. 카드 넘기듯. 여기선 시간에 쫓기지 않는다. */
+function ConfirmView({ queue, onConfirm, onSkip, setView }) {
+  const [i, setI] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const card = queue[i];
+
+  useEffect(() => { if (i >= queue.length && queue.length > 0) setI(queue.length - 1); }, [queue.length, i]);
+
+  if (!card) {
+    return (
+      <>
+        <Header title="확인" />
+        <div className="rise flex flex-col items-center justify-center px-8 py-20 text-center">
+          <div className="text-[38px]">✓</div>
+          <p className="font-bold mt-3">다 확인했어요</p>
+          <p className="text-[13px] text-muted mt-1.5 leading-relaxed">
+            찍어둔 게 없습니다.<br />장 보고 오면 사진만 찍어두세요.
+          </p>
+          <button onClick={() => setView('capture')}
+            className="tap mt-6 h-[50px] px-6 rounded-xl bg-ink text-white font-bold active:opacity-80">
+            담으러 가기
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  const d = card.read.expiry ? daysLeft(card.read.expiry) : null;
+  const guessed = !card.read.expiry;                       // OCR이 날짜를 못 읽음 → 프리셋으로 추정
+  const presetDays = guessed ? (SHELF_LIFE[card.ingredient]?.fridge ?? 7) : null;
+  const presetExpiry = guessed ? addDays(TODAY, presetDays) : null;
+  const finalExpiry = card.read.expiry || presetExpiry;
+  const finalDays = d ?? presetDays;
+
+  return (
+    <>
+      <Header title="확인"
+        sub={`읽어둔 값이 맞는지만 봐주세요`}
+        right={<span className="mono text-[13px] font-bold text-muted">{i + 1} / {queue.length}</span>} />
+
+      <div className="px-4 pt-4 pb-2">
+        <div key={card.id} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
+          {/* 찍은 사진 */}
+          <div className="h-[128px] bg-paper grid place-items-center border-b border-line relative">
+            <span className="text-[46px]">{card.shot}</span>
+            <span className="absolute bottom-2 right-2.5 text-[10px] text-muted">방금 찍은 사진</span>
+          </div>
+
+          {/* 읽은 값 */}
+          <div className="p-4 space-y-2.5">
+            <Field label="제품명" value={card.read.name} editing={editing} />
+            <Field label="용량" value={`${card.read.capacity}${card.read.unit}`} editing={editing} mono />
+            <Field label="가격" value={`${won(card.read.price)}원`} editing={editing} mono />
+
+            {/* 유통기한 — 이 카드의 주인공 */}
+            <div className={`rounded-xl border-2 px-3.5 py-3 ${guessed ? 'border-warn bg-warn/[.07]' : `${TONE[urgencyOf(finalDays)].border} ${TONE[urgencyOf(finalDays)].soft}`}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-muted">유통기한</span>
+                <Stamp days={finalDays} />
+              </div>
+              <p className="mono text-[19px] font-bold mt-1">{finalExpiry.replace(/-/g, '.')}</p>
+              <p className="text-[11px] mt-1 leading-relaxed">
+                {guessed ? (
+                  <span className="text-warn font-semibold">
+                    라벨에서 날짜를 못 읽었어요 — {card.ingredient} 냉장 보관 기준 {presetDays}일로 잡았습니다. 맞는지 봐주세요.
+                  </span>
+                ) : (
+                  <span className="text-muted">라벨에서 읽었어요</span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          {/* OCR 원문 — 대조용 */}
+          <details className="border-t border-line">
+            <summary className="tap px-4 py-2.5 text-[12px] text-muted font-semibold cursor-pointer select-none active:bg-paper">
+              사진에서 읽은 글자 보기
+            </summary>
+            <pre className="px-4 pb-3 text-[11px] text-muted whitespace-pre-wrap font-mono leading-relaxed">{card.raw}</pre>
+          </details>
+        </div>
+      </div>
+
+      <div className="px-4 pt-2 pb-4 space-y-2">
+        <button onClick={() => { onConfirm(card, finalExpiry); setEditing(false); }}
+          className="tap w-full h-[56px] rounded-xl bg-ink text-white font-bold text-[15px] active:opacity-80">
+          맞아요 — 냉장고에 넣기
+        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => setEditing((v) => !v)}
+            className="tap h-[48px] rounded-xl border-2 border-line font-semibold text-[14px] active:bg-paper">
+            {editing ? '고치기 끝' : '고칠게요'}
+          </button>
+          <button onClick={() => { onSkip(card); setEditing(false); }}
+            className="tap h-[48px] rounded-xl border-2 border-line text-muted font-semibold text-[14px] active:bg-paper">
+            버릴 거예요
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Field({ label, value, editing, mono }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[11px] font-bold text-muted shrink-0 w-[42px]">{label}</span>
+      {editing ? (
+        <input defaultValue={value}
+          className={`flex-1 min-w-0 text-right font-semibold border-b-2 border-ink bg-transparent py-0.5 outline-none ${mono ? 'tnum' : ''}`} />
+      ) : (
+        <span className={`flex-1 text-right font-semibold truncate ${mono ? 'tnum' : ''}`}>{value}</span>
+      )}
+    </div>
+  );
+}
+
+/* ==== SECTION:COOK ==== */
+
+const COOK_TAGS = ['전체', '아이', '어른', '건강'];
+
+/* 레시피는 목적이 아니라 수단이다 — 급한 재료를 쓰는 것부터 위로. */
+function CookView({ items, toast }) {
+  const [tag, setTag] = useState('전체');
+
+  const have = useMemo(() => {
+    const m = {};
+    items.forEach((i) => { m[i.ingredient] = (m[i.ingredient] || 0) + i.remaining; });
+    return m;
+  }, [items]);
+
+  const soonest = (r) => Math.min(
+    ...r.uses.map((u) => {
+      const owned = items.filter((i) => i.ingredient === u.ing);
+      return owned.length ? Math.min(...owned.map((i) => daysLeft(i.expiry))) : 99;
+    })
+  );
+
+  const list = useMemo(() => {
+    const f = tag === '전체' ? SEED_RECIPES : SEED_RECIPES.filter((r) => r.tag === tag);
+    return [...f].sort((a, b) => soonest(a) - soonest(b)); // 급한 재료를 쓰는 것부터
+  }, [tag, items]);
+
+  return (
+    <>
+      <Header title="오늘 뭐 먹지" sub="급한 재료부터 쓰는 순서로" />
+
+      <div className="flex gap-1.5 px-4 pt-4 pb-1">
+        {COOK_TAGS.map((t) => (
+          <button key={t} onClick={() => setTag(t)}
+            className={`tap px-3.5 h-8 rounded-full text-[13px] font-semibold border transition-colors ${
+              tag === t ? 'bg-ink text-white border-ink' : 'bg-surface text-muted border-line active:bg-paper'
+            }`}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div className="px-4 pt-3 space-y-2.5">
+        {list.map((r) => {
+          const d = soonest(r);
+          const tone = urgencyOf(d);
+          return (
+            <article key={r.id} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
+              <div className="flex gap-3 p-4 pb-3">
+                <div className="w-12 h-12 rounded-xl bg-paper grid place-items-center text-[24px] shrink-0">{r.emoji}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-extrabold truncate">{r.title}</h3>
+                    {d <= 1 && (
+                      <span className="shrink-0 text-[10px] font-bold text-white bg-urgent px-1.5 py-0.5 rounded">급한 재료</span>
+                    )}
+                  </div>
+                  <p className="tnum text-[12px] text-muted mt-0.5">{r.mins}분 · {r.tag}</p>
+                </div>
+              </div>
+
+              <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+                {r.uses.map((u) => {
+                  const owned = items.filter((i) => i.ingredient === u.ing);
+                  const dd = owned.length ? Math.min(...owned.map((i) => daysLeft(i.expiry))) : 99;
+                  return (
+                    <span key={u.ing}
+                      className={`tnum text-[12px] font-semibold px-2 py-1 rounded-md border ${TONE[urgencyOf(dd)].border} ${TONE[urgencyOf(dd)].soft} ${TONE[urgencyOf(dd)].text}`}>
+                      {u.ing} {u.amt}{u.unit}
+                    </span>
+                  );
+                })}
+                {r.missing.map((m) => (
+                  <span key={m} className="text-[12px] font-semibold px-2 py-1 rounded-md border border-dashed border-line text-muted">
+                    {m} 없음
+                  </span>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 p-3 pt-0">
+                <button onClick={() => toast(`${r.title} — 쓴 만큼 재고에서 빠졌어요`)}
+                  className="tap h-[46px] rounded-xl bg-ink text-white font-bold text-[14px] active:opacity-80">
+                  이걸로 요리
+                </button>
+                <button
+                  disabled={!r.missing.length}
+                  onClick={() => toast(`쿠팡에서 ${r.missing.join(', ')} 찾는 중`)}
+                  className={`tap h-[46px] rounded-xl font-bold text-[14px] border-2 transition-colors ${
+                    r.missing.length ? 'border-ink active:bg-paper' : 'border-line text-muted/50 cursor-not-allowed'
+                  }`}>
+                  {r.missing.length ? `부족한 것 주문 (${r.missing.length})` : '재료 다 있어요'}
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="h-6" />
+    </>
+  );
+}
+
+/* ==== SECTION:REPORT ==== */
+
+/* MISSION의 성공 지표를 눈으로 보는 곳.
+   price·closed_on·outcome을 안 쌓으면 이 화면은 못 만든다 (STRATEGY.md). */
+function ReportView() {
+  const max = Math.max(...WASTE_HISTORY.map((w) => w.wasted));
+  const first = WASTE_HISTORY[0].wasted;
+  const last = WASTE_HISTORY[WASTE_HISTORY.length - 1].wasted;
+  const cut = Math.round(((first - last) / first) * 100);
+
+  return (
+    <>
+      <Header title="리포트" sub="버린 돈이 얼마나 줄었나" />
+
+      <div className="px-4 pt-4">
+        <div className="rise rounded-2xl bg-ink text-white px-5 py-6">
+          <p className="text-[12px] text-white/60 font-semibold">이번 달 버린 돈</p>
+          <p className="tnum text-[38px] font-extrabold leading-none mt-1.5">{won(last)}<span className="text-[20px] font-bold">원</span></p>
+          <div className="flex items-center gap-1.5 mt-3">
+            <span className="text-calm text-[13px] font-bold">▼ {cut}%</span>
+            <span className="text-[12px] text-white/50">2월보다 {won(first - last)}원 덜 버렸어요</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 막대 — 채도 대신 형태로. 줄어드는 게 보이면 그걸로 충분하다. */}
+      <div className="px-4 pt-6">
+        <p className="text-[13px] font-bold mb-3">월별 폐기 금액</p>
+        {/* 막대 높이는 px로. 부모가 auto 높이면 %는 0으로 접힌다. */}
+        <div className="flex items-end justify-between gap-2 h-[148px] px-1">
+          {WASTE_HISTORY.map((w, idx) => {
+            const h = Math.max(6, Math.round((w.wasted / max) * 96));
+            const isLast = idx === WASTE_HISTORY.length - 1;
+            return (
+              <div key={w.month} className="flex-1 h-full flex flex-col items-center justify-end gap-1.5">
+                <span className={`mono text-[10px] font-bold ${isLast ? 'text-calm' : 'text-muted'}`}>
+                  {(w.wasted / 1000).toFixed(1)}
+                </span>
+                <div className="w-full rounded-t-md"
+                  style={{ height: h + 'px', background: isLast ? '#5B7A6B' : '#D6DAD7' }} />
+                <span className={`text-[11px] font-semibold ${isLast ? 'text-ink' : 'text-muted'}`}>{w.month}</span>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[10px] text-muted mt-1.5 text-right">단위: 천원</p>
+      </div>
+
+      <div className="px-4 pt-7">
+        <div className="rounded-xl border border-line bg-surface divide-y divide-line">
+          {[
+            { k: '가장 많이 버린 것', v: '시금치 · 4번' },
+            { k: '냉동으로 살린 것', v: '11번 · 32,400원' },
+            { k: '레시피로 소진한 것', v: '23가지' },
+          ].map((r) => (
+            <div key={r.k} className="flex items-center justify-between px-4 py-3.5">
+              <span className="text-[13px] text-muted">{r.k}</span>
+              <span className="text-[14px] font-bold tnum">{r.v}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted mt-3 leading-relaxed">
+          목표는 월 식비 10~20% 절감. 지금 추세면 <span className="font-bold text-ink">3개월 뒤 목표 안</span>에 들어옵니다.
+        </p>
+      </div>
+
+      <div className="h-6" />
+    </>
+  );
+}
+
+/* ==== SECTION:APP ==== */
+
+function NowasteApp() {
+  const [view, setView] = useState('home');
+  const [captureMode, setCaptureMode] = useState('shoot'); // shoot | fresh
+  const [items, setItems] = useState(SEED_ITEMS);
+  const [queue, setQueue] = useState(SEED_PENDING);
+  const [msg, setMsg] = useState('');
+  const nextId = useRef(900);
+
+  const say = useCallback((text) => {
+    setMsg(text);
+    clearTimeout(say._t);
+    say._t = setTimeout(() => setMsg(''), 2000);
+  }, []);
+
+  /* 구조 카드 — 급한 것을 냉동실로. 기한은 프리셋으로 재계산된다.
+     단, 얼리면 못 쓰는 재료(두부 등)는 건드리지 않는다. */
+  const freezeDoomed = () => {
+    const targets = items.filter(
+      (i) => daysLeft(i.expiry) <= 1 && i.storage !== 'freezer' && canFreeze(i.ingredient)
+    );
+    if (!targets.length) return;
+    setItems((prev) => prev.map((i) => {
+      if (!targets.some((t) => t.id === i.id)) return i;
+      const days = SHELF_LIFE[i.ingredient].freezer;
+      return { ...i, storage: 'freezer', expiry: addDays(TODAY, days), source: 'preset' };
+    }));
+    say(`${targets.map((t) => t.name).join(', ')} — 냉동실로 옮겼어요`);
+  };
+
+  /* 찍기 완료 → 확인 대기 큐로. 여기서 확인하지 않는다. */
+  const shotsDone = (shots) => {
+    const added = shots.map((s, k) => {
+      const id = ++nextId.current;
+      const gotDate = k % 3 !== 2; // 프로토타입: 3장 중 1장은 날짜를 못 읽은 셈 치기
+      const dd = 2 + ((k * 3) % 9);
+      return {
+        id, shot: s, ingredient: '우유', storage: 'fridge', confidence: gotDate ? 'high' : 'low',
+        read: {
+          name: gotDate ? '읽는 중이던 제품 ' + (k + 1) : '제품명 확인 필요',
+          capacity: 500, unit: 'g', price: 3900,
+          expiry: gotDate ? addDays(TODAY, dd) : null,
+        },
+        raw: gotDate
+          ? `제품 ${k + 1}\n소비기한 ${addDays(TODAY, dd).replace(/-/g, '.')}\n3,900원`
+          : `(글자가 흐려요)\n3,900원`,
+      };
+    });
+    setQueue((q) => [...q, ...added]);
+    setCaptureMode('shoot');
+    setView('home');
+    say(`${shots.length}장 담았어요 — 정리 끝나고 확인하세요`);
+  };
+
+  /* 라벨 없는 재료 — 바로 재고로. 확인 단계가 필요 없다. */
+  const addFresh = ({ ing, storage, expiry }) => {
+    setItems((prev) => [...prev, {
+      id: ++nextId.current, name: ing, ingredient: ing,
+      capacity: 1, remaining: 1, unit: '개', price: 3000,
+      storage, expiry, source: 'preset',
+    }]);
+    setCaptureMode('shoot');
+    setView('home');
+    say(`${ing} — ${fmtDate(expiry)}까지로 담았어요`);
+  };
+
+  const confirmCard = (card, expiry) => {
+    setItems((prev) => [...prev, {
+      id: ++nextId.current,
+      name: card.read.name, ingredient: card.ingredient,
+      capacity: card.read.capacity, remaining: card.read.capacity, unit: card.read.unit,
+      price: card.read.price, storage: card.storage || 'fridge',
+      expiry, source: card.read.expiry ? 'ocr' : 'preset',
+    }]);
+    setQueue((q) => q.filter((c) => c.id !== card.id));
+    say(`${card.read.name} — 냉장고에 넣었어요`);
+  };
+
+  const skipCard = (card) => {
+    setQueue((q) => q.filter((c) => c.id !== card.id));
+    say('버린 것으로 기록했어요');
+  };
+
+  const goto = (v) => { setCaptureMode('shoot'); setView(v); };
+
+  return (
+    <div className="phone">
+      <main className="flex-1 overflow-y-auto noscroll">
+        {view === 'home' && (
+          <HomeView items={items} pendingCount={queue.length} setView={goto}
+            onFreezeDoomed={freezeDoomed} toast={(it) => say(`${it.name} · ${it.remaining}${it.unit} 남음`)} />
+        )}
+        {view === 'capture' && captureMode === 'shoot' && (
+          <CaptureView onDone={shotsDone} setMode={setCaptureMode} />
+        )}
+        {view === 'capture' && captureMode === 'fresh' && (
+          <FreshView onAdd={addFresh} back={() => setCaptureMode('shoot')} />
+        )}
+        {view === 'confirm' && (
+          <ConfirmView queue={queue} onConfirm={confirmCard} onSkip={skipCard} setView={goto} />
+        )}
+        {view === 'cook'   && <CookView items={items} toast={say} />}
+        {view === 'report' && <ReportView />}
+      </main>
+
+      <Toast msg={msg} />
+      <BottomNav view={view} setView={goto} pendingCount={queue.length} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<NowasteApp />);
+</script>
+</body>
+</html>

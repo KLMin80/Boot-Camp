@@ -1,0 +1,2128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>남김없이</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🧺%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#16191A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="남김없이">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="description" content="장 본 것부터 다 먹는 것까지 — 버리는 음식과 식비를 함께 줄이는 냉장고 관리 앱">
+<meta property="og:title" content="남김없이">
+<meta property="og:description" content="냉장고 재료를 남김없이 소진해 음식물 쓰레기와 식비를 줄여요">
+<meta property="og:type" content="website">
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink: '#16191A', paper: '#F2F4F2', surface: '#FFFFFF', line: '#E3E5E3',
+          muted: '#8A918D', urgent: '#E23A2E', warn: '#E08A12', calm: '#5B7A6B', frost: '#4E86B4',
+        },
+        fontFamily: {
+          sans: ['Pretendard', 'system-ui', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+
+<!-- React 18 + Babel 7.x (8.x는 백지 화면 — DEV.md 함정 9) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
+<style>
+  :root { color-scheme: light; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: #DCDFDC;
+    font-family: 'Pretendard', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; color: #16191A;
+  }
+  #root { display: flex; justify-content: center; min-height: 100%; }
+  .phone {
+    width: 100%; max-width: 480px; min-height: 100vh; background: #F2F4F2;
+    position: relative; display: flex; flex-direction: column;
+  }
+  /* 폰(포터블·폴더블 포함)은 꽉 채우고, 데스크톱/태블릿에서만 가운데 폰 목업(테두리·그림자). */
+  @media (min-width: 680px) {
+    .phone { min-height: 880px; margin: 28px 0; border-radius: 26px; overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 24px 60px rgba(0,0,0,.14); }
+  }
+
+  /* 유통기한 도장 — 마트 라벨의 그것 */
+  .stamp {
+    font-family: 'IBM Plex Mono', monospace; font-weight: 700; letter-spacing: .02em;
+    border: 1.5px solid currentColor; padding: 2px 6px 1px; line-height: 1.1; display: inline-block;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  .tap { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  button:focus-visible, [role="button"]:focus-visible, input:focus-visible {
+    outline: 2px solid #16191A; outline-offset: 2px;
+  }
+  .noscroll::-webkit-scrollbar { display: none; }
+  .noscroll { scrollbar-width: none; }
+
+  @keyframes rise { from { opacity:0; transform: translateY(6px);} to { opacity:1; transform:none;} }
+  .rise { animation: rise .22s ease-out both; }
+  @keyframes pop { from { transform: scale(.9); opacity:0;} to { transform:none; opacity:1;} }
+  .pop { animation: pop .18s ease-out both; }
+  @keyframes slideup { from { transform: translateY(100%);} to { transform:none;} }
+  .slideup { animation: slideup .2s ease-out both; }
+  @media (prefers-reduced-motion: reduce) { .rise,.pop,.slideup { animation:none; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+/* ==== SECTION:API ====
+   프론트는 DB를 모른다. 오직 /api/* 만 안다.
+   나중에 DB를 바꾸든 OCR 엔진을 바꾸든 server.js 안에서만 고치면 된다. */
+
+const TOKEN_KEY = 'nowaste.token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
+
+class ApiError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
+async function api(method, url, body) {
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    // server.js 없이 Live Server로 열면 여기로 온다 (DEV.md 함정 8)
+    throw new ApiError(0, '서버에 연결할 수 없어요. `node server.js`로 띄운 주소로 접속했는지 확인해 주세요.');
+  }
+  if (res.status === 204) return null;
+
+  let data = null;
+  try { data = await res.json(); } catch { /* HTML이 돌아온 경우 */ }
+  if (!res.ok) throw new ApiError(res.status, data?.error || `요청이 실패했어요 (${res.status})`);
+  return data;
+}
+
+const API = {
+  signup: (email, password) => api('POST', '/api/auth/signup', { email, password }),
+  login:  (email, password) => api('POST', '/api/auth/login',  { email, password }),
+
+  shelfLife: () => api('GET', '/api/shelf-life'),
+
+  items:   (status) => api('GET', `/api/items${status ? `?status=${status}` : ''}`),
+  addItem: (body)   => api('POST', '/api/items', body),
+  parseLabel: (image, storage) => api('POST', '/api/label/parse', { image, storage }),
+  parseReceipt: (image) => api('POST', '/api/receipt/parse', { image }),
+  patch:   (id, b)  => api('PATCH', `/api/items/${id}`, b),
+  freeze:  (id)     => api('POST', `/api/items/${id}/freeze`),
+  receive: (id)     => api('POST', `/api/items/${id}/receive`),
+  close:   (id, outcome, amount) =>
+             api('POST', `/api/items/${id}/close`, { outcome, discarded_amount: amount ?? null }),
+  consume: (id, amount) => api('POST', `/api/items/${id}/consume`, { amount }),
+  remove:  (id)     => api('DELETE', `/api/items/${id}`),
+
+  waste:    (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
+  predict:  () => api('GET', '/api/stats/predict'),
+  recipes:  (tag, includeOrdered) => api('POST', '/api/recipes/suggest', { tag, includeOrdered }),
+  recipeByName: (dish, tag, includeOrdered) => api('POST', '/api/recipes/byname', { dish, tag, includeOrdered }),
+  recipesWith: (ingredients, tag) => api('POST', '/api/recipes/with', { ingredients, tag }),
+  cook: (uses) => api('POST', '/api/recipes/cook', { uses }),
+  buyLinks: (names) => api('POST', '/api/buy-links', { items: names }),
+};
+
+/* ── 날짜 · 표시 ──
+   서버가 days_left를 계산해서 준다. 브라우저에서 날짜 산수를 하지 않는다.
+   (toISOString()으로 다루면 KST 자정이 UTC 전날로 밀린다 — DEV.md 함정 6) */
+const won = (n) => Math.round(n || 0).toLocaleString('ko-KR');
+const fmtDate = (ymd) => { if (!ymd) return ''; const [, m, d] = ymd.split('-'); return `${+m}월 ${+d}일`; };
+
+const STORAGE = {
+  fridge:     { label: '냉장',      icon: '❄️' },
+  freezer:    { label: '냉동',      icon: '🧊' },
+  room:       { label: '실온',      icon: '🌡️' },
+  room_shade: { label: '실온·그늘', icon: '🌥️' },
+};
+
+// 재료별 기본 단위 추정 (고기·채소는 g, 우유는 ml, 낱개로 세는 건 개)
+const UNITS = ['g', 'ml', '개'];
+const COUNT_INGS = new Set(['양파', '사과', '배', '달걀', '바나나', '귤', '감자', '고구마', '토마토', '애호박', '오이', '파프리카']);
+const ML_INGS = new Set(['우유', '요거트']);
+const defaultUnit = (ing) => (ML_INGS.has(ing) ? 'ml' : COUNT_INGS.has(ing) ? '개' : 'g');
+const defaultAmount = (unit) => (unit === '개' ? 1 : unit === 'ml' ? 500 : 300);
+
+/* 업로드 크기만 줄인다. 2048px 유지 — 더 줄이면 작은 라벨 날짜를 놓친다(실측).
+   OpenAI가 내부적으로 어차피 축소하므로 토큰(비용)은 안 늘고, 업로드만 가벼워진다. */
+function fileToDataUrl(file, maxDim = 2048, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('이미지를 열 수 없어요')); };
+    img.src = url;
+  });
+}
+
+/* ===== 폰 뒤로가기 처리 =====
+   화면 전환·시트 열기마다 히스토리 항목을 쌓고, 뒤로가기는 앱 안에서 한 단계 되돌린다.
+   (안 하면 폰 뒤로가기가 웹앱을 통째로 떠나버린다) */
+const _backGuards = [];
+let _backSelf = false; // 우리가 부른 history.back() (그 popstate는 무시)
+
+function useBackGuard(active, onBack) {
+  const cb = useRef(onBack);
+  cb.current = onBack;
+  useEffect(() => {
+    if (!active) return;
+    // poppedByBack: 뒤로가기로 닫혔는지 표시(각 guard에 둔다).
+    // 상태변경→cleanup은 비동기라 전역 플래그로는 못 잡는다(한 칸 더 back 되는 버그).
+    const g = { poppedByBack: false, close: () => cb.current && cb.current() };
+    _backGuards.push(g);
+    try { history.pushState({ nw: _backGuards.length }, ''); } catch (e) {}
+    return () => {
+      const i = _backGuards.indexOf(g);
+      if (i >= 0) _backGuards.splice(i, 1);
+      // 정상 닫기(X버튼 등)면 우리가 쌓은 히스토리 항목을 소비. 뒤로가기로 닫혔으면 이미 소비됨.
+      if (!g.poppedByBack) { _backSelf = true; try { history.back(); } catch (e) { _backSelf = false; } }
+    };
+  }, [active]);
+}
+
+function useBackListener() {
+  useEffect(() => {
+    const onPop = () => {
+      if (_backSelf) { _backSelf = false; return; }     // 우리가 부른 back → 무시
+      const g = _backGuards[_backGuards.length - 1];
+      if (g) { g.poppedByBack = true; g.close(); }       // 닫기는 상태변경(비동기), 플래그는 지금 세팅
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+}
+
+/* ==== SECTION:PRIMITIVES ====
+   색은 오직 '남은 시간'에만 배정한다. 브랜드 색은 중립.
+   그래야 냉장고를 열었을 때 빨간 게 먼저 보인다. */
+
+const urgencyOf = (d) => (d <= 1 ? 'urgent' : d <= 4 ? 'warn' : 'calm');
+const TONE = {
+  urgent: { text:'text-urgent', bg:'bg-urgent', border:'border-urgent', soft:'bg-urgent/[.06]' },
+  warn:   { text:'text-warn',   bg:'bg-warn',   border:'border-warn',   soft:'bg-warn/[.07]' },
+  calm:   { text:'text-calm',   bg:'bg-calm',   border:'border-calm',   soft:'bg-calm/[.06]' },
+};
+
+function Stamp({ days, className = '' }) {
+  const label = days < 0 ? '지남' : days === 0 ? 'D-DAY' : `D-${days}`;
+  return <span className={`stamp text-[11px] ${TONE[urgencyOf(days)].text} ${className}`}>{label}</span>;
+}
+
+/* 덜어 쓴 것에만 뜬다. 가득 찬 게이지는 아무 말도 안 하면서 취소선처럼 보인다. */
+function Gauge({ remaining, capacity, tone }) {
+  if (remaining >= capacity) return null;
+  const pct = Math.max(6, Math.round((remaining / capacity) * 100));
+  return (
+    <div className="h-[3px] w-10 rounded-full bg-line overflow-hidden shrink-0">
+      <div className={`h-full ${TONE[tone].bg} opacity-70`} style={{ width: pct + '%' }} />
+    </div>
+  );
+}
+
+function ItemRow({ item, onTap }) {
+  const tone = urgencyOf(item.days_left);
+  return (
+    <button onClick={() => onTap(item)}
+      className="tap w-full flex items-center gap-3 py-3 pl-3 pr-4 bg-surface text-left active:bg-paper transition-colors">
+      <div className={`w-[3px] self-stretch rounded-full ${TONE[tone].bg} ${tone === 'calm' ? 'opacity-40' : ''}`} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="font-semibold truncate">{item.name}</span>
+          {item.storage === 'freezer' && <span className="text-[11px] shrink-0">🧊</span>}
+        </div>
+        <div className="tnum text-[13px] text-muted mt-0.5">
+          {item.remaining}{item.unit}
+          {item.remaining !== item.capacity && <span className="opacity-50"> / {item.capacity}{item.unit}</span>}
+        </div>
+      </div>
+      <Gauge remaining={item.remaining} capacity={item.capacity} tone={tone} />
+      <Stamp days={item.days_left} />
+    </button>
+  );
+}
+
+function TimeDivider({ label, count }) {
+  return (
+    <div className="flex items-center gap-2.5 px-4 pt-6 pb-2">
+      <span className="text-[12px] font-bold tracking-wide text-muted">{label}</span>
+      <span className="tnum text-[12px] text-muted/70">{count}</span>
+      <div className="flex-1 h-px bg-line" />
+    </div>
+  );
+}
+
+function Toast({ msg }) {
+  if (!msg) return null;
+  const bad = msg.tone === 'bad';
+  return (
+    <div className={`pop fixed bottom-24 left-1/2 -translate-x-1/2 z-50 max-w-[92%] text-[14px] font-medium px-4 py-2.5 rounded-2xl shadow-lg text-center ${
+      bad ? 'bg-urgent text-white' : 'bg-ink text-white'}`}>
+      {msg.text}
+    </div>
+  );
+}
+
+/* 하단 시트 — 재고를 탭하면 여기서 소진·폐기·냉동을 정한다 */
+function Sheet({ open, onClose, children }) {
+  useBackGuard(open, onClose); // 폰 뒤로가기로 시트 닫기 (모든 시트 공통)
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-ink/40" />
+      <div onClick={(e) => e.stopPropagation()}
+        className="slideup relative w-full max-w-[420px] bg-surface rounded-t-2xl p-4 pb-6">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Spinner({ label = '불러오는 중' }) {
+  return <p className="text-center text-[13px] text-muted py-16">{label}…</p>;
+}
+
+const NAV = [
+  { key:'home',    label:'냉장고', icon:'🧺' },
+  { key:'add',     label:'담기',   icon:'📷' },
+  { key:'confirm', label:'확인',   icon:'✓'  },
+  { key:'cook',    label:'요리',   icon:'🥘' },
+  { key:'report',  label:'리포트', icon:'📊' },
+];
+
+function BottomNav({ view, setView, pendingCount }) {
+  return (
+    <nav className="sticky bottom-0 z-30 grid grid-cols-5 bg-surface/95 backdrop-blur border-t border-line">
+      {NAV.map((n) => {
+        const on = view === n.key;
+        return (
+          <button key={n.key} onClick={() => setView(n.key)}
+            className="tap relative flex flex-col items-center gap-0.5 pt-2.5 pb-3 active:bg-paper">
+            <span className={`text-[17px] leading-none ${on ? '' : 'opacity-45 grayscale'}`}>{n.icon}</span>
+            <span className={`text-[10px] font-semibold ${on ? 'text-ink' : 'text-muted'}`}>{n.label}</span>
+            {n.key === 'confirm' && pendingCount > 0 && (
+              <span className="tnum absolute top-1.5 right-[26%] min-w-[15px] h-[15px] px-1 rounded-full bg-urgent text-white text-[10px] font-bold leading-[15px] text-center">
+                {pendingCount}
+              </span>
+            )}
+            {on && <span className="absolute top-0 inset-x-[26%] h-[2px] bg-ink rounded-full" />}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function Header({ title, sub, right }) {
+  return (
+    <header className="sticky top-0 z-30 bg-paper/92 backdrop-blur px-4 pt-4 pb-3 border-b border-line/70">
+      <div className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-extrabold tracking-[-.02em] leading-none">{title}</h1>
+          {sub && <p className="text-[12px] text-muted mt-1.5">{sub}</p>}
+        </div>
+        {right}
+      </div>
+    </header>
+  );
+}
+
+/* ==== SECTION:AUTH ==== */
+
+function AuthView({ onDone }) {
+  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [pw, setPw] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(''); setBusy(true);
+    try {
+      const r = mode === 'login' ? await API.login(email, pw) : await API.signup(email, pw);
+      setToken(r.token);
+      onDone(r.email);
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex-1 flex flex-col justify-center px-7 pb-16">
+      <div className="rise">
+        <h1 className="text-[34px] font-extrabold tracking-[-.03em] leading-none">남김없이</h1>
+        <p className="text-[14px] text-muted mt-3 leading-relaxed">
+          장 본 것부터 다 먹는 것까지.<br />
+          버리는 음식과 식비를 함께 줄입니다.
+        </p>
+      </div>
+
+      <form onSubmit={submit} className="mt-9 space-y-2.5">
+        <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+          placeholder="이메일" autoComplete="username"
+          className="w-full h-[52px] px-4 rounded-xl border-2 border-line bg-surface font-medium
+                     focus:border-ink outline-none transition-colors" />
+        <input type="password" required value={pw} onChange={(e) => setPw(e.target.value)}
+          placeholder="비밀번호 (6자 이상)" autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+          className="w-full h-[52px] px-4 rounded-xl border-2 border-line bg-surface font-medium
+                     focus:border-ink outline-none transition-colors" />
+
+        {err && <p className="text-[13px] text-urgent font-semibold pt-1">{err}</p>}
+
+        <button type="submit" disabled={busy}
+          className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold active:opacity-80 disabled:opacity-50">
+          {busy ? '잠시만요…' : mode === 'login' ? '로그인' : '가입하고 시작하기'}
+        </button>
+      </form>
+
+      <button onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setErr(''); }}
+        className="tap mt-5 text-[13px] text-muted font-semibold active:text-ink">
+        {mode === 'login' ? '처음이신가요? 가입하기' : '이미 계정이 있어요 → 로그인'}
+      </button>
+    </div>
+  );
+}
+
+/* ==== SECTION:HOME ==== */
+
+/* 이 앱의 signature.
+   다른 냉장고 앱은 "3개 임박"이라고 알리고 끝난다. 이건 살릴 방법을 준다. */
+function RescueCard({ doomed, presets, onFreezeAll, onCook, busy }) {
+  if (!doomed.length) {
+    return (
+      <div className="rise mx-4 mt-4 rounded-2xl border border-calm/30 bg-calm/[.06] px-5 py-6 text-center">
+        <div className="text-[30px] leading-none">🌿</div>
+        <p className="mt-2.5 font-bold text-calm">오늘은 버릴 게 없어요</p>
+        <p className="text-[13px] text-muted mt-1">급한 재료가 하나도 없습니다.</p>
+      </div>
+    );
+  }
+
+  // freezer 프리셋이 없는 재료 = 얼리면 못 쓰는 재료 (두부·감자·달걀…)
+  const canFreeze = (ing) => Boolean(presets[ing]?.freezer);
+  const freezable = doomed.filter((i) => canFreeze(i.ingredient));
+  const value = doomed.reduce((s, it) => s + Math.round((it.price || 0) * (it.remaining / it.capacity)), 0);
+
+  return (
+    <section className="rise mx-4 mt-4 rounded-2xl border-2 border-urgent bg-surface overflow-hidden shadow-[0_6px_24px_-10px_rgba(226,58,46,.5)]">
+      <div className="bg-urgent px-5 py-2.5 flex items-baseline justify-between">
+        <h2 className="text-white font-extrabold text-[15px] tracking-[-.01em]">오늘 안 쓰면 버려요</h2>
+        {value > 0 && <span className="tnum text-white/85 text-[12px] font-semibold">{won(value)}원어치</span>}
+      </div>
+
+      <ul className="px-5 pt-3.5 pb-1">
+        {doomed.map((it) => (
+          <li key={it.id} className="flex items-center gap-2 py-1.5">
+            <span className="font-bold truncate">{it.name}</span>
+            <span className="tnum text-[13px] text-muted shrink-0">{it.remaining}{it.unit}</span>
+            {canFreeze(it.ingredient) && <span className="text-[11px] shrink-0" title="얼려도 괜찮아요">🧊</span>}
+            <div className="flex-1 border-b border-dotted border-line self-end mb-1" />
+            <Stamp days={it.days_left} />
+          </li>
+        ))}
+      </ul>
+
+      {freezable.length < doomed.length && (
+        <p className="px-5 pb-1 text-[11px] text-muted leading-relaxed">
+          🧊 없는 건 얼리면 못 써요. <span className="font-semibold text-ink">오늘 요리로 쓰는 수밖에 없습니다.</span>
+        </p>
+      )}
+
+      <div className="grid grid-cols-2 gap-2 p-3 pt-2.5">
+        <button onClick={() => onFreezeAll(freezable)} disabled={!freezable.length || busy}
+          className={`tap flex items-center justify-center gap-1.5 h-[52px] rounded-xl border-2 font-bold transition-colors ${
+            freezable.length && !busy
+              ? 'border-frost text-frost active:bg-frost/10'
+              : 'border-line text-muted/40 cursor-not-allowed'
+          }`}>
+          <span className="text-[17px]">🧊</span>
+          냉동실로{freezable.length > 0 && freezable.length < doomed.length ? ` (${freezable.length})` : ''}
+        </button>
+        <button onClick={onCook}
+          className="tap flex items-center justify-center gap-1.5 h-[52px] rounded-xl bg-ink text-white font-bold active:opacity-80">
+          <span className="text-[17px]">🥘</span> 오늘 요리로
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* 재고를 탭하면 뜨는 시트. 여기서 소진·폐기·냉동이 기록된다. */
+function ItemSheet({ item, presets, onClose, onAction, busy }) {
+  const [showUse, setShowUse] = useState(false);
+  const [amt, setAmt] = useState('');
+  useEffect(() => { setShowUse(false); setAmt(''); }, [item?.id]);
+  if (!item) return null;
+  const freezable = Boolean(presets[item.ingredient]?.freezer) && item.storage !== 'freezer';
+  const worth = Math.round((item.price || 0) * (item.remaining / item.capacity));
+  // 빠른 버튼: 남은 양 기준 비율 → 숫자 칸에 채워 넣고, '빼기'로 확정
+  const fillFrac = (frac) => {
+    const v = item.remaining * frac;
+    setAmt(String(item.unit === '개' ? Math.max(1, Math.round(v)) : Math.round(v)));
+  };
+  const doUse = () => {
+    const n = Number(amt);
+    if (n > 0) { onAction('consume', item, n); setShowUse(false); setAmt(''); }
+  };
+
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-[19px] font-extrabold truncate">{item.name}</h3>
+          <p className="tnum text-[13px] text-muted mt-1">
+            {item.remaining}{item.unit} 남음 · {STORAGE[item.storage].icon} {STORAGE[item.storage].label}
+            {worth > 0 && <span> · {won(worth)}원어치</span>}
+          </p>
+        </div>
+        <Stamp days={item.days_left} />
+      </div>
+
+      <p className="text-[12px] text-muted mt-2">
+        {fmtDate(item.expiry_date)}까지
+        {item.expiry_source === 'preset' && <span className="ml-1 opacity-70">(보관기간으로 추정한 날짜예요)</span>}
+      </p>
+
+      <div className="grid grid-cols-2 gap-2 mt-5">
+        <button disabled={busy} onClick={() => onAction('eaten', item)}
+          className="tap h-[52px] rounded-xl bg-ink text-white font-bold active:opacity-80 disabled:opacity-50">
+          다 먹었어요
+        </button>
+        <button disabled={busy} onClick={() => onAction('discarded', item)}
+          className="tap h-[52px] rounded-xl border-2 border-urgent text-urgent font-bold active:bg-urgent/10 disabled:opacity-50">
+          버렸어요
+        </button>
+      </div>
+
+      {/* 부분 차감 — 앱 없이 요리해서 일부만 썼을 때 남은 양을 맞춘다 */}
+      {!showUse ? (
+        <button disabled={busy} onClick={() => setShowUse(true)}
+          className="tap w-full h-[50px] rounded-xl border-2 border-line font-bold mt-2 active:bg-paper disabled:opacity-50">
+          ✏️ 조금 썼어요
+        </button>
+      ) : (
+        <div className="rounded-xl border-2 border-line p-3 mt-2">
+          <p className="text-[12px] font-bold text-muted mb-2">
+            얼마나 썼어요? <span className="font-normal opacity-80">— 남은 {item.remaining}{item.unit} 중</span>
+          </p>
+          <div className="grid grid-cols-4 gap-2 mb-2">
+            {[['¼', 0.25], ['½', 0.5], ['¾', 0.75], ['전량', 1]].map(([lbl, frac]) => (
+              <button key={lbl} onClick={() => fillFrac(frac)}
+                className="tap h-[42px] rounded-lg border-2 border-line font-bold text-[14px] active:bg-paper">
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 flex items-center rounded-lg border-2 border-line focus-within:border-ink px-3 h-[46px]">
+              <input type="number" min="0" inputMode="decimal" value={amt} autoFocus
+                onChange={(e) => setAmt(e.target.value)} placeholder="직접 입력"
+                className="tnum w-full bg-transparent font-semibold outline-none" />
+              <span className="text-[13px] text-muted font-semibold ml-1">{item.unit}</span>
+            </div>
+            <button disabled={busy || !(Number(amt) > 0)} onClick={doUse}
+              className="tap h-[46px] px-5 rounded-lg bg-ink text-white font-bold active:opacity-80 disabled:opacity-40">
+              빼기
+            </button>
+          </div>
+        </div>
+      )}
+
+      {freezable && (
+        <button disabled={busy} onClick={() => onAction('freeze', item)}
+          className="tap w-full h-[50px] rounded-xl border-2 border-frost text-frost font-bold mt-2 active:bg-frost/10 disabled:opacity-50">
+          🧊 냉동실로 옮기기
+        </button>
+      )}
+      {!freezable && item.storage !== 'freezer' && (
+        <p className="text-[12px] text-muted text-center mt-3">
+          {item.ingredient}은(는) 얼리면 못 써요.
+        </p>
+      )}
+
+      <button disabled={busy} onClick={() => onAction('delete', item)}
+        className="tap w-full h-[44px] text-[13px] text-muted font-semibold mt-2 active:text-ink disabled:opacity-50">
+        기록에서 지우기
+      </button>
+    </Sheet>
+  );
+}
+
+const TABS = [
+  { key: 'all',     label: '전체' },
+  { key: 'fridge',  label: '냉장' },
+  { key: 'freezer', label: '냉동' },
+  { key: 'room',    label: '실온' },
+];
+
+function HomeView({ items, ordered = [], loading, presets, pendingCount, setView, onFreezeAll, onItemAction, onReceive, busy, email, onLogout, toast, onAddOrdered }) {
+  const [tab, setTab] = useState('all');
+  const [sheet, setSheet] = useState(null);
+  const [predict, setPredict] = useState([]);   // 소비 예측: 곧 떨어질 재료
+  const [buyData, setBuyData] = useState(null);
+
+  const doomed = useMemo(
+    () => items.filter((i) => i.days_left <= 1 && i.storage !== 'freezer'),
+    [items]
+  );
+
+  // 부분 차감으로 남은 양이 바뀔 때마다 예측 갱신
+  useEffect(() => { API.predict().then((r) => setPredict(r.items || [])).catch(() => {}); }, [items]);
+
+  const buyOne = async (ing) => {
+    try { const d = await API.buyLinks([ing]); setBuyData({ items: [ing], ...d }); }
+    catch (e) { toast?.(e.message, 'bad'); }
+  };
+
+  const shown = useMemo(() => {
+    if (tab === 'all') return items;
+    if (tab === 'room') return items.filter((i) => i.storage === 'room' || i.storage === 'room_shade');
+    return items.filter((i) => i.storage === tab);
+  }, [items, tab]);
+
+  const groups = [
+    { label: '이번 주 안에', test: (d) => d <= 7 },
+    { label: '여유 있어요',  test: (d) => d > 7 },
+  ];
+
+  const act = async (kind, item, extra) => {
+    setSheet(null);
+    await onItemAction(kind, item, extra);
+  };
+
+  return (
+    <>
+      <Header
+        title="냉장고"
+        sub={<span>{items.length}가지 · <button onClick={onLogout} className="underline underline-offset-2 active:text-ink">{email}</button></span>}
+        right={pendingCount > 0 ? (
+          <button onClick={() => setView('confirm')}
+            className="tap shrink-0 flex items-center gap-1.5 rounded-full bg-ink text-white pl-3 pr-2.5 py-1.5 active:opacity-80">
+            <span className="text-[12px] font-bold">확인할 것</span>
+            <span className="tnum text-[12px] font-bold bg-white text-ink rounded-full w-[18px] h-[18px] leading-[18px] text-center">{pendingCount}</span>
+          </button>
+        ) : null}
+      />
+
+      {loading ? <Spinner /> : (
+        <>
+          <RescueCard doomed={doomed} presets={presets} busy={busy}
+            onFreezeAll={onFreezeAll} onCook={() => setView('cook')} />
+
+          {/* 곧 떨어져요 — 소비 속도로 예측. 상하기 전이 아니라 '떨어지기 전에' 미리 담기. */}
+          {predict.length > 0 && (
+            <section className="rise mx-4 mt-4 rounded-2xl border border-warn/40 bg-warn/[.06] overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+                <span className="text-[13px]">📉</span>
+                <span className="text-[13px] font-bold text-warn">곧 떨어져요</span>
+                <span className="text-[11px] text-muted">쓰는 속도로 보면</span>
+              </div>
+              <div className="divide-y divide-warn/15">
+                {predict.map((p) => (
+                  <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold truncate">{p.name}</p>
+                      <p className="tnum text-[12px] text-muted">
+                        {p.days_to_empty <= 0 ? '오늘내일 다 써요' : `약 ${p.days_to_empty}일 뒤 다 써요`} · {p.remaining}{p.unit} 남음
+                      </p>
+                    </div>
+                    <button disabled={busy} onClick={() => buyOne(p.ingredient)}
+                      className="tap text-[12px] font-bold text-white bg-warn px-3 py-1.5 rounded-lg active:opacity-80 disabled:opacity-50 shrink-0">
+                      미리 담기
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* 곧 도착 — 주문했지만 아직 안 온 재료. 도착하면 냉장고로. */}
+          {ordered.length > 0 && (
+            <section className="mx-4 mt-4 rounded-2xl border border-frost/40 bg-frost/[.05] overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+                <span className="text-[13px]">🛒</span>
+                <span className="text-[13px] font-bold text-frost">곧 도착</span>
+                <span className="tnum text-[12px] text-muted">{ordered.length}</span>
+              </div>
+              <div className="divide-y divide-frost/15">
+                {ordered.map((it) => (
+                  <div key={it.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <span className="font-semibold flex-1 truncate">{it.name}</span>
+                    <button disabled={busy} onClick={() => onReceive(it)}
+                      className="tap text-[12px] font-bold text-white bg-frost px-3 py-1.5 rounded-lg active:opacity-80 disabled:opacity-50">
+                      받았어요
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted px-4 py-2">받으면 냉장고로 옮기고 유통기한이 잡혀요. 요리 화면에서 '주문분 포함'을 켜면 미리 레시피에 반영돼요.</p>
+            </section>
+          )}
+
+          {items.length > 0 && (
+            <div className="flex gap-1.5 px-4 pt-5 pb-1 overflow-x-auto noscroll">
+              {TABS.map((t) => (
+                <button key={t.key} onClick={() => setTab(t.key)}
+                  className={`tap shrink-0 px-3.5 h-8 rounded-full text-[13px] font-semibold border transition-colors ${
+                    tab === t.key ? 'bg-ink text-white border-ink' : 'bg-surface text-muted border-line active:bg-paper'
+                  }`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {groups.map((g) => {
+            const list = shown.filter((i) => g.test(i.days_left));
+            if (!list.length) return null;
+            return (
+              <div key={g.label}>
+                <TimeDivider label={g.label} count={list.length} />
+                <div className="mx-4 rounded-xl overflow-hidden border border-line divide-y divide-line">
+                  {list.map((it) => <ItemRow key={it.id} item={it} onTap={setSheet} />)}
+                </div>
+              </div>
+            );
+          })}
+
+          {items.length === 0 && (
+            <div className="rise text-center px-8 py-14">
+              <p className="text-[14px] text-muted leading-relaxed">
+                냉장고가 비어 있어요.<br />장 본 걸 담아볼까요?
+              </p>
+              <button onClick={() => setView('add')}
+                className="tap mt-5 h-[50px] px-6 rounded-xl bg-ink text-white font-bold active:opacity-80">
+                담으러 가기
+              </button>
+            </div>
+          )}
+
+          {items.length > 0 && shown.length === 0 && (
+            <p className="text-center text-muted text-[14px] py-14">여기엔 아직 아무것도 없어요.</p>
+          )}
+        </>
+      )}
+
+      <div className="h-6" />
+      <ItemSheet item={sheet} presets={presets} busy={busy} onClose={() => setSheet(null)} onAction={act} />
+      <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
+        onPick={(url, market, ing) => { window.open(url, '_blank', 'noopener'); toast?.(`${market}에서 ${ing} 찾는 중`); }} />
+    </>
+  );
+}
+
+/* ==== SECTION:ADD ==== */
+
+function AddView({ setMode }) {
+  return (
+    <>
+      <Header title="담기" sub="장 본 걸 냉장고에 넣습니다" />
+
+      <div className="px-4 pt-5 space-y-2.5">
+        <button onClick={() => setMode('receipt')}
+          className="tap w-full rounded-2xl border-2 border-calm bg-calm/[.06] p-4 text-left active:bg-paper transition-colors">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-surface grid place-items-center text-[21px]">🧾</div>
+            <div className="flex-1">
+              <p className="font-bold">영수증으로 한 번에</p>
+              <p className="text-[12px] text-muted mt-0.5">장 본 영수증을 찍으면 품목·가격을 한꺼번에 담아요</p>
+            </div>
+            <span className="text-calm font-bold text-[11px] border border-calm rounded-full px-2 py-0.5">추천</span>
+          </div>
+        </button>
+
+        <button onClick={() => setMode('photo')}
+          className="tap w-full rounded-2xl border-2 border-ink bg-surface p-4 text-left active:bg-paper transition-colors">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-paper grid place-items-center text-[21px]">📷</div>
+            <div className="flex-1">
+              <p className="font-bold">사진으로 담기</p>
+              <p className="text-[12px] text-muted mt-0.5">라벨을 찍으면 제품명·용량·유통기한을 읽어옵니다</p>
+            </div>
+            <span className="text-muted">→</span>
+          </div>
+        </button>
+
+        <button onClick={() => setMode('fresh')}
+          className="tap w-full rounded-2xl border-2 border-ink bg-surface p-4 text-left active:bg-paper transition-colors">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-paper grid place-items-center text-[21px]">🥬</div>
+            <div className="flex-1">
+              <p className="font-bold">재료로 담기</p>
+              <p className="text-[12px] text-muted mt-0.5">양파, 사과처럼 라벨 없는 것 — 두 번만 고르면 끝</p>
+            </div>
+            <span className="text-muted">→</span>
+          </div>
+        </button>
+
+        <button onClick={() => setMode('manual')}
+          className="tap w-full rounded-2xl border border-line bg-surface p-4 text-left active:bg-paper transition-colors">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-paper grid place-items-center text-[21px]">✍️</div>
+            <div className="flex-1">
+              <p className="font-bold">직접 입력</p>
+              <p className="text-[12px] text-muted mt-0.5">라벨을 보고 손으로 적기</p>
+            </div>
+            <span className="text-muted">→</span>
+          </div>
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* 사진으로 담기 — 라벨을 찍으면(또는 골라 올리면) GPT가 읽어 확인 대기에 쌓는다.
+   찍기만 하고 확인은 나중에. 카메라는 file input(capture)로 — 안정적이고 HTTPS 없이도 됨. */
+function PhotoCaptureView({ onDone, back }) {
+  const camRef = useRef();   // 카메라(capture) / 갤러리(capture 없음) 분리
+  const galRef = useRef();
+  const [storage, setStorage] = useState('fridge');
+  const [rows, setRows] = useState([]); // { name, status:'reading'|'done'|'fail', read }
+  const [running, setRunning] = useState(false);
+
+  const onFiles = async (e) => {
+    const files = [...(e.target.files || [])].slice(0, 12);
+    e.target.value = ''; // 같은 파일 다시 고를 수 있게
+    if (!files.length) return;
+    setRunning(true);
+    const start = rows.length;
+    setRows((r) => [...r, ...files.map((f) => ({ name: f.name, status: 'reading' }))]);
+
+    let ok = 0;
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const dataUrl = await fileToDataUrl(files[i]);
+        const { item } = await API.parseLabel(dataUrl, storage);
+        setRows((r) => r.map((x, idx) => idx === start + i ? { ...x, status: 'done', read: item } : x));
+        ok++;
+      } catch (ex) {
+        setRows((r) => r.map((x, idx) => idx === start + i ? { ...x, status: 'fail', err: ex.message } : x));
+      }
+    }
+    setRunning(false);
+    if (ok) onDone(ok); // 확인 대기 갱신 + 안내
+  };
+
+  const doneCount = rows.filter((r) => r.status === 'done').length;
+
+  return (
+    <>
+      <Header title="사진으로 담기" sub="라벨을 찍기만 하세요. 확인은 나중에."
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onFiles} className="hidden" />
+      {/* 갤러리: multiple을 빼야 안드로이드가 파일매니저 대신 '갤러리(사진)'를 연다. 여러 장은 다시 눌러 추가. */}
+      <input ref={galRef} type="file" accept="image/*" onChange={onFiles} className="hidden" />
+
+      <div className="px-4 pt-5">
+        {/* 보관 위치 — 기본 냉장, 확인 화면에서 바꿀 수 있음 */}
+        <p className="text-[13px] font-bold mb-2">어디에 넣을 거예요?</p>
+        <div className="grid grid-cols-4 gap-2 mb-5">
+          {Object.entries(STORAGE).map(([key, s]) => (
+            <button key={key} onClick={() => setStorage(key)}
+              className={`tap h-[62px] rounded-xl border-2 grid place-items-center gap-0.5 transition-colors ${
+                storage === key ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+              }`}>
+              <span className="text-[18px] leading-none">{s.icon}</span>
+              <span className="text-[10px] font-bold">{s.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <button onClick={() => camRef.current?.click()} disabled={running}
+          className="tap w-full h-[120px] rounded-2xl border-2 border-dashed border-ink/40 bg-surface grid place-items-center active:bg-paper disabled:opacity-50">
+          <div className="text-center">
+            <div className="text-[32px] leading-none">📷</div>
+            <p className="font-bold mt-2">{running ? '읽는 중…' : '라벨 사진 찍기'}</p>
+            <p className="text-[11px] text-muted mt-0.5">한 장씩 · 제품명·용량·유통기한이 보이게</p>
+          </div>
+        </button>
+        <button onClick={() => galRef.current?.click()} disabled={running}
+          className="tap w-full h-11 rounded-xl border-2 border-line font-bold text-[14px] mt-2 active:bg-paper disabled:opacity-50">
+          🖼 갤러리에서 고르기
+        </button>
+
+        {/* 촬영 안내 — OCR 실측에서 나온 그대로 */}
+        <div className="mt-3 rounded-xl bg-paper px-3.5 py-3">
+          <p className="text-[12px] font-bold mb-1">잘 읽히게 찍는 법</p>
+          <ul className="text-[12px] text-muted space-y-0.5">
+            <li>· 유통기한 글자가 화면을 채우게 <span className="font-semibold text-ink">가까이</span></li>
+            <li>· 빛 반사 피하고 <span className="font-semibold text-ink">또렷하게</span> (도장이 흐리면 놓쳐요)</li>
+            <li>· 연도가 없어도 괜찮아요 — 앱이 채웁니다</li>
+          </ul>
+        </div>
+      </div>
+
+      {rows.length > 0 && (
+        <div className="px-4 pt-5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[13px] font-bold">읽은 결과 <span className="tnum text-muted">{doneCount}/{rows.length}</span></p>
+            {doneCount > 0 && !running && (
+              <button onClick={() => onDone(0, true)} className="tap text-[13px] font-bold text-ink underline underline-offset-2">
+                확인하러 가기 →
+              </button>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            {rows.map((r, i) => (
+              <div key={i} className="flex items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-2.5">
+                <span className="text-[15px]">
+                  {r.status === 'reading' ? '⏳' : r.status === 'done' ? '✓' : '✕'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  {r.status === 'done' ? (
+                    <>
+                      <p className="text-[14px] font-semibold truncate">{r.read.name}</p>
+                      <p className="tnum text-[12px] text-muted">
+                        {r.read.capacity}{r.read.unit} · {r.read.expiry_date.replace(/-/g, '.')}
+                        {r.read.expiry_source === 'preset' && <span className="text-warn"> · 날짜 확인 필요</span>}
+                      </p>
+                    </>
+                  ) : r.status === 'fail' ? (
+                    <p className="text-[13px] text-urgent">못 읽었어요 — 다시 찍어주세요</p>
+                  ) : (
+                    <p className="text-[13px] text-muted">읽는 중…</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="h-8" />
+    </>
+  );
+}
+
+/* 영수증으로 한 번에 — 사진/갤러리 → OCR로 품목·가격을 여러 건 담는다.
+   영수증엔 유통기한이 없으니 임시로 잡아두고, 확인 화면에서 사진/수기로 보충한다. */
+function ReceiptCaptureView({ onDone, back }) {
+  const camRef = useRef();   // 카메라(capture) / 갤러리(capture 없음) 분리 — capture가 있으면 모바일서 갤러리를 못 고름
+  const galRef = useRef();
+  const [status, setStatus] = useState('idle'); // idle | reading | done | fail
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState('');
+
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setStatus('reading'); setErr('');
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const r = await API.parseReceipt(dataUrl);
+      setResult(r); setStatus('done');
+    } catch (ex) { setErr(ex.message); setStatus('fail'); }
+  };
+
+  return (
+    <>
+      <Header title="영수증으로 한 번에" sub="찍으면 품목·가격을 한꺼번에 담아요"
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" />
+      <input ref={galRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
+
+      <div className="px-4 pt-5">
+        {(status === 'idle' || status === 'fail') && (
+          <>
+            <div className="rounded-2xl border-2 border-dashed border-line bg-surface py-8 grid place-items-center gap-1.5">
+              <span className="text-[40px] leading-none">🧾</span>
+              <span className="font-bold">영수증을 담아요</span>
+              <span className="text-[12px] text-muted">밝은 곳에서 품목이 다 보이게</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5 mt-3">
+              <button onClick={() => camRef.current?.click()}
+                className="tap h-[52px] rounded-xl bg-ink text-white font-bold active:opacity-80">📷 사진 찍기</button>
+              <button onClick={() => galRef.current?.click()}
+                className="tap h-[52px] rounded-xl border-2 border-ink font-bold active:bg-paper">🖼 갤러리에서</button>
+            </div>
+            {status === 'fail' && <p className="text-[13px] text-urgent font-semibold mt-3 text-center">{err}</p>}
+            <div className="rounded-xl bg-paper border border-line p-3.5 mt-4">
+              <p className="text-[12px] text-muted leading-relaxed">
+                가격·품목은 영수증에서 자동으로 가져와요. <span className="font-semibold text-ink">유통기한만</span> 담은 뒤
+                확인 화면에서 사진이나 손으로 채우면 됩니다.
+              </p>
+            </div>
+          </>
+        )}
+
+        {status === 'reading' && (
+          <div className="rise flex flex-col items-center py-16">
+            <Spinner />
+            <p className="text-[14px] text-muted mt-3">영수증에서 품목·가격을 읽는 중…</p>
+          </div>
+        )}
+
+        {status === 'done' && result && (
+          <div className="rise">
+            <p className="font-extrabold text-[18px]">{result.count}개 담았어요 🧺</p>
+            <p className="text-[12px] text-muted mt-1 mb-3">유통기한만 확인 화면에서 채워주세요.</p>
+            <div className="rounded-xl border border-line bg-surface divide-y divide-line max-h-[46vh] overflow-y-auto">
+              {result.items.map((it) => (
+                <div key={it.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <span className="font-semibold truncate">{it.name}</span>
+                  <span className="tnum text-[13px] text-muted shrink-0">{it.price != null ? `${won(it.price)}원` : '가격 확인'}</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => onDone(result.count, true)}
+              className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-4 active:opacity-80">
+              유통기한 확인하러 가기 →
+            </button>
+            <button onClick={() => { setStatus('idle'); setResult(null); }}
+              className="tap w-full h-[46px] rounded-xl border-2 border-line font-semibold mt-2 active:bg-paper">
+              영수증 더 담기
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* 라벨 없는 신선식품 — 재료 탭 + 보관방법 탭, 두 번이면 유통기한까지 잡힌다.
+   보관방법 목록은 서버의 프리셋에서 온다. 없는 조합은 아예 못 고른다. */
+function FreshView({ presets, onAdd, back, busy }) {
+  const [ing, setIng] = useState(null);
+  const [storage, setStorage] = useState(null);
+  const [unit, setUnit] = useState('개');
+  const [amount, setAmount] = useState(1);
+  const [price, setPrice] = useState('');
+
+  const names = useMemo(() => Object.keys(presets), [presets]);
+  const [q, setQ] = useState('');
+  const shown = useMemo(
+    () => (q ? names.filter((n) => n.includes(q)) : names).slice(0, 24),
+    [names, q]
+  );
+
+  const options = ing ? Object.keys(presets[ing] || {}) : [];
+  const days = ing && storage ? presets[ing]?.[storage] : null;
+
+  const pick = (v) => {
+    setIng(v);
+    const opts = Object.keys(presets[v] || {});
+    setStorage(opts.length === 1 ? opts[0] : null);
+    const u = defaultUnit(v);
+    setUnit(u);
+    setAmount(defaultAmount(u));
+  };
+  const pickUnit = (u) => { setUnit(u); setAmount(defaultAmount(u)); };
+
+  return (
+    <>
+      <Header title="재료로 담기" sub="두 번만 고르면 유통기한까지 잡아드려요"
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <div className="px-4 pt-5">
+        <p className="text-[13px] font-bold mb-2.5">어떤 재료예요?</p>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="재료 찾기"
+          className="w-full h-11 px-3.5 mb-2.5 rounded-xl border-2 border-line bg-surface text-[14px] font-medium focus:border-ink outline-none" />
+        <div className="flex flex-wrap gap-2">
+          {shown.map((v) => (
+            <button key={v} onClick={() => pick(v)}
+              className={`tap px-4 h-11 rounded-full text-[15px] font-semibold border-2 transition-colors ${
+                ing === v ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+              }`}>
+              {v}
+            </button>
+          ))}
+          {!shown.length && <p className="text-[13px] text-muted py-2">그런 재료는 아직 없어요.</p>}
+        </div>
+      </div>
+
+      {ing && (
+        <div className="rise px-4 pt-6">
+          <p className="text-[13px] font-bold mb-2.5">어디에 둘 거예요?</p>
+          <div className="grid grid-cols-4 gap-2">
+            {Object.entries(STORAGE).map(([key, s]) => {
+              const ok = options.includes(key);
+              const on = storage === key;
+              return (
+                <button key={key} disabled={!ok} onClick={() => setStorage(key)}
+                  className={`tap h-[76px] rounded-xl border-2 grid place-items-center gap-1 transition-colors ${
+                    on ? 'bg-ink text-white border-ink'
+                       : ok ? 'bg-surface border-line active:bg-paper'
+                            : 'bg-paper border-transparent opacity-30 cursor-not-allowed'
+                  }`}>
+                  <span className="text-[21px] leading-none">{s.icon}</span>
+                  <span className="text-[11px] font-bold">{s.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-muted mt-2">
+            흐린 건 {ing}에 권하지 않는 보관법이에요.
+            {!options.includes('freezer') && ' 냉동은 안 돼요 — 얼리면 못 씁니다.'}
+          </p>
+        </div>
+      )}
+
+      {days != null && (
+        <div className="rise px-4 pt-6">
+          <p className="text-[13px] font-bold mb-2">얼마나요?</p>
+          <div className="flex items-center gap-2 mb-2">
+            {unit === '개' ? (
+              <>
+                <button onClick={() => setAmount((n) => Math.max(1, n - 1))}
+                  className="tap w-11 h-11 rounded-lg border-2 border-line font-bold active:bg-paper">−</button>
+                <span className="tnum w-12 text-center font-bold text-[17px]">{amount}</span>
+                <button onClick={() => setAmount((n) => n + 1)}
+                  className="tap w-11 h-11 rounded-lg border-2 border-line font-bold active:bg-paper">+</button>
+              </>
+            ) : (
+              <input type="number" min="1" value={amount}
+                onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
+                className="tnum w-24 h-11 px-3 rounded-lg border-2 border-line bg-surface font-bold text-[16px] focus:border-ink outline-none" />
+            )}
+            <div className="flex gap-1.5 ml-auto">
+              {UNITS.map((u) => (
+                <button key={u} onClick={() => pickUnit(u)}
+                  className={`tap w-12 h-11 rounded-lg border-2 text-[14px] font-bold transition-colors ${
+                    unit === u ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+                  }`}>{u}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-[13px] font-bold mb-2">얼마 주고 샀어요? <span className="font-normal text-muted">— 선택, 아낀 돈 리포트에 쓰여요</span></p>
+            <div className="flex items-center rounded-lg border-2 border-line focus-within:border-ink px-3 h-11 w-44">
+              <input type="number" min="0" inputMode="numeric" value={price}
+                onChange={(e) => setPrice(e.target.value)} placeholder="3150"
+                className="tnum w-full bg-transparent font-semibold outline-none" />
+              <span className="text-[13px] text-muted font-semibold ml-1">원</span>
+            </div>
+          </div>
+
+          <div className="rounded-xl border-2 border-calm bg-calm/[.06] px-4 py-4 flex items-center gap-3 mt-3">
+            <span className="text-[26px] leading-none">{STORAGE[storage].icon}</span>
+            <div className="flex-1">
+              <p className="font-extrabold tnum">{ing} {amount}{unit} · {STORAGE[storage].label}</p>
+              <p className="tnum text-[13px] text-calm font-semibold mt-0.5">
+                {days}일 뒤까지 <span className="text-muted font-normal">(오늘 담으면)</span>
+              </p>
+            </div>
+            <Stamp days={days} />
+          </div>
+
+          <button disabled={busy}
+            onClick={() => onAdd({ name: ing, ingredient: ing, capacity: amount, remaining: amount, unit, storage, price: price ? Number(price) : null })}
+            className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-3 active:opacity-80 disabled:opacity-50">
+            {busy ? '담는 중…' : '담기'}
+          </button>
+        </div>
+      )}
+
+      <div className="h-8" />
+    </>
+  );
+}
+
+/* 직접 입력 — 라벨을 보고 손으로. Phase 3에서 OCR이 이 폼을 채워줄 것이다. */
+function ManualView({ onAdd, back, busy }) {
+  const [f, setF] = useState({
+    name: '', ingredient: '', capacity: '', unit: 'g', price: '', storage: 'fridge', expiry_date: '',
+  });
+  const set = (k) => (e) => setF((v) => ({ ...v, [k]: e.target.value }));
+
+  const submit = (e) => {
+    e.preventDefault();
+    onAdd({
+      name: f.name.trim(),
+      ingredient: (f.ingredient || f.name).trim(),
+      capacity: Number(f.capacity) || 1,
+      remaining: Number(f.capacity) || 1,
+      unit: f.unit,
+      price: f.price ? Number(f.price) : null,
+      storage: f.storage,
+      expiry_date: f.expiry_date || null,          // 비우면 서버가 프리셋으로 계산한다
+      expiry_source: f.expiry_date ? 'manual' : 'preset',
+    });
+  };
+
+  const L = ({ children }) => <label className="block text-[12px] font-bold text-muted mb-1.5">{children}</label>;
+  const cls = 'w-full h-[50px] px-3.5 rounded-xl border-2 border-line bg-surface font-medium focus:border-ink outline-none transition-colors';
+
+  return (
+    <>
+      <Header title="직접 입력" sub="라벨을 보고 적어주세요"
+        right={<button onClick={back} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>} />
+
+      <form onSubmit={submit} className="px-4 pt-5 space-y-3.5">
+        <div>
+          <L>제품명</L>
+          <input required value={f.name} onChange={set('name')} placeholder="서울우유 1A 흰우유" className={cls} />
+        </div>
+        <div>
+          <L>재료명 <span className="font-normal opacity-70">— 레시피 매칭에 쓰여요. 비우면 제품명으로.</span></L>
+          <input value={f.ingredient} onChange={set('ingredient')} placeholder="우유" className={cls} />
+        </div>
+
+        <div className="grid grid-cols-[1fr_88px] gap-2">
+          <div>
+            <L>용량</L>
+            <input required type="number" min="1" value={f.capacity} onChange={set('capacity')} placeholder="1000" className={`${cls} tnum`} />
+          </div>
+          <div>
+            <L>단위</L>
+            <select value={f.unit} onChange={set('unit')} className={cls}>
+              <option value="g">g</option><option value="ml">ml</option><option value="개">개</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <L>가격 <span className="font-normal opacity-70">— 절감 리포트의 근거가 돼요</span></L>
+          <input type="number" min="0" value={f.price} onChange={set('price')} placeholder="3150" className={`${cls} tnum`} />
+        </div>
+
+        <div>
+          <L>보관</L>
+          <div className="grid grid-cols-4 gap-2">
+            {Object.entries(STORAGE).map(([key, s]) => (
+              <button key={key} type="button" onClick={() => setF((v) => ({ ...v, storage: key }))}
+                className={`tap h-[62px] rounded-xl border-2 grid place-items-center gap-0.5 transition-colors ${
+                  f.storage === key ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+                }`}>
+                <span className="text-[18px] leading-none">{s.icon}</span>
+                <span className="text-[10px] font-bold">{s.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <L>유통기한 <span className="font-normal opacity-70">— 비우면 보관기간으로 계산해요</span></L>
+          <input type="date" value={f.expiry_date} onChange={set('expiry_date')} className={`${cls} tnum`} />
+        </div>
+
+        <button type="submit" disabled={busy}
+          className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold active:opacity-80 disabled:opacity-50">
+          {busy ? '담는 중…' : '담기'}
+        </button>
+      </form>
+
+      <div className="h-8" />
+    </>
+  );
+}
+
+/* ==== SECTION:CONFIRM ====
+   찍어둔 사진이 OCR을 거쳐 여기 쌓인다 (Phase 3).
+   지금은 비어 있지만 자리를 만들어 둔다 — 확인 흐름이 이 앱의 심장이니까. */
+function ConfirmView({ queue, loading, setView, onConfirm, onDrop, busy }) {
+  const [i, setI] = useState(0);
+  const [edit, setEdit] = useState(null); // null이면 보기, 객체면 수정 중
+  useEffect(() => { if (i >= queue.length && queue.length) setI(queue.length - 1); }, [queue.length, i]);
+  const card = queue[i];
+  useEffect(() => { setEdit(null); }, [card?.id]); // 카드 넘어가면 수정 초기화
+
+  if (loading) return (<><Header title="확인" /><Spinner /></>);
+
+  if (!card) {
+    return (
+      <>
+        <Header title="확인" />
+        <div className="rise flex flex-col items-center justify-center px-8 py-16 text-center">
+          <div className="text-[38px]">✓</div>
+          <p className="font-bold mt-3">확인할 게 없어요</p>
+          <p className="text-[13px] text-muted mt-2 leading-relaxed">
+            장 보고 오면 <span className="font-semibold text-ink">사진만 찍어두고</span>,<br />
+            정리 다 끝낸 뒤 여기 앉아서 확인하면 돼요.
+          </p>
+          <button onClick={() => setView('add')}
+            className="tap mt-6 h-[50px] px-6 rounded-xl bg-ink text-white font-bold active:opacity-80">
+            사진으로 담으러 가기
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  const guessed = card.expiry_source === 'preset';
+  const editing = edit !== null;
+  const startEdit = () => setEdit({ name: card.name, capacity: card.capacity, unit: card.unit, price: card.price ?? '', expiry_date: card.expiry_date, storage: card.storage });
+  const unitOpts = ['g', 'ml', '개'].includes(card.unit) ? ['g', 'ml', '개'] : [card.unit, 'g', 'ml', '개'];
+  const patch = (k) => (v) => setEdit((e) => ({ ...e, [k]: v }));
+
+  return (
+    <>
+      <Header title="확인" sub="읽어둔 값이 맞는지만 봐주세요"
+        right={<span className="mono text-[13px] font-bold text-muted">{i + 1} / {queue.length}</span>} />
+
+      <div className="px-4 pt-4 pb-2">
+        <div key={card.id} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
+          <div className="p-4 space-y-2.5">
+            {editing ? (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1">제품명</label>
+                <input value={edit.name} onChange={(e) => patch('name')(e.target.value)}
+                  className="w-full h-[46px] px-3 rounded-lg border-2 border-line bg-surface font-semibold focus:border-ink outline-none" />
+              </div>
+            ) : <Row label="제품명" value={card.name} />}
+
+            {editing ? (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1">용량</label>
+                <div className="grid grid-cols-[1fr_88px] gap-2">
+                  <input type="number" min="1" inputMode="decimal" value={edit.capacity}
+                    onChange={(e) => patch('capacity')(e.target.value)}
+                    className="w-full h-[46px] px-3 rounded-lg border-2 border-line bg-surface font-semibold tnum focus:border-ink outline-none" />
+                  <select value={edit.unit} onChange={(e) => patch('unit')(e.target.value)}
+                    className="w-full h-[46px] px-2 rounded-lg border-2 border-line bg-surface font-semibold focus:border-ink outline-none">
+                    {unitOpts.map((u) => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              </div>
+            ) : <Row label="용량" value={`${card.capacity}${card.unit}`} tnum />}
+
+            {editing ? (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1">가격 <span className="font-normal opacity-70">— 라벨엔 없어요. 아낀 돈 리포트에 쓰여요</span></label>
+                <div className="flex items-center rounded-lg border-2 border-line focus-within:border-ink px-3 h-[46px]">
+                  <input type="number" min="0" inputMode="numeric" value={edit.price}
+                    onChange={(e) => patch('price')(e.target.value)} placeholder="가격 입력"
+                    className="tnum w-full bg-transparent font-semibold outline-none" />
+                  <span className="text-[13px] text-muted font-semibold ml-1">원</span>
+                </div>
+              </div>
+            ) : (card.price != null && <Row label="가격" value={`${won(card.price)}원`} tnum />)}
+
+            {/* 유통기한 — 이 카드의 주인공. 수정 모드면 날짜 입력. */}
+            <div className={`rounded-xl border-2 px-3.5 py-3 ${
+              guessed && !editing ? 'border-warn bg-warn/[.07]' : `${TONE[urgencyOf(card.days_left)].border} ${TONE[urgencyOf(card.days_left)].soft}`}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-muted">유통기한</span>
+                {!editing && <Stamp days={card.days_left} />}
+              </div>
+              {editing ? (
+                <input type="date" value={edit.expiry_date} onChange={(e) => patch('expiry_date')(e.target.value)}
+                  className="mono w-full h-[44px] px-3 mt-1.5 rounded-lg border-2 border-line bg-surface text-[16px] font-bold focus:border-ink outline-none" />
+              ) : (
+                <>
+                  <p className="mono text-[19px] font-bold mt-1">{card.expiry_date.replace(/-/g, '.')}</p>
+                  <p className="text-[11px] mt-1 leading-relaxed">
+                    {guessed
+                      ? <span className="text-warn font-semibold">라벨에서 날짜를 못 읽어 보관기간으로 잡았어요. 맞는지 봐주세요.</span>
+                      : <span className="text-muted">라벨에서 읽었어요</span>}
+                  </p>
+                </>
+              )}
+            </div>
+
+            {editing && (
+              <div>
+                <label className="block text-[11px] font-bold text-muted mb-1.5">보관</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {Object.entries(STORAGE).map(([key, s]) => (
+                    <button key={key} onClick={() => patch('storage')(key)}
+                      className={`tap h-[52px] rounded-lg border-2 grid place-items-center gap-0.5 transition-colors ${
+                        edit.storage === key ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'
+                      }`}>
+                      <span className="text-[15px] leading-none">{s.icon}</span>
+                      <span className="text-[10px] font-bold">{s.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {card.ocr_text && !editing && (
+            <details className="border-t border-line">
+              <summary className="tap px-4 py-2.5 text-[12px] text-muted font-semibold cursor-pointer select-none active:bg-paper">
+                사진에서 읽은 글자 보기
+              </summary>
+              <pre className="px-4 pb-3 text-[11px] text-muted whitespace-pre-wrap font-mono leading-relaxed">{card.ocr_text}</pre>
+            </details>
+          )}
+        </div>
+      </div>
+
+      <div className="px-4 pt-2 pb-4 space-y-2">
+        {editing ? (
+          <button disabled={busy} onClick={() => { onConfirm(card, edit); }}
+            className="tap w-full h-[56px] rounded-xl bg-ink text-white font-bold text-[15px] active:opacity-80 disabled:opacity-50">
+            고쳐서 냉장고에 넣기
+          </button>
+        ) : (
+          <button disabled={busy} onClick={() => onConfirm(card)}
+            className="tap w-full h-[56px] rounded-xl bg-ink text-white font-bold text-[15px] active:opacity-80 disabled:opacity-50">
+            맞아요 — 냉장고에 넣기
+          </button>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <button disabled={busy} onClick={() => editing ? setEdit(null) : startEdit()}
+            className="tap h-[48px] rounded-xl border-2 border-line font-semibold text-[14px] active:bg-paper disabled:opacity-50">
+            {editing ? '취소' : '고칠게요'}
+          </button>
+          <button disabled={busy} onClick={() => onDrop(card)}
+            className="tap h-[48px] rounded-xl border-2 border-line text-muted font-semibold text-[14px] active:bg-paper disabled:opacity-50">
+            버릴 거예요
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Row({ label, value, tnum }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[11px] font-bold text-muted shrink-0 w-[42px]">{label}</span>
+      <span className={`flex-1 text-right font-semibold truncate ${tnum ? 'tnum' : ''}`}>{value}</span>
+    </div>
+  );
+}
+
+/* ==== SECTION:COOK ==== */
+
+const COOK_TAGS = ['전체', '아이', '어른', '건강'];
+
+function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
+  const [tag, setTag] = useState('전체');
+  const [includeOrdered, setIncludeOrdered] = useState(false);
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState(null);
+  const [buyData, setBuyData] = useState(null);  // { items, markets, links, priceHint }
+  const [buying, setBuying] = useState(false);
+  const [dish, setDish] = useState('');
+  const [finding, setFinding] = useState(false);
+  // 오늘 쓸 재료 직접 고르기 (냉장고 다중선택 + 직접 입력) → 그걸 꼭 쓰는 추가 레시피
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [picks, setPicks] = useState([]);
+  const [custom, setCustom] = useState('');
+  const [pickBusy, setPickBusy] = useState(false);
+  const [pickResults, setPickResults] = useState(null);   // null이면 추천 목록, 배열이면 고른 재료 결과
+
+  const invIngredients = useMemo(() => [...new Set(items.map((i) => i.ingredient).filter(Boolean))], [items]);
+  const togglePick = (n) => setPicks((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n]);
+  const addCustom = () => { const v = custom.trim(); if (v && !picks.includes(v)) setPicks((p) => [...p, v]); setCustom(''); };
+  const runPicks = async () => {
+    if (!picks.length || pickBusy) return;
+    setPickBusy(true);
+    try {
+      const r = await API.recipesWith(picks, tag);
+      if (!r.recipes.length) toast('그 재료로 만들 레시피를 못 찾았어요. 재료를 바꿔보세요.', 'bad');
+      else { setPickResults(r.recipes); setPickerOpen(false); }
+    } catch (e) { toast(e.message, 'bad'); }
+    finally { setPickBusy(false); }
+  };
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    API.recipes(tag, includeOrdered)
+      .then((r) => alive && setList(r.recipes))
+      .catch((e) => alive && toast(e.message, 'bad'))
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, [tag, includeOrdered]);
+
+  // 원하는 음식 직접 입력 → 그 레시피 생성해서 상세로 연다
+  const findDish = async () => {
+    const q = dish.trim();
+    if (!q || finding) return;
+    setFinding(true);
+    try {
+      const { recipe } = await API.recipeByName(q, tag, includeOrdered);
+      setDish('');
+      setDetail(recipe);
+      // 새로 만든 건 목록 맨 앞에도 (중복 아니면)
+      setList((cur) => cur.some((x) => x.title === recipe.title) ? cur : [recipe, ...cur]);
+    } catch (e) { toast(e.message, 'bad'); }
+    finally { setFinding(false); }
+  };
+
+  // 여러 마켓으로 보내 직접 비교하게 한다 (실시간 가격은 담벼락 탓에 불가 → 딥링크 + 네이버 참고가)
+  const buy = async (missing) => {
+    if (!missing?.length) return;
+    setBuying(true);
+    try {
+      const data = await API.buyLinks(missing);
+      setDetail(null);
+      setBuyData({ items: missing, ...data });
+    } catch (e) { toast(e.message, 'bad'); }
+    finally { setBuying(false); }
+  };
+
+  return (
+    <>
+      <Header title="오늘 뭐 먹지" sub="급한 재료부터 쓰는 순서로" />
+
+      {/* 원하는 음식 직접 입력 */}
+      <div className="px-4 pt-4">
+        <div className="flex gap-2">
+          <input value={dish} onChange={(e) => setDish(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && findDish()}
+            placeholder="먹고 싶은 음식 입력 (예: 김치찌개)"
+            className="flex-1 h-11 px-3.5 rounded-xl border-2 border-line bg-surface text-[14px] font-medium focus:border-ink outline-none" />
+          <button onClick={findDish} disabled={finding || !dish.trim()}
+            className="tap px-4 h-11 rounded-xl bg-ink text-white font-bold text-[14px] active:opacity-80 disabled:opacity-40">
+            {finding ? '…' : '레시피'}
+          </button>
+        </div>
+
+        {/* 오늘 쓸 재료를 직접 골라 추가 레시피 (냉장고 다중선택 + 직접 입력) */}
+        <button onClick={() => setPickerOpen(true)}
+          className="tap w-full mt-2 h-11 rounded-xl border-2 border-calm bg-calm/[.06] text-calm font-bold text-[14px] active:bg-calm/10">
+          🧺 냉장고에서 골라 레시피 만들기
+        </button>
+      </div>
+
+      <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+        {COOK_TAGS.map((t) => (
+          <button key={t} onClick={() => setTag(t)}
+            className={`tap px-3.5 h-8 rounded-full text-[13px] font-semibold border transition-colors ${
+              tag === t ? 'bg-ink text-white border-ink' : 'bg-surface text-muted border-line active:bg-paper'
+            }`}>
+            {t}
+          </button>
+        ))}
+        {hasOrdered && (
+          <button onClick={() => setIncludeOrdered((v) => !v)}
+            className={`tap ml-auto shrink-0 px-3 h-8 rounded-full text-[12px] font-bold border transition-colors ${
+              includeOrdered ? 'bg-frost text-white border-frost' : 'bg-surface text-muted border-line active:bg-paper'
+            }`}>
+            🛒 주문분 {includeOrdered ? '포함' : '제외'}
+          </button>
+        )}
+      </div>
+
+      {pickResults && (
+        <div className="mx-4 mt-3 flex items-center gap-2 rounded-xl bg-calm/[.08] border border-calm/30 px-3 py-2">
+          <span className="text-[12px] font-bold text-calm flex-1">🧺 고른 재료로 만든 레시피 · {pickResults.length}개</span>
+          <button onClick={() => setPickResults(null)} className="tap text-[12px] font-semibold text-muted active:text-ink">추천으로 ✕</button>
+        </div>
+      )}
+
+      {loading && !pickResults ? (
+        <div className="text-center py-16">
+          <p className="text-[14px] text-muted">냉장고를 보고 요리를 고르는 중…</p>
+          <p className="text-[12px] text-muted/70 mt-1.5">처음 보는 재료 조합이면 몇 초 걸려요</p>
+        </div>
+      ) : (
+        <div className="px-4 pt-3 space-y-2.5">
+          {(pickResults || list).map((r) => (
+            <article key={r.title} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
+              <button onClick={() => setDetail(r)} className="tap w-full text-left active:bg-paper transition-colors">
+                <div className="flex gap-3 p-4 pb-3">
+                  <div className="w-12 h-12 rounded-xl bg-paper grid place-items-center text-[24px] shrink-0">{r.emoji}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-extrabold truncate">{r.title}</h3>
+                      {r.urgentUses >= 1 && (
+                        <span className="shrink-0 text-[10px] font-bold text-white bg-urgent px-1.5 py-0.5 rounded">급한 재료</span>
+                      )}
+                    </div>
+                    <p className="tnum text-[12px] text-muted mt-0.5">{r.mins}분 · {r.tag} · 만드는 법 보기</p>
+                  </div>
+                </div>
+
+                <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+                  {r.uses.map((u) => {
+                    const owned = u.days_left != null;
+                    const tone = owned ? urgencyOf(u.days_left) : null;
+                    return (
+                      <span key={u.ing}
+                        className={`tnum text-[12px] font-semibold px-2 py-1 rounded-md border ${
+                          owned ? `${TONE[tone].border} ${TONE[tone].soft} ${TONE[tone].text}`
+                                : 'border-dashed border-line text-muted'}`}>
+                        {u.ing} {u.amt}{u.unit}{!owned && ' 없음'}
+                      </span>
+                    );
+                  })}
+                </div>
+              </button>
+
+              <div className="grid grid-cols-2 gap-2 p-3 pt-0">
+                <button onClick={() => setDetail(r)}
+                  className="tap h-[46px] rounded-xl bg-ink text-white font-bold text-[14px] active:opacity-80">
+                  이걸로 요리
+                </button>
+                <button disabled={!r.missing.length} onClick={() => buy(r.missing)}
+                  className={`tap h-[46px] rounded-xl font-bold text-[14px] border-2 transition-colors ${
+                    r.missing.length ? 'border-ink active:bg-paper' : 'border-line text-muted/50 cursor-not-allowed'
+                  }`}>
+                  {r.missing.length ? `부족한 것 주문 (${r.missing.length})` : '재료 다 있어요'}
+                </button>
+              </div>
+            </article>
+          ))}
+          {!(pickResults || list).length && (
+            <p className="text-center text-muted text-[14px] py-14 leading-relaxed">
+              지금 재료로 추천할 게 없어요.<br />재료를 더 담으면 요리가 나와요.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="h-6" />
+
+      {/* 오늘 쓸 재료 고르기 — 냉장고 다중선택 + 직접 입력 */}
+      {pickerOpen && (
+        <Sheet open onClose={() => setPickerOpen(false)}>
+          <h3 className="text-[18px] font-extrabold">오늘 쓸 재료 고르기</h3>
+          <p className="text-[12px] text-muted mt-1">냉장고에서 고르거나, 직접 적어요 (예: 어제 남은 치킨)</p>
+
+          <div className="flex gap-2 mt-4">
+            <input value={custom} onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCustom()}
+              placeholder="직접 추가 (예: 남은 치킨 반마리)"
+              className="flex-1 h-11 px-3.5 rounded-xl border-2 border-line bg-surface text-[14px] font-medium focus:border-ink outline-none" />
+            <button onClick={addCustom} disabled={!custom.trim()}
+              className="tap px-4 h-11 rounded-xl border-2 border-line font-bold text-[14px] active:bg-paper disabled:opacity-40">추가</button>
+          </div>
+
+          {picks.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {picks.map((p) => (
+                <button key={p} onClick={() => togglePick(p)}
+                  className="tap inline-flex items-center gap-1 h-9 px-3 rounded-full bg-ink text-white text-[13px] font-bold active:opacity-80">
+                  {p} <span className="opacity-70">✕</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <p className="text-[12px] font-bold text-muted mt-5 mb-2">냉장고에서 고르기 <span className="font-normal opacity-70">(여러 개 가능)</span></p>
+          {invIngredients.length ? (
+            <div className="flex flex-wrap gap-2 max-h-[32vh] overflow-y-auto">
+              {invIngredients.map((n) => {
+                const on = picks.includes(n);
+                return (
+                  <button key={n} onClick={() => togglePick(n)}
+                    className={`tap px-3.5 h-10 rounded-full text-[14px] font-semibold border-2 transition-colors ${
+                      on ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'}`}>
+                    {n}
+                  </button>
+                );
+              })}
+            </div>
+          ) : <p className="text-[13px] text-muted">냉장고가 비어 있어요. 직접 입력으로 추가해 보세요.</p>}
+
+          <button onClick={runPicks} disabled={!picks.length || pickBusy}
+            className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-6 active:opacity-80 disabled:opacity-40">
+            {pickBusy ? '레시피 만드는 중…' : `이 재료로 레시피 만들기${picks.length ? ` (${picks.length})` : ''}`}
+          </button>
+        </Sheet>
+      )}
+
+      <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy} busy={buying}
+        onCook={(uses, title) => { setDetail(null); onCook(uses, title); }} />
+      <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
+        onPick={(url, market, ing) => {
+          window.open(url, '_blank', 'noopener');
+          toast(`${market}에서 ${ing} 찾는 중`);
+        }} />
+    </>
+  );
+}
+
+/* 멀티 마켓 구매 시트 — 재료마다 어느 마켓에서 살지 직접 고른다.
+   실시간 가격 비교는 불가하지만(담벼락), 마켓 선택권과 네이버 참고가를 준다.
+   외부에서 사고 온 뒤 '주문했어요'로 '곧 도착'(ordered) 재고에 넣을 수 있다. */
+function BuySheet({ data, onClose, onPick, onAddOrdered }) {
+  const [ordered, setOrdered] = useState({});
+  useEffect(() => { setOrdered({}); }, [data]);
+  if (!data) return null;
+  const { items, markets, links, priceHint } = data;
+
+  const markOrdered = async (ing) => {
+    setOrdered((o) => ({ ...o, [ing]: 'loading' }));
+    try { await onAddOrdered(ing); setOrdered((o) => ({ ...o, [ing]: 'done' })); }
+    catch { setOrdered((o) => ({ ...o, [ing]: undefined })); }
+  };
+
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-[19px] font-extrabold">부족한 재료 사러 가기</h3>
+          <p className="text-[12px] text-muted mt-0.5">마켓을 골라 비교하고, 주문했으면 표시해요</p>
+        </div>
+        <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
+      </div>
+
+      <div className="mt-4 max-h-[52vh] overflow-y-auto noscroll space-y-4">
+        {items.map((ing) => (
+          <div key={ing}>
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="font-extrabold">{ing}</span>
+              {priceHint?.[ing] != null && (
+                <span className="tnum text-[12px] text-calm font-semibold">네이버 최저 {won(priceHint[ing])}원~</span>
+              )}
+              <button onClick={() => markOrdered(ing)} disabled={ordered[ing]}
+                className={`ml-auto text-[12px] font-bold px-2.5 py-1 rounded-md border-2 transition-colors ${
+                  ordered[ing] === 'done' ? 'border-frost text-frost bg-frost/10'
+                    : 'border-line text-muted active:bg-paper'}`}>
+                {ordered[ing] === 'done' ? '🛒 주문함 ✓' : ordered[ing] === 'loading' ? '…' : '주문했어요'}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {markets.map((m) => (
+                <button key={m.key} onClick={() => onPick(links[ing][m.key], m.label, ing)}
+                  className="tap flex items-center gap-2 h-[50px] px-3 rounded-xl border-2 border-line bg-surface active:bg-paper transition-colors">
+                  <span className="text-[18px]">{m.icon}</span>
+                  <span className="font-bold text-[14px] flex-1 text-left">{m.label}</span>
+                  <span className="text-muted text-[13px]">→</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {!Object.keys(priceHint || {}).length && (
+        <p className="text-[11px] text-muted mt-3 leading-relaxed">
+          가격은 마켓마다 달라요. 눌러서 직접 확인하세요. <span className="opacity-70">(네이버 참고가는 설정 시 표시)</span>
+        </p>
+      )}
+    </Sheet>
+  );
+}
+
+/* 레시피 상세 — 만드는 법. 카드를 탭하면 뜬다. */
+function RecipeSheet({ recipe, onClose, onBuy, onCook }) {
+  const base = recipe?.servings > 0 ? recipe.servings : 2;
+  const [servings, setServings] = useState(base);
+  useEffect(() => { setServings(recipe?.servings > 0 ? recipe.servings : 2); }, [recipe?.title]);
+  if (!recipe) return null;
+  const r = recipe;
+  // 인분에 맞춰 양을 비례 스케일 (깔끔하게 반올림)
+  const scale = servings / base;
+  const scaleAmt = (amt) => {
+    const v = (amt || 0) * scale;
+    return v >= 100 ? Math.round(v / 10) * 10 : v >= 10 ? Math.round(v) : Math.round(v * 2) / 2;
+  };
+
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="flex items-start gap-3">
+        <div className="w-12 h-12 rounded-xl bg-paper grid place-items-center text-[24px] shrink-0">{r.emoji}</div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-[19px] font-extrabold">{r.title}</h3>
+          <p className="tnum text-[12px] text-muted mt-0.5">{r.mins}분 · {r.tag}</p>
+        </div>
+        <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
+      </div>
+
+      {/* 인분 선택 — 바꾸면 아래 재료 양이 비례해 바뀐다 (주말 여러 끼니 대비) */}
+      <div className="flex items-center gap-2 mt-4 rounded-xl bg-paper px-3.5 py-2.5">
+        <span className="text-[13px] font-bold flex-1">몇 인분?</span>
+        <button onClick={() => setServings((n) => Math.max(1, n - 1))}
+          className="tap w-9 h-9 rounded-lg border-2 border-line bg-surface font-bold active:bg-paper">−</button>
+        <span className="tnum w-14 text-center font-extrabold text-[16px]">{servings}인분</span>
+        <button onClick={() => setServings((n) => Math.min(12, n + 1))}
+          className="tap w-9 h-9 rounded-lg border-2 border-line bg-surface font-bold active:bg-paper">+</button>
+      </div>
+
+      <div className="mt-4">
+        <p className="text-[11px] font-bold text-muted mb-1.5">재료 <span className="font-normal">· {servings}인분 기준</span></p>
+        <div className="flex flex-wrap gap-1.5">
+          {r.uses.map((u) => {
+            const owned = u.days_left != null;
+            const tone = owned ? urgencyOf(u.days_left) : null;
+            const need = scaleAmt(u.amt);
+            const short = owned && u.have < need; // 있지만 양이 모자람
+            return (
+              <span key={u.ing}
+                className={`tnum text-[12px] font-semibold px-2 py-1 rounded-md border ${
+                  owned ? `${TONE[tone].border} ${TONE[tone].soft} ${TONE[tone].text}`
+                        : 'border-dashed border-line text-muted'}`}>
+                {u.ing} {need}{u.unit}{!owned && ' 없음'}{short && ` (${u.have}${u.unit}뿐)`}
+              </span>
+            );
+          })}
+        </div>
+        {r.seasonings?.length > 0 && (
+          <p className="text-[11px] text-muted mt-2">양념: {r.seasonings.join(', ')} <span className="opacity-60">(집에 있다고 봤어요)</span></p>
+        )}
+      </div>
+
+      {r.steps?.length > 0 && (
+        <div className="mt-4 max-h-[38vh] overflow-y-auto noscroll">
+          <p className="text-[11px] font-bold text-muted mb-1.5">만드는 법</p>
+          <ol className="space-y-2">
+            {r.steps.map((s, i) => (
+              <li key={i} className="flex gap-2.5">
+                <span className="tnum shrink-0 w-5 h-5 rounded-full bg-ink text-white text-[11px] font-bold grid place-items-center mt-0.5">{i + 1}</span>
+                <span className="text-[14px] leading-relaxed">{s}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {r.missing?.length > 0 && (
+        <button onClick={() => onBuy(r.missing)}
+          className="tap w-full h-[50px] rounded-xl border-2 border-ink font-bold mt-4 active:bg-paper">
+          부족한 {r.missing.join(', ')} 주문하기
+        </button>
+      )}
+
+      {/* 실제로 만들면 재료를 냉장고에서 뺀다 (선택한 인분 기준) */}
+      <button onClick={() => onCook(r.uses.map((u) => ({ ing: u.ing, amt: scaleAmt(u.amt), unit: u.unit })), r.title)}
+        className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-3 active:opacity-80">
+        🍳 다 만들었어요 · 재료 빼기
+      </button>
+      <p className="text-[11px] text-muted text-center mt-2">누르면 {servings}인분 기준으로 냉장고에서 재료가 차감돼요</p>
+    </Sheet>
+  );
+}
+
+/* ==== SECTION:REPORT ====
+   price·closed_on·outcome을 안 쌓으면 이 화면은 못 만든다 (STRATEGY.md).
+   그래서 저 세 필드를 처음부터 스키마에 넣었다. */
+const MONTH_KO = (ym) => `${+ym.split('-')[1]}월`;
+
+function ReportView({ toast }) {
+  const [d, setD] = useState(null);
+
+  useEffect(() => {
+    API.waste(6).then(setD).catch((e) => toast(e.message, 'bad'));
+  }, []);
+
+  if (!d) return (<><Header title="리포트" /><Spinner /></>);
+
+  const rows = d.monthly || [];
+  const max = Math.max(1, ...rows.map((r) => r.wasted));
+  const last = rows.length ? rows[rows.length - 1].wasted : 0;
+  const first = rows.length ? rows[0].wasted : 0;
+  const cut = first > 0 ? Math.round(((first - last) / first) * 100) : null;
+
+  return (
+    <>
+      <Header title="리포트" sub="버린 돈이 얼마나 줄었나" />
+
+      <div className="px-4 pt-4">
+        <div className="rise rounded-2xl bg-ink text-white px-5 py-6">
+          <p className="text-[12px] text-white/60 font-semibold">이번 달 버린 돈</p>
+          <p className="tnum text-[38px] font-extrabold leading-none mt-1.5">
+            {won(last)}<span className="text-[20px] font-bold">원</span>
+          </p>
+          {cut != null && rows.length > 1 ? (
+            <div className="flex items-center gap-1.5 mt-3">
+              <span className={`text-[13px] font-bold ${cut >= 0 ? 'text-calm' : 'text-urgent'}`}>
+                {cut >= 0 ? '▼' : '▲'} {Math.abs(cut)}%
+              </span>
+              <span className="text-[12px] text-white/50">
+                {MONTH_KO(rows[0].month)}보다 {won(Math.abs(first - last))}원 {cut >= 0 ? '덜' : '더'} 버렸어요
+              </span>
+            </div>
+          ) : (
+            <p className="text-[12px] text-white/50 mt-3">
+              버린 걸 기록하면 여기서 줄어드는 게 보여요.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {rows.length > 0 && (
+        <div className="px-4 pt-6">
+          <p className="text-[13px] font-bold mb-3">월별 폐기 금액</p>
+          {/* 막대 높이는 px로. 부모가 auto 높이면 %는 0으로 접힌다. */}
+          <div className="flex items-end justify-between gap-2 h-[148px] px-1">
+            {rows.map((r, idx) => {
+              const h = Math.max(6, Math.round((r.wasted / max) * 96));
+              const isLast = idx === rows.length - 1;
+              return (
+                <div key={r.month} className="flex-1 h-full flex flex-col items-center justify-end gap-1.5">
+                  <span className={`mono text-[10px] font-bold ${isLast ? 'text-calm' : 'text-muted'}`}>
+                    {(r.wasted / 1000).toFixed(1)}
+                  </span>
+                  <div className="w-full rounded-t-md"
+                    style={{ height: h + 'px', background: isLast ? '#5B7A6B' : '#D6DAD7' }} />
+                  <span className={`text-[11px] font-semibold ${isLast ? 'text-ink' : 'text-muted'}`}>{MONTH_KO(r.month)}</span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-muted mt-1.5 text-right">단위: 천원</p>
+        </div>
+      )}
+
+      <div className="px-4 pt-7">
+        <div className="rounded-xl border border-line bg-surface divide-y divide-line">
+          <Stat k="가장 많이 버린 것"
+            v={d.top?.[0] ? `${d.top[0].ingredient} · ${d.top[0].times}번` : '아직 없어요'} />
+          <Stat k="냉동으로 살린 것" v={`${d.frozen ?? 0}번`} />
+          <Stat k="다 먹은 재료" v={`${d.eaten ?? 0}가지`} />
+        </div>
+        <p className="text-[11px] text-muted mt-3 leading-relaxed">
+          목표는 월 식비 10~20% 절감. 버린 걸 기록할수록 이 숫자가 정확해집니다.
+        </p>
+      </div>
+
+      <div className="h-6" />
+    </>
+  );
+}
+
+function Stat({ k, v }) {
+  return (
+    <div className="flex items-center justify-between px-4 py-3.5">
+      <span className="text-[13px] text-muted">{k}</span>
+      <span className="tnum text-[14px] font-bold">{v}</span>
+    </div>
+  );
+}
+
+/* ==== SECTION:APP ==== */
+
+function NowasteApp() {
+  const [booted, setBooted] = useState(false);
+  const [email, setEmail] = useState('');
+  const [view, setView] = useState('home');
+  const [addMode, setAddMode] = useState('menu');   // menu | fresh | manual
+
+  const [items, setItems] = useState([]);
+  const [pending, setPending] = useState([]);
+  const [ordered, setOrdered] = useState([]);
+  const [presets, setPresets] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const timer = useRef();
+
+  const toast = useCallback((text, tone) => {
+    setMsg({ text, tone });
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setMsg(null), tone === 'bad' ? 3200 : 2200);
+  }, []);
+
+  const logout = () => { setToken(null); setEmail(''); setItems([]); setPending([]); setOrdered([]); setView('home'); };
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [a, b, c] = await Promise.all([API.items('confirmed'), API.items('pending'), API.items('ordered')]);
+      setItems(a.items);
+      setPending(b.items);
+      setOrdered(c.items);
+    } catch (e) {
+      if (e.status === 401) logout();
+      else toast(e.message, 'bad');
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  // 부팅: 프리셋은 로그인 없이도 받아둔다 (담기 화면이 바로 쓰이도록)
+  useEffect(() => {
+    API.shelfLife()
+      .then((r) => setPresets(r.presets))
+      .catch(() => {})
+      .finally(() => setBooted(true));
+  }, []);
+
+  useEffect(() => {
+    if (getToken()) refresh();
+    else setLoading(false);
+  }, [refresh]);
+
+  const guard = async (fn) => {
+    setBusy(true);
+    try { await fn(); }
+    catch (e) {
+      if (e.status === 401) { logout(); toast('다시 로그인해 주세요.', 'bad'); }
+      else toast(e.message, 'bad');
+    }
+    finally { setBusy(false); }
+  };
+
+  const addItem = (body) => guard(async () => {
+    const { item } = await API.addItem(body);
+    await refresh();
+    setAddMode('menu');
+    setView('home');
+    toast(`${item.name} — ${fmtDate(item.expiry_date)}까지로 담았어요`);
+  });
+
+  // 사진 판독 완료 → 확인 대기 갱신. goConfirm=true면 바로 확인 화면으로.
+  const photosDone = (ok, goConfirm) => guard(async () => {
+    await refresh();
+    if (goConfirm) { setAddMode('menu'); setView('confirm'); return; }
+    if (ok) toast(`${ok}장 담았어요 — 정리 끝나고 확인하세요`);
+  });
+
+  /* 구조 카드: 얼려도 되는 것만 한 번에 냉동실로.
+     서버가 두부 같은 건 409로 거절한다 — 그걸 그대로 사람 말로 보여준다. */
+  const freezeAll = (list) => guard(async () => {
+    const results = await Promise.allSettled(list.map((i) => API.freeze(i.id)));
+    const ok = results.filter((r) => r.status === 'fulfilled').length;
+    const failed = results.find((r) => r.status === 'rejected');
+    await refresh();
+    if (ok) toast(`${list.slice(0, ok).map((i) => i.name).join(', ')} — 냉동실로 옮겼어요`);
+    if (failed) toast(failed.reason.message, 'bad');
+  });
+
+  const itemAction = (kind, item, extra) => guard(async () => {
+    if (kind === 'freeze') {
+      await API.freeze(item.id);
+      toast(`${item.name} — 냉동실로 옮겼어요`);
+    } else if (kind === 'consume') {
+      const { item: after, closed } = await API.consume(item.id, extra);
+      toast(closed
+        ? `${item.name} — 다 썼어요, 냉장고에서 뺐어요 👏`
+        : `${item.name} — ${extra}${item.unit} 뺐어요 · ${after.remaining}${after.unit} 남음`);
+    } else if (kind === 'eaten') {
+      await API.close(item.id, 'eaten');
+      toast(`${item.name} — 다 먹었어요 👏`);
+    } else if (kind === 'discarded') {
+      await API.close(item.id, 'discarded');
+      toast(`${item.name} — 버린 것으로 기록했어요`);
+    } else if (kind === 'delete') {
+      await API.remove(item.id);
+      toast('기록에서 지웠어요');
+    }
+    await refresh();
+  });
+
+  const confirmCard = (card, edits) => guard(async () => {
+    const body = { status: 'confirmed' };
+    if (edits) {
+      if (edits.name && edits.name !== card.name) body.name = edits.name.trim();
+      const cap = Number(edits.capacity);
+      if (edits.capacity != null && cap > 0 && cap !== card.capacity) {
+        body.capacity = cap;
+        body.remaining = cap; // 갓 담는 재고는 가득 찬 상태 — 남은 양도 같이 맞춘다
+      }
+      if (edits.unit && edits.unit !== card.unit) body.unit = edits.unit;
+      const pr = edits.price === '' || edits.price == null ? null : Number(edits.price);
+      if (pr !== (card.price ?? null) && !(pr != null && Number.isNaN(pr))) body.price = pr;
+      if (edits.expiry_date && edits.expiry_date !== card.expiry_date) {
+        body.expiry_date = edits.expiry_date; body.expiry_source = 'manual';
+      }
+      if (edits.storage && edits.storage !== card.storage) body.storage = edits.storage;
+    }
+    const { item } = await API.patch(card.id, body);
+    await refresh();
+    toast(`${item.name} — 냉장고에 넣었어요`);
+  });
+
+  const dropCard = (card) => guard(async () => {
+    await API.close(card.id, 'discarded');
+    await refresh();
+    toast('버린 것으로 기록했어요');
+  });
+
+  // 이걸로 요리 — 실제로 만든 레시피의 재료를 냉장고에서 차감(단위 맞는 것만).
+  const cookRecipe = (uses, title) => guard(async () => {
+    const { deducted, skipped } = await API.cook(uses);
+    await refresh();
+    const names = [...new Set(deducted.map((d) => d.ing))];
+    if (!names.length) { toast(`${title} — 뺄 재료가 냉장고에 없었어요`); return; }
+    let msg = `${title} 만들었어요 — ${names.join(', ')} 차감 👏`;
+    if (skipped?.length) msg += ` · ${skipped.join(', ')}은 '조금 썼어요'로 조정하세요`;
+    toast(msg);
+  });
+
+  // 주문한 재료 → '곧 도착'(ordered). 구매 시트의 "주문했어요"에서 호출.
+  const addOrdered = async (ing) => {
+    await API.addItem({ name: ing, ingredient: ing, capacity: 1, remaining: 1, unit: '개', storage: 'fridge', status: 'ordered' });
+    await refresh();
+    toast(`${ing} — 곧 도착으로 담았어요`);
+  };
+
+  // 주문분 도착 → 냉장고로 (유통기한 오늘 기준 재계산)
+  const receiveItem = (item) => guard(async () => {
+    await API.receive(item.id);
+    await refresh();
+    toast(`${item.name} — 냉장고에 넣었어요`);
+  });
+
+  const goto = (v) => { setAddMode('menu'); setView(v); };
+
+  // 폰 뒤로가기: 시트(Sheet 내부) → 담기 하위화면 → 비홈 탭 → 홈 순으로 되돌린다
+  useBackListener();
+  useBackGuard(Boolean(getToken()) && view !== 'home', () => goto('home'));
+  useBackGuard(Boolean(getToken()) && view === 'add' && addMode !== 'menu', () => setAddMode('menu'));
+
+  if (!booted) return <div className="phone" />;
+
+  if (!getToken()) {
+    return (
+      <div className="phone">
+        <AuthView onDone={(e) => { setEmail(e); refresh(); }} />
+        <Toast msg={msg} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="phone">
+      <main className="flex-1 overflow-y-auto noscroll">
+        {view === 'home' && (
+          <HomeView items={items} ordered={ordered} loading={loading} presets={presets} pendingCount={pending.length}
+            setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} onReceive={receiveItem} busy={busy}
+            email={email || '내 계정'} onLogout={logout} toast={toast} onAddOrdered={addOrdered} />
+        )}
+        {view === 'add' && addMode === 'menu'   && <AddView setMode={setAddMode} />}
+        {view === 'add' && addMode === 'receipt' && <ReceiptCaptureView onDone={photosDone} back={() => setAddMode('menu')} />}
+        {view === 'add' && addMode === 'photo'  && <PhotoCaptureView onDone={photosDone} back={() => setAddMode('menu')} />}
+        {view === 'add' && addMode === 'fresh'  && <FreshView presets={presets} onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}
+        {view === 'add' && addMode === 'manual' && <ManualView onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}
+        {view === 'confirm' && (
+          <ConfirmView queue={pending} loading={loading} setView={goto}
+            onConfirm={confirmCard} onDrop={dropCard} busy={busy} />
+        )}
+        {view === 'cook'   && <CookView toast={toast} onAddOrdered={addOrdered} hasOrdered={ordered.length > 0} items={items} onCook={cookRecipe} />}
+        {view === 'report' && <ReportView toast={toast} />}
+      </main>
+
+      <Toast msg={msg} />
+      <BottomNav view={view} setView={goto} pendingCount={pending.length} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<NowasteApp />);
+</script>
+</body>
+</html>
