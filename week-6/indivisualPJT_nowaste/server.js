@@ -601,7 +601,7 @@ const MARKETS = [
     url: marketUrl('kurly', (q) => `https://www.kurly.com/search?sword=${encodeURIComponent(q)}`) },
   { key: 'ssg',     label: '이마트몰',   icon: '🏪', affiliate: false,  // 제휴 미확인
     url: marketUrl('ssg', (q) => `https://emart.ssg.com/search.ssg?query=${encodeURIComponent(q)}`) },
-  { key: 'naver',   label: '네이버쇼핑', icon: '🔎', affiliate: true,   // 쇼핑파트너 (승인 후 MARKET_URL_NAVER로 교체)
+  { key: 'naver',   label: '네이버쇼핑', icon: '🔎', affiliate: false,  // 개인 제휴 경로 불명확 → 비교용. CPS 열리면 true + MARKET_URL_NAVER
     url: marketUrl('naver', (q) => `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(q)}`) },
 ];
 
