@@ -182,7 +182,8 @@ async function suggest({ inventory, vocab, tag, want = 6 }) {
       const genFocus = uncovered.length ? uncovered : focus; // 커버 안 된 것부터
       const made = await generate({
         focus: genFocus, invNames, vocab, tag,
-        need: Math.max(want - ranked.length, Math.min(uncovered.length, 4)),
+        // 한 번에 최대 6개까지만 생성. want가 커도(16) 캐시가 비면 16개를 한 호출에 만들다 토큰 초과로 JSON이 잘려 0개가 된다.
+        need: Math.min(6, Math.max(want - ranked.length, Math.min(uncovered.length, 4))),
         avoid: ranked.map((r) => r.title),
       });
       if (made.length) {
