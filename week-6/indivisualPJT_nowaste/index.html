@@ -139,7 +139,7 @@ const API = {
   parseReceipt: (image) => api('POST', '/api/receipt/parse', { image }),
   patch:   (id, b)  => api('PATCH', `/api/items/${id}`, b),
   freeze:  (id)     => api('POST', `/api/items/${id}/freeze`),
-  receive: (id)     => api('POST', `/api/items/${id}/receive`),
+  receive: (id, body) => api('POST', `/api/items/${id}/receive`, body || {}),
   close:   (id, outcome, amount) =>
              api('POST', `/api/items/${id}/close`, { outcome, discarded_amount: amount ?? null }),
   consume: (id, amount) => api('POST', `/api/items/${id}/consume`, { amount }),
@@ -713,7 +713,7 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
                   </div>
                 ))}
               </div>
-              <p className="text-[11px] text-muted px-4 py-2">받으면 냉장고로 옮기고 유통기한이 잡혀요. 요리 화면에서 '주문분 포함'을 켜면 미리 레시피에 반영돼요.</p>
+              <p className="text-[11px] text-muted px-4 py-2">'받았어요'를 누르고 라벨을 찍으면 유통기한·가격까지 정리돼 냉장고로 들어가요. 요리 화면 '주문분 포함'을 켜면 도착 전에도 레시피에 미리 써요.</p>
             </section>
           )}
 
@@ -1833,6 +1833,13 @@ function BuySheet({ data, onClose, onPick, onAddOrdered }) {
         <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
       </div>
 
+      {/* 유인 포인트 — 앱으로 사면 도착 때 확인 한 번으로 냉장고·식비가 자동 정리(직접 이커머스 대비 이점) */}
+      <div className="mt-3 rounded-xl bg-frost/[.06] border border-frost/30 px-3.5 py-2.5">
+        <p className="text-[11px] text-frost leading-relaxed">
+          🧊 <b className="font-extrabold">여기서 주문하면</b> ‘주문했어요 → 곧 도착’으로 담기고, 받을 때 <b className="font-extrabold">유통기한·가격만 확인</b>하면 냉장고·식비에 자동 정리돼요.
+        </p>
+      </div>
+
       <div className="mt-4 max-h-[52vh] overflow-y-auto noscroll space-y-4">
         {items.map((ing) => (
           <div key={ing}>
@@ -1874,6 +1881,98 @@ function BuySheet({ data, onClose, onPick, onAddOrdered }) {
       <p className="text-[11px] text-muted mt-2 leading-relaxed">
         가격은 마켓마다 달라요. 눌러서 직접 확인하세요.{!Object.keys(priceHint || {}).length && ' (네이버 참고가는 설정 시 표시)'}
       </p>
+    </Sheet>
+  );
+}
+
+/* 받기 시트 — '곧 도착'한 재료를 냉장고로 넣는 순간, 실제 유통기한·가격을 넣는 지점.
+   라벨을 찍으면(기존 비전 OCR 재활용) 유통기한이 자동으로 채워진다. 비우면 서버가 보관기간으로 추정(빠른 경로).
+   앱으로 주문하면 이 확인 한 번으로 냉장고·유통기한 알림·식비가 자동 정리되는 게 직접 이커머스 대비 이점. */
+function ReceiveSheet({ item, onClose, onConfirm, busy, toast }) {
+  const fileRef = useRef();
+  const [date, setDate] = useState('');
+  const [price, setPrice] = useState('');
+  const [src, setSrc] = useState('manual');
+  const [scanning, setScanning] = useState(false);
+  const [read, setRead] = useState(null); // 라벨에서 읽은 용량/단위(있으면 함께 보완)
+  useEffect(() => {
+    setDate(''); setSrc('manual'); setRead(null);
+    setPrice(item?.price != null ? String(item.price) : '');
+  }, [item?.id]);
+  if (!item) return null;
+
+  const scan = async (e) => {
+    const file = e.target.files?.[0]; if (e.target) e.target.value = '';
+    if (!file) return;
+    setScanning(true);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const { item: r } = await API.parseLabel(dataUrl, item.storage || 'fridge');
+      setRead(r || null);
+      if (r?.expiry_date && r.expiry_source !== 'preset') {
+        setDate(r.expiry_date); setSrc(r.expiry_source === 'ocr' ? 'ocr' : 'manual');
+        toast('라벨에서 유통기한을 읽었어요');
+      } else if (r?.expiry_date) {
+        setDate(r.expiry_date); setSrc('manual');
+        toast('날짜가 흐릿해요 — 맞는지 확인해 주세요', 'bad');
+      } else {
+        toast('유통기한을 못 찾았어요. 직접 넣어 주세요', 'bad');
+      }
+    } catch (ex) { toast(ex.message, 'bad'); }
+    finally { setScanning(false); }
+  };
+
+  const submit = () => onConfirm(item.id, {
+    expiry_date: date || null,
+    expiry_source: date ? src : null,
+    price: price !== '' ? Number(price) : null,
+    // 주문분은 '1개' 자리표시자 → 라벨을 찍었고 용량을 읽었으면 함께 보완
+    capacity: read && Number(read.capacity) > 0 ? Number(read.capacity) : null,
+    unit: read && read.unit ? read.unit : null,
+  });
+
+  const inputCls = 'h-11 px-3 rounded-xl border-2 border-line bg-surface text-[14px] font-medium focus:border-ink outline-none';
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-[19px] font-extrabold">{item.name} 받았어요</h3>
+          <p className="text-[12px] text-muted mt-0.5">실제 유통기한·가격을 넣으면 알림·식비가 정확해져요</p>
+        </div>
+        <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
+      </div>
+
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={scan} className="hidden" />
+
+      {/* 유통기한 — 가장 쉬운 길: 라벨 찍기(자동) 또는 직접 */}
+      <div className="mt-4">
+        <label className="block text-[11px] font-bold text-muted mb-1">유통기한 <span className="font-normal opacity-70">— 라벨을 찍으면 자동으로 읽어요</span></label>
+        <div className="flex gap-2">
+          <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setSrc('manual'); }}
+            className={`${inputCls} tnum flex-1`} />
+          <button onClick={() => fileRef.current?.click()} disabled={scanning}
+            className="tap shrink-0 px-3.5 h-11 rounded-xl border-2 border-ink font-bold text-[13px] active:bg-paper disabled:opacity-50">
+            {scanning ? '읽는 중…' : '📷 라벨'}
+          </button>
+        </div>
+        {read?.capacity > 0 && (
+          <p className="text-[11px] text-frost mt-1">라벨에서 용량 {read.capacity}{read.unit}도 읽었어요 · 함께 저장돼요</p>
+        )}
+        <p className="text-[11px] text-muted mt-1">비우면 보관기간으로 자동 계산해요</p>
+      </div>
+
+      {/* 결제 금액 — 식비 리포트 근거 */}
+      <div className="mt-4">
+        <label className="block text-[11px] font-bold text-muted mb-1">결제 금액 <span className="font-normal opacity-70">— 식비 리포트에 반영돼요</span></label>
+        <input type="number" min="0" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value)}
+          placeholder="실제 낸 금액" className={`${inputCls} tnum w-full`} />
+      </div>
+
+      <button onClick={submit} disabled={busy}
+        className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold mt-6 active:opacity-80 disabled:opacity-50">
+        냉장고에 넣기
+      </button>
+      <p className="text-[11px] text-muted text-center mt-2">앱으로 주문하면 도착 때 이렇게 확인만 하면 끝 — 직접 사면 처음부터 다 입력해야 해요</p>
     </Sheet>
   );
 }
@@ -2266,11 +2365,14 @@ function NowasteApp() {
     toast(`${ing} — 곧 도착으로 담았어요`);
   };
 
-  // 주문분 도착 → 냉장고로 (유통기한 오늘 기준 재계산)
-  const receiveItem = (item) => guard(async () => {
-    await API.receive(item.id);
+  // 주문분 도착 → 받기 시트를 연다 (여기서 실제 유통기한·가격을 넣는다)
+  const [receiving, setReceiving] = useState(null);
+  const doReceive = (id, body) => guard(async () => {
+    const it = ordered.find((o) => o.id === id);
+    await API.receive(id, body);
     await refresh();
-    toast(`${item.name} — 냉장고에 넣었어요`);
+    setReceiving(null);
+    toast(`${it?.name || '재료'} — 냉장고에 넣었어요`);
   });
 
   const goto = (v) => { setAddMode('menu'); setView(v); };
@@ -2296,7 +2398,7 @@ function NowasteApp() {
       <main className="flex-1 overflow-y-auto noscroll">
         {view === 'home' && (
           <HomeView items={items} ordered={ordered} loading={loading} presets={presets} pendingCount={pending.length}
-            setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} onReceive={receiveItem} busy={busy}
+            setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} onReceive={setReceiving} busy={busy}
             email={email || '내 계정'} onLogout={logout} toast={toast} onAddOrdered={addOrdered} />
         )}
         {view === 'add' && addMode === 'menu'   && <AddView setMode={setAddMode} />}
@@ -2313,6 +2415,7 @@ function NowasteApp() {
         {view === 'report' && <ReportView toast={toast} />}
       </main>
 
+      <ReceiveSheet item={receiving} onClose={() => setReceiving(null)} onConfirm={doReceive} busy={busy} toast={toast} />
       <Toast msg={msg} />
       <BottomNav view={view} setView={goto} pendingCount={pending.length} />
     </div>

@@ -308,7 +308,9 @@ app.post('/api/items/:id/freeze', auth, async (req, res) => {
   res.json({ item: r.rows[0] });
 });
 
-/* 주문한 재료가 도착 → 냉장고로. 유통기한을 도착일(오늘) 기준으로 다시 계산한다. */
+/* 주문한 재료가 도착 → 냉장고로.
+   받는 순간이 실측 정보를 넣는 지점: 라벨의 유통기한·결제 금액·실제 용량을 body로 받으면 그대로 반영,
+   비우면 기존처럼 도착일(오늘) + 보관기간으로 유통기한을 추정한다(빠른 경로 유지, 하위호환). */
 app.post('/api/items/:id/receive', auth, async (req, res) => {
   const cur = await pool.query(
     "SELECT ingredient, storage FROM fridge_items WHERE id = $1 AND user_id = $2 AND status = 'ordered'",
@@ -317,17 +319,42 @@ app.post('/api/items/:id/receive', auth, async (req, res) => {
   if (!cur.rowCount) return res.status(404).json({ error: '주문한 항목이 아니에요.' });
 
   const { ingredient, storage } = cur.rows[0];
-  const p = await pool.query('SELECT days FROM fridge_shelf_life WHERE ingredient = $1 AND storage = $2', [ingredient, storage]);
-  const days = p.rows[0]?.days ?? 7;
+  const b = req.body || {};
+  const sets = ["status = 'confirmed'", `purchased_on = ${TODAY_KST}`];
+  const params = [];
+
+  // 유통기한: 실측(라벨/수기)이 있으면 그 날짜, 없으면 프리셋(오늘+보관일) 추정
+  if (typeof b.expiry_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.expiry_date)) {
+    params.push(b.expiry_date);
+    sets.push(`expiry_date = $${params.length}::date`);
+    sets.push(`expiry_source = '${b.expiry_source === 'ocr' ? 'ocr' : 'manual'}'`);
+  } else {
+    const p = await pool.query('SELECT days FROM fridge_shelf_life WHERE ingredient = $1 AND storage = $2', [ingredient, storage]);
+    params.push(p.rows[0]?.days ?? 7);
+    sets.push(`expiry_date = ${TODAY_KST} + $${params.length}::int`);
+    sets.push(`expiry_source = 'preset'`);
+  }
+  // 결제 금액 — 식비 리포트 근거
+  if (b.price != null && b.price !== '' && Number.isFinite(Number(b.price)) && Number(b.price) >= 0) {
+    params.push(Math.round(Number(b.price)));
+    sets.push(`price = $${params.length}`);
+  }
+  // 실제 용량(주문분은 '1개' 자리표시자라 라벨을 찍으면 보완된다) — 도착=가득이므로 remaining도 함께
+  if (b.capacity != null && Number(b.capacity) > 0) {
+    params.push(Number(b.capacity));
+    sets.push(`capacity = $${params.length}`, `remaining = $${params.length}`);
+  }
+  if (typeof b.unit === 'string' && b.unit.trim()) {
+    params.push(b.unit.trim());
+    sets.push(`unit = $${params.length}`);
+  }
+
+  params.push(req.params.id, req.userId);
   const r = await pool.query(
-    `UPDATE fridge_items
-        SET status = 'confirmed',
-            purchased_on = ${TODAY_KST},
-            expiry_date = ${TODAY_KST} + $1::int,
-            expiry_source = 'preset'
-      WHERE id = $2 AND user_id = $3
+    `UPDATE fridge_items SET ${sets.join(', ')}
+      WHERE id = $${params.length - 1} AND user_id = $${params.length}
       RETURNING ${ITEM_COLS}`,
-    [days, req.params.id, req.userId]
+    params
   );
   res.json({ item: r.rows[0] });
 });
