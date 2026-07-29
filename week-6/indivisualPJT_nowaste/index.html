@@ -1555,7 +1555,21 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
   const [pickBusy, setPickBusy] = useState(false);
   const [pickResults, setPickResults] = useState(null);   // null이면 추천 목록, 배열이면 고른 재료 결과
 
-  const invIngredients = useMemo(() => [...new Set(items.map((i) => i.ingredient).filter(Boolean))], [items]);
+  // 냉장고 재료는 picker 열 때 서버에서 최신으로 다시 불러온다 (다른 화면에서 냉장고를 바꿔도 여기 반영되게).
+  // prop items는 즉시 표시용 초기값, 서버 응답(freshInv)이 오면 그걸 우선.
+  const [freshInv, setFreshInv] = useState(null);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    let alive = true;
+    API.items('confirmed')
+      .then((r) => alive && setFreshInv([...new Set((r.items || []).map((i) => i.ingredient).filter(Boolean))]))
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [pickerOpen]);
+  const invIngredients = useMemo(
+    () => freshInv || [...new Set(items.map((i) => i.ingredient).filter(Boolean))],
+    [freshInv, items],
+  );
   const togglePick = (n) => setPicks((p) => p.includes(n) ? p.filter((x) => x !== n) : [...p, n]);
   const addCustom = () => { const v = custom.trim(); if (v && !picks.includes(v)) setPicks((p) => [...p, v]); setCustom(''); };
   const runPicks = async () => {
@@ -1877,6 +1891,10 @@ function RecipeSheet({ recipe, onClose, onBuy, onCook, onMealkit }) {
     const v = (amt || 0) * scale;
     return v >= 100 ? Math.round(v / 10) * 10 : v >= 10 ? Math.round(v) : Math.round(v * 2) / 2;
   };
+  // 양념은 "간장 1큰술"처럼 양이 붙어 있어 → 장보기 검색은 이름만("간장")으로 넘긴다.
+  const seasoningNames = (r?.seasonings || [])
+    .map((s) => s.replace(/\s*(?:\d.*|약간.*|조금.*|적당량.*|살짝.*|톡톡.*|넉넉.*|톡.*)$/, '').trim())
+    .filter(Boolean);
 
   return (
     <Sheet open onClose={onClose}>
@@ -1918,7 +1936,16 @@ function RecipeSheet({ recipe, onClose, onBuy, onCook, onMealkit }) {
           })}
         </div>
         {r.seasonings?.length > 0 && (
-          <p className="text-[11px] text-muted mt-2">양념: {r.seasonings.join(', ')} <span className="opacity-60">(집에 있다고 봤어요)</span></p>
+          <div className="flex items-start gap-2 mt-2">
+            <p className="text-[11px] text-muted flex-1 leading-relaxed">
+              양념: {r.seasonings.join(', ')} <span className="opacity-60">(집에 있다고 봤어요)</span>
+            </p>
+            {/* 소금·후추 같은 기본 양념이 떨어졌을 때 바로 담을 수 있게 — 이름만 뽑아 장보기 */}
+            <button onClick={() => onBuy(seasoningNames)} disabled={!seasoningNames.length}
+              className="tap shrink-0 inline-flex items-center gap-1 text-[11px] font-bold text-ink border border-line rounded-full px-2.5 h-7 active:bg-paper disabled:opacity-40">
+              🛒 장보기
+            </button>
+          </div>
         )}
       </div>
 
