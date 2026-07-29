@@ -147,7 +147,7 @@ const API = {
 
   waste:    (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
   predict:  () => api('GET', '/api/stats/predict'),
-  recipes:  (tag, includeOrdered) => api('POST', '/api/recipes/suggest', { tag, includeOrdered }),
+  recipes:  (tag, includeOrdered, want) => api('POST', '/api/recipes/suggest', { tag, includeOrdered, want }),
   recipeByName: (dish, tag, includeOrdered) => api('POST', '/api/recipes/byname', { dish, tag, includeOrdered }),
   recipesWith: (ingredients, tag) => api('POST', '/api/recipes/with', { ingredients, tag }),
   cook: (uses) => api('POST', '/api/recipes/cook', { uses }),
@@ -1535,7 +1535,8 @@ function Row({ label, value, tnum }) {
 
 /* ==== SECTION:COOK ==== */
 
-const COOK_TAGS = ['전체', '아이', '어른', '건강'];
+// '전체'는 모두 보기, 나머지는 그 태그로 '필터'. (어른=일반은 전체와 겹쳐 제거)
+const COOK_TAGS = ['전체', '아이', '건강'];
 
 function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
   const [tag, setTag] = useState('전체');
@@ -1568,15 +1569,16 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
     finally { setPickBusy(false); }
   };
 
+  // 전체를 한 번에 받아두고, 탭(아이/건강)은 서버 재호출 없이 클라에서 '필터'만 한다.
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    API.recipes(tag, includeOrdered)
+    API.recipes('전체', includeOrdered, 16)
       .then((r) => alive && setList(r.recipes))
       .catch((e) => alive && toast(e.message, 'bad'))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [tag, includeOrdered]);
+  }, [includeOrdered]);
 
   // 원하는 음식 직접 입력 → 그 레시피 생성해서 상세로 연다
   const findDish = async () => {
@@ -1613,6 +1615,9 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
       toast(`${dish} 밀키트 찾는 중`);
     } catch (e) { toast(e.message, 'bad'); }
   };
+
+  // 화면에 보일 목록: 고른-재료 결과가 있으면 그것, 아니면 전체목록을 탭으로 필터(전체는 그대로)
+  const shown = pickResults || (tag === '전체' ? list : list.filter((r) => r.tag === tag));
 
   return (
     <>
@@ -1671,7 +1676,7 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
         </div>
       ) : (
         <div className="px-4 pt-3 space-y-2.5">
-          {(pickResults || list).map((r) => (
+          {shown.map((r) => (
             <article key={r.title} className="rise rounded-2xl border border-line bg-surface overflow-hidden">
               <button onClick={() => setDetail(r)} className="tap w-full text-left active:bg-paper transition-colors">
                 <div className="flex gap-3 p-4 pb-3">
@@ -1717,9 +1722,11 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
               </div>
             </article>
           ))}
-          {!(pickResults || list).length && (
+          {!shown.length && (
             <p className="text-center text-muted text-[14px] py-14 leading-relaxed">
-              지금 재료로 추천할 게 없어요.<br />재료를 더 담으면 요리가 나와요.
+              {!list.length
+                ? <>지금 재료로 추천할 게 없어요.<br />재료를 더 담으면 요리가 나와요.</>
+                : <>‘{tag}’에 맞는 레시피가 아직 없어요.<br />전체에서 보거나, ‘냉장고에서 골라’로 만들어보세요.</>}
             </p>
           )}
         </div>

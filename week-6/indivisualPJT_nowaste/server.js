@@ -502,9 +502,10 @@ async function recipeVocab(inventory = []) {
 /* ───────────────── 레시피 (하이브리드: 캐시 + LLM) ───────────────── */
 app.post('/api/recipes/suggest', auth, async (req, res) => {
   const tag = req.body.tag || '전체';
+  const want = Math.min(Math.max(Number(req.body.want) || 6, 1), 20);
   const inventory = await inventoryForRecipes(req.userId, Boolean(req.body.includeOrdered));
   const vocab = await recipeVocab(inventory);
-  const out = await recipes.suggest({ inventory, vocab, tag, want: 6 });
+  const out = await recipes.suggest({ inventory, vocab, tag, want });
   res.json(out);
 });
 
