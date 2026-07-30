@@ -826,6 +826,36 @@ app.get('/api/admin/dashboard', adminAuth, async (req, res) => {
       count(*) FILTER (WHERE age>=30 AND EXISTS(SELECT 1 FROM act a WHERE a.user_id=u.id AND a.day>u.s AND a.day<=u.s+30))::int AS d30_num
     FROM u`)).rows[0];
 
+  // 주간 코호트 리텐션(정밀): 가입 주차(코호트) × 가입 후 k주차에 다시 활동한 유저 비율
+  const cohortRows = (await pool.query(`${ACT},
+    u AS (SELECT id, (created_at AT TIME ZONE 'Asia/Seoul')::date AS signup,
+                 date_trunc('week', (created_at AT TIME ZONE 'Asia/Seoul'))::date AS cohort
+            FROM fridge_users WHERE created_at >= now() - interval '10 weeks'),
+    sizes AS (SELECT cohort, count(*)::int AS size,
+                     floor(((${TODAY} - cohort))::numeric / 7)::int AS elapsed
+                FROM u GROUP BY cohort),
+    ua AS (SELECT u.cohort, u.id, floor((a.day - u.signup)::numeric / 7)::int AS period
+             FROM u JOIN act a ON a.user_id = u.id
+            WHERE a.day >= u.signup AND a.day < u.signup + 56)
+    SELECT s.cohort::text AS cohort, s.size, s.elapsed, ua.period,
+           count(DISTINCT ua.id)::int AS active
+      FROM sizes s LEFT JOIN ua ON ua.cohort = s.cohort
+     GROUP BY s.cohort, s.size, s.elapsed, ua.period
+     ORDER BY s.cohort`)).rows;
+  const cohMap = {};
+  for (const row of cohortRows) {
+    if (!cohMap[row.cohort]) cohMap[row.cohort] = { size: row.size, elapsed: row.elapsed, act: {} };
+    if (row.period != null) cohMap[row.cohort].act[row.period] = row.active;
+  }
+  const CAP = 7; // W0..W7까지 표시
+  const cohortsOut = Object.keys(cohMap).sort().map((c) => {
+    const { size, elapsed, act } = cohMap[c];
+    const pct = [];
+    for (let k = 0; k <= CAP; k++) pct.push(k > elapsed ? null : (size ? Math.round((act[k] || 0) / size * 100) : 0));
+    return { label: c.slice(5).replace('-', '/'), size, pct }; // 'YYYY-MM-DD' → 'MM/DD'
+  });
+  const maxPeriods = Math.min(CAP, Math.max(0, ...Object.values(cohMap).map((x) => x.elapsed)));
+
   const eng = (await pool.query(`
     SELECT count(*)::int AS items,
            count(*) FILTER (WHERE expiry_source='ocr')::int AS scans,
@@ -869,7 +899,8 @@ app.get('/api/admin/dashboard', adminAuth, async (req, res) => {
     retention: {
       d1:  ret.d1_den  ? Math.round(ret.d1_num  / ret.d1_den  * 100) : null, d1Den: ret.d1_den,
       d7:  ret.d7_den  ? Math.round(ret.d7_num  / ret.d7_den  * 100) : null, d7Den: ret.d7_den,
-      d30: ret.d30_den ? Math.round(ret.d30_num / ret.d30_den * 100) : null, d30Den: ret.d30_den },
+      d30: ret.d30_den ? Math.round(ret.d30_num / ret.d30_den * 100) : null, d30Den: ret.d30_den,
+      cohort: { maxPeriods, rows: cohortsOut } },
     engagement: { items: eng.items, scans: eng.scans, eaten: eng.eaten, discarded: eng.discarded,
       shopping: shop, recipes: recipes.total, recipesLlm: recipes.llm,
       itemsPerActive: active.mau ? Math.round(eng.items / active.mau * 10) / 10 : 0 },

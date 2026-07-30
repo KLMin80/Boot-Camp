@@ -33,7 +33,8 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
   // 리텐션용 백데이트 유저(40일 전 가입 + 재방문 활동)
   const bd = await pool.query("INSERT INTO fridge_users(email,password_hash,created_at) VALUES($1,'x', now()-interval '40 days') RETURNING id", [`bd_${STAMP}@t.com`]);
   const bid = bd.rows[0].id;
-  await pool.query("INSERT INTO fridge_activity(user_id,day) VALUES ($1,(now()-interval '39 days')::date),($1,(now()-interval '35 days')::date) ON CONFLICT DO NOTHING", [bid]);
+  // 활동: 가입 다음날(W0)·5일뒤(W0)·10일뒤(W1) → 코호트 W0·W1 재활동 검증용
+  await pool.query("INSERT INTO fridge_activity(user_id,day) VALUES ($1,(now()-interval '39 days')::date),($1,(now()-interval '35 days')::date),($1,(now()-interval '30 days')::date) ON CONFLICT DO NOTHING", [bid]);
 
   // 제휴 클릭 시드(API 엔드포인트 경유): 쿠팡(제휴) 1 + 컬리(비제휴) 1
   const c1 = await api('POST', '/api/buy-clicks', { token: uTok, body: { market: 'coupang', ingredient: '두부', affiliate: true, kind: 'ingredient' } });
@@ -53,6 +54,13 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
   ok(d.north && typeof d.north.mau === 'number' && d.north.totalUsers >= 2, `north 구조 (MAU=${d.north?.mau}, 유저=${d.north?.totalUsers})`);
   ok(Array.isArray(d.growth?.signups), '가입 추세 배열');
   ok(d.retention && d.retention.d30 !== null && d.retention.d30Den >= 1, `리텐션 D30 계산됨 (${d.retention?.d30}% n=${d.retention?.d30Den})`);
+  // 코호트 리텐션(정밀)
+  const co = d.retention?.cohort;
+  ok(co && Array.isArray(co.rows) && co.rows.length >= 1 && typeof co.maxPeriods === 'number', `코호트 구조 (rows=${co?.rows?.length}, maxW=${co?.maxPeriods})`);
+  ok(co?.rows?.every((row) => Array.isArray(row.pct) && row.pct.length === 8), '각 코호트 pct 길이 8(W0..W7)');
+  ok(co?.maxPeriods >= 1 && co.rows.some((row) => row.pct[1] != null), 'W1 관측 가능한 코호트 존재(1주+ 경과)');
+  ok(co?.rows?.some((row) => row.pct.slice(1).some((v) => v > 0)), 'W1+ 재활동이 수치로 잡힘(백데이트 검증)');
+  ok(co?.rows?.every((row) => row.pct[0] != null && row.pct.every((v) => v == null || (v >= 0 && v <= 100))), 'W0 항상 관측 + 값 0~100 범위');
   ok(d.dataAsset?.closedCycles >= 3, `완결 사이클 ≥3 (${d.dataAsset?.closedCycles})`);
   ok(d.dataAsset?.predictablePairs >= 1, `재구매 예측가능 쌍 ≥1 (${d.dataAsset?.predictablePairs})`);
   ok(d.dataAsset?.wasteKrw >= 1500, `폐기 금액 ≥₩1500 (${d.dataAsset?.wasteKrw})`);
@@ -73,6 +81,7 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
   ok(await page.getByText('남김없이 · 운영 대시보드').isVisible(), '헤더 렌더');
   ok(await page.getByText('한눈에').first().isVisible() && await page.getByText('성장 & 리텐션').isVisible(), '핵심 섹션 렌더');
   ok(await page.getByText('영업양도 조항', { exact: false }).isVisible(), '매각 준비 체크 렌더');
+  ok(await page.getByText('주간 코호트 리텐션').isVisible() && await page.getByText('W0', { exact: true }).first().isVisible(), '코호트 그리드 렌더(W0 헤더)');
   ok(errs.length === 0, '콘솔 에러 없음', errs.join(' | '));
   await page.screenshot({ path: require('path').join(require('os').tmpdir(), 'nowaste-admin.png'), fullPage: true });
 

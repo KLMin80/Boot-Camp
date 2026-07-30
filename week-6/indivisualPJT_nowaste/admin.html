@@ -111,6 +111,43 @@ function Note({ tone: tn = 'zinc', title, children }) {
   );
 }
 
+// 코호트 리텐션 삼각 그리드 — 셀은 재활동 %를 초록 히트맵으로
+function CohortGrid({ data }) {
+  if (!data || !data.rows || !data.rows.length) return <p className="text-[12px] text-zinc-600">아직 코호트가 없어요.</p>;
+  const cols = data.maxPeriods;
+  const cellStyle = (pct) => {
+    if (pct == null) return { background: 'transparent', color: '#3f3f46' };
+    const a = Math.max(0.07, pct / 100 * 0.78);
+    return { background: `rgba(16,185,129,${a})`, color: pct >= 45 ? '#04160d' : '#d4d4d8' };
+  };
+  return (
+    <div className="overflow-x-auto">
+      <table className="text-[11px] tnum" style={{ borderSpacing: '3px', borderCollapse: 'separate' }}>
+        <thead>
+          <tr className="text-zinc-500">
+            <th className="text-left font-bold px-1 whitespace-nowrap">가입 주</th>
+            <th className="font-bold px-1">인원</th>
+            {Array.from({ length: cols + 1 }, (_, k) => <th key={k} className="font-bold px-1">W{k}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((r) => (
+            <tr key={r.label}>
+              <td className="text-zinc-300 font-semibold px-1 whitespace-nowrap">{r.label}</td>
+              <td className="text-center text-zinc-400 px-1">{r.size}</td>
+              {Array.from({ length: cols + 1 }, (_, k) => (
+                <td key={k} className="text-center rounded" style={{ ...cellStyle(r.pct[k]), minWidth: '40px', padding: '5px 4px' }}>
+                  {r.pct[k] == null ? '·' : r.pct[k] + '%'}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Gate({ msg }) {
   return (
     <div className="min-h-screen grid place-items-center p-6">
@@ -180,6 +217,12 @@ function App() {
             <Kpi key={lab} label={`${lab} 재방문`} value={v == null ? '—' : v} unit={v == null ? '' : '%'} t={tone(v, good, ok)}
               sub={den ? `n=${den}명` : '데이터 부족'} hint={lab === 'D30' ? '좋은 앱 ≥25%' : ''} />
           ))}
+        </div>
+        {/* 진짜 코호트 리텐션 — 가입 주 × 가입 후 주차 히트맵 */}
+        <div className="rounded-2xl bg-zinc-900/70 border border-zinc-800 p-4 mt-3">
+          <p className="text-[11px] font-bold text-zinc-500 mb-2.5">주간 코호트 리텐션 <span className="font-normal text-zinc-600">— 가입 주마다, 이후 k주차에 다시 온 비율 (초록 진할수록 높음)</span></p>
+          <CohortGrid data={r.cohort} />
+          <p className="text-[10px] text-zinc-600 mt-2.5 leading-snug">읽는 법: 한 행 = 그 주 가입자. 오른쪽(W1·W2…)으로 갈수록 보통 빠진다. <b className="text-zinc-400">아래 행(최근 코호트)의 같은 열이 위보다 진해지면</b> = 신규가 더 잘 남는다 = 제품이 나아지는 신호. W0은 가입 주라 대개 높음.</p>
         </div>
         <Note tone="sky" title="🔑 잘되는 앱 키포인트 — 리텐션">
           설치 수·가입 수는 <b className="text-zinc-300">허영지표(vanity)</b>다. 광고로 살 수 있으니까. 진짜 신호는 <b className="text-zinc-300">한 달 뒤에도 다시 여는가(D30)</b>. 여기가 낮으면 유입에 돈 쓰지 말고 <b className="text-zinc-300">제품(첫 경험·주간 습관)</b>부터 고칠 것.
