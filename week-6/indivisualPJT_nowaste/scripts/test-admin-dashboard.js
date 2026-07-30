@@ -21,6 +21,7 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
   const adminTok = await signup(ADMIN);
   const uEmail = `dashu_${STAMP}@t.com`;
   const uTok = await signup(uEmail);
+  const uid = (await pool.query('SELECT id FROM fridge_users WHERE email = $1', [uEmail])).rows[0].id;
 
   // 소비사이클/자산 시드: 두부 2건 먹음(예측가능 쌍), 두부 1건 폐기(폐기금액), 스캔 성격 데이터
   const t1 = await addItem(uTok, '두부', 3000); await close(uTok, t1.id, 'eaten');
@@ -33,6 +34,11 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
   const bd = await pool.query("INSERT INTO fridge_users(email,password_hash,created_at) VALUES($1,'x', now()-interval '40 days') RETURNING id", [`bd_${STAMP}@t.com`]);
   const bid = bd.rows[0].id;
   await pool.query("INSERT INTO fridge_activity(user_id,day) VALUES ($1,(now()-interval '39 days')::date),($1,(now()-interval '35 days')::date) ON CONFLICT DO NOTHING", [bid]);
+
+  // 제휴 클릭 시드(API 엔드포인트 경유): 쿠팡(제휴) 1 + 컬리(비제휴) 1
+  const c1 = await api('POST', '/api/buy-clicks', { token: uTok, body: { market: 'coupang', ingredient: '두부', affiliate: true, kind: 'ingredient' } });
+  ok(c1.status === 200 && c1.data?.ok, '클릭 로깅 엔드포인트 200');
+  await api('POST', '/api/buy-clicks', { token: uTok, body: { market: 'kurly', ingredient: '우유', affiliate: false } });
 
   // ── 관리자 게이트 ──
   const forbidden = await api('GET', '/api/admin/dashboard', { token: uTok });
@@ -52,7 +58,9 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
   ok(d.dataAsset?.wasteKrw >= 1500, `폐기 금액 ≥₩1500 (${d.dataAsset?.wasteKrw})`);
   ok(d.dataAsset?.priceCoverage > 0 && d.dataAsset?.priceCoverage < 100, `가격 커버리지 부분 (${d.dataAsset?.priceCoverage}%)`);
   ok(typeof d.sale?.transferClause === 'boolean', `영업양도 조항 체크(=${d.sale?.transferClause})`);
-  ok(d.economics?.aiKrw >= 0 && typeof d.economics.note === 'string', 'AI 원가 + 제휴 미구현 노트');
+  ok(d.economics?.aiKrw >= 0 && typeof d.economics.note === 'string', 'AI 원가 집계');
+  ok(d.economics?.clicks >= 2 && d.economics?.affClicks >= 1, `제휴 클릭 집계 (전체 ${d.economics?.clicks}, 제휴 ${d.economics?.affClicks})`);
+  ok(Array.isArray(d.economics?.byMarket) && d.economics.byMarket.some((m) => m.market === 'coupang' && m.aff), '마켓별 클릭에 쿠팡(제휴) 노출');
 
   // ── /admin 렌더 ──
   const browser = await chromium.launch({ executablePath: CHROME, headless: true });
@@ -69,12 +77,31 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
   await page.screenshot({ path: require('path').join(require('os').tmpdir(), 'nowaste-admin.png'), fullPage: true });
 
   // 비관리자 게이트 화면
-  const ctx2 = await browser.newContext({ viewport: { width: 1000, height: 900 } });
+  const ctx2 = await browser.newContext({ viewport: { width: 402, height: 848 } });
   await ctx2.addInitScript((t) => localStorage.setItem('nowaste.token', t), uTok);
   const p2 = await ctx2.newPage();
   await p2.goto(BASE + '/admin', { waitUntil: 'networkidle' });
   await p2.waitForTimeout(1000);
   ok(await p2.getByText('운영 대시보드').first().isVisible(), '비관리자 → 게이트 화면');
+
+  // 같은 유저로 실제 BuySheet 마켓 클릭 → 클릭 로그가 DB에 적재되는지(클라 배선 검증)
+  const before = (await pool.query('SELECT count(*)::int n FROM fridge_buy_click WHERE user_id = $1', [uid])).rows[0].n;
+  await p2.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await p2.locator('nav button:has-text("요리")').click();
+  await p2.waitForSelector('article', { timeout: 60000 });
+  const cnt = await p2.locator('article').count();
+  for (let i = 0; i < Math.min(cnt, 8); i++) {
+    await p2.locator('article button').nth(i).click();
+    await p2.waitForSelector('text=몇 인분?', { timeout: 8000 });
+    if (await p2.getByText(/^양념:/).count()) break;
+    await p2.locator('button:has-text("닫기")').first().click(); await p2.waitForTimeout(150);
+  }
+  await p2.getByRole('button', { name: /장보기/ }).click();
+  await p2.waitForSelector('text=사러 가기', { timeout: 8000 });
+  await p2.locator('button:has-text("쿠팡")').first().click();
+  await p2.waitForTimeout(1000);
+  const after = (await pool.query('SELECT count(*)::int n FROM fridge_buy_click WHERE user_id = $1', [uid])).rows[0].n;
+  ok(after > before, `BuySheet 마켓 클릭 → 클릭 로그 적재 (${before}→${after})`);
 
   await browser.close();
   // 정리

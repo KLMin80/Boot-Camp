@@ -200,14 +200,27 @@ function App() {
       </Section>
 
       {/* 3. 수익 — 유닛 이코노믹스 */}
-      <Section title="수익 · 유닛 이코노믹스" sub="쓰는 돈(AI 원가) vs 버는 돈(제휴) — COST.md 기준">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <Kpi label="AI 원가(누적)" value={`₩${won(ec.aiKrw)}`} t="amber" sub={`OCR ₩${won(ec.ocrKrw)} + 레시피 ₩${won(ec.recipeKrw)}`} hint="OCR이 95%+ — 스캔 1장 ≈ ₩4.6" />
-          <Kpi label="제휴 수익" value="추적 전" t="rose" hint="클릭→구매 추적 미구현" />
-          <Kpi label="손익(원가 회수)" value="—" hint="제휴 추적 붙으면 자동 계산" />
+      <Section title="수익 · 유닛 이코노믹스" sub="쓰는 돈(AI 원가) vs 보내는 트래픽(제휴 클릭) — COST.md 기준">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Kpi label="AI 원가(누적)" value={`₩${won(ec.aiKrw)}`} t="amber" sub={`OCR ₩${won(ec.ocrKrw)} + 레시피 ₩${won(ec.recipeKrw)}`} hint="OCR이 95%+ · 스캔 1장 ≈ ₩4.6" />
+          <Kpi label="제휴 클릭(누적)" value={won(ec.affClicks)} t={ec.affClicks ? 'emerald' : 'zinc'} sub={`전체 ${won(ec.clicks)} · 활성당 ${ec.clicksPerActive}`} hint="제휴 마켓으로 보낸 트래픽 = 수익 선행지표" />
+          <Kpi label="최근 30일 클릭" value={won(ec.clicks30)} unit="건" t="sky" sub={`제휴 ${won(ec.affClicks30)}`} />
+          <Kpi label="AI원가 / 제휴클릭" value={ec.affClicks ? `₩${won(Math.round(ec.aiKrw / ec.affClicks))}` : '—'} hint="제휴 클릭 1건당 든 AI 원가 (낮을수록 효율적)" />
         </div>
-        <Note tone="amber" title="⚠️ 다음 계기판 — 제휴 클릭 추적">
-          {ec.note} 수익화의 핵심 목표(STRATEGY.md §5: 파트너스 제휴수익)라, <b className="text-zinc-300">구매 링크 클릭 이벤트 로깅</b>이 다음 우선순위. 붙이면 "원가 ₩X vs 제휴 ₩Y" 손익이 여기서 자동으로 뜬다.
+        {ec.byMarket && ec.byMarket.length > 0 && (
+          <div className="rounded-xl bg-zinc-900/70 border border-zinc-800 p-3 mt-3">
+            <p className="text-[11px] font-bold text-zinc-500 mb-2">마켓별 클릭</p>
+            <div className="flex flex-wrap gap-2">
+              {ec.byMarket.map((m) => (
+                <span key={m.market} className="tnum text-[12px] px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-300">
+                  {m.market} <b className="text-zinc-100">{won(m.n)}</b>{m.aff && <span className="text-emerald-400 text-[10px] ml-1">제휴</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <Note tone="amber" title="⚠️ 클릭은 선행지표, 매출은 파트너스에서">
+          {ec.note} 이 대시보드는 <b className="text-zinc-300">"AI 원가 ₩{won(ec.aiKrw)} vs 제휴 클릭 {won(ec.affClicks)}건"</b>으로 방향을 본다 — 클릭이 원가를 못 넘기면 구매 전환·마켓 구성부터 점검(STRATEGY.md §5: 파트너스 제휴수익).
         </Note>
       </Section>
 

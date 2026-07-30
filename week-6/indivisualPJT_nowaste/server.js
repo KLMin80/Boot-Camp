@@ -764,6 +764,20 @@ app.get(['/', '/index.html'], (req, res) => res.type('html').send(INDEX_HTML));
 app.get(['/privacy', '/privacy.html'], (req, res) => res.type('html').send(PRIVACY_HTML));
 app.get(['/admin', '/admin.html'], (req, res) => res.type('html').send(ADMIN_HTML));
 
+/* 제휴/마켓 구매 링크 클릭 로그 — 수익화 선행지표. 클릭 순간(BuySheet·밀키트)에 남긴다.
+   비차단·가벼움. 클릭≠구매지만, '어디로 얼마나 보냈나'가 제휴 수익의 유일한 자체 신호다. */
+app.post('/api/buy-clicks', auth, async (req, res) => {
+  const b = req.body || {};
+  const market = String(b.market || '').trim().slice(0, 20);
+  if (!market) return res.status(400).json({ error: 'market이 필요합니다.' });
+  const kind = b.kind === 'mealkit' ? 'mealkit' : 'ingredient';
+  await pool.query(
+    `INSERT INTO fridge_buy_click(user_id, market, ingredient, affiliate, kind) VALUES ($1,$2,$3,$4,$5)`,
+    [req.userId, market, b.ingredient ? String(b.ingredient).slice(0, 60) : null, !!b.affiliate, kind]
+  );
+  res.json({ ok: true });
+});
+
 /* ───────────────── 운영·수익 관리 대시보드 (읽기전용 · 관리자 전용) ─────────────────
    설계 원칙(STRATEGY.md): 리텐션이 전부 · 진짜 자산은 데이터 · 매각은 로또지만 스키마/조항은 처음부터.
    모든 쿼리 SELECT 전용. 집계는 SQL에서 캐스팅(pg는 숫자를 문자열로 돌려준다). */
@@ -833,6 +847,17 @@ app.get('/api/admin/dashboard', adminAuth, async (req, res) => {
     SELECT count(*)::int AS n FROM (
       SELECT user_id, ingredient FROM fridge_items WHERE outcome='eaten' GROUP BY 1,2 HAVING count(*) >= 2) t`)).rows[0].n;
 
+  // 제휴/마켓 클릭 — 수익화 선행지표
+  const clicks = (await pool.query(`
+    SELECT count(*)::int AS total,
+           count(*) FILTER (WHERE affiliate)::int AS aff,
+           count(*) FILTER (WHERE created_at >= now() - interval '30 days')::int AS total30,
+           count(*) FILTER (WHERE affiliate AND created_at >= now() - interval '30 days')::int AS aff30
+      FROM fridge_buy_click`)).rows[0];
+  const byMarket = (await pool.query(`
+    SELECT market, count(*)::int AS n, bool_or(affiliate) AS aff
+      FROM fridge_buy_click GROUP BY market ORDER BY 2 DESC LIMIT 6`)).rows;
+
   const denom = eng.items || 1;
   res.json({
     generatedAt: now,
@@ -850,7 +875,9 @@ app.get('/api/admin/dashboard', adminAuth, async (req, res) => {
       itemsPerActive: active.mau ? Math.round(eng.items / active.mau * 10) / 10 : 0 },
     economics: { ocrScans: eng.scans, ocrKrw: Math.round(eng.scans * 4.6),
       recipeLlm: recipes.llm, recipeKrw: recipes.llm, aiKrw: Math.round(eng.scans * 4.6) + recipes.llm,
-      note: '제휴 클릭 추적은 아직 미구현 — 수익 측정의 최우선 계기판(다음 단계).' },
+      clicks: clicks.total, affClicks: clicks.aff, clicks30: clicks.total30, affClicks30: clicks.aff30,
+      byMarket, clicksPerActive: active.mau ? Math.round(clicks.total / active.mau * 10) / 10 : 0,
+      note: '클릭 ≠ 구매 — 실제 제휴 수익·매출은 파트너스 리포트에서 확인. 여기선 유입 신호를 센다.' },
     dataAsset: { closedCycles: asset.closed, wasteKrw: asset.waste_krw,
       avgConsumeDays: asset.avg_consume_days, predictablePairs: pairs,
       priceCoverage: Math.round(asset.with_price / denom * 100),

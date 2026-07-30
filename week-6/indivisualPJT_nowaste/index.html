@@ -152,6 +152,7 @@ const API = {
   recipesWith: (ingredients, tag) => api('POST', '/api/recipes/with', { ingredients, tag }),
   cook: (uses) => api('POST', '/api/recipes/cook', { uses }),
   buyLinks: (names) => api('POST', '/api/buy-links', { items: names }),
+  trackBuyClick: (body) => api('POST', '/api/buy-clicks', body),
   mealkitLink: (dish) => api('POST', '/api/mealkit-link', { dish }),
 
   shopping:       () => api('GET', '/api/shopping'),
@@ -1625,6 +1626,7 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
   const mealkit = async (dish) => {
     try {
       const { url } = await API.mealkitLink(dish);
+      API.trackBuyClick({ market: 'coupang', ingredient: dish, affiliate: true, kind: 'mealkit' }).catch(() => {});
       window.open(url, '_blank', 'noopener');
       toast(`${dish} 밀키트 찾는 중`);
     } catch (e) { toast(e.message, 'bad'); }
@@ -1857,7 +1859,12 @@ function BuySheet({ data, onClose, onPick, onAddOrdered }) {
             </div>
             <div className="grid grid-cols-2 gap-2">
               {markets.map((m) => (
-                <button key={m.key} onClick={() => onPick(links[ing][m.key], m.label, ing)}
+                <button key={m.key}
+                  onClick={() => {
+                    // 제휴 클릭 로그(비차단) 후 마켓 열기 — 수익화 선행지표
+                    API.trackBuyClick({ market: m.key, ingredient: ing, affiliate: !!m.affiliate, kind: 'ingredient' }).catch(() => {});
+                    onPick(links[ing][m.key], m.label, ing);
+                  }}
                   className="tap flex items-center gap-2 h-[50px] px-3 rounded-xl border-2 border-line bg-surface active:bg-paper transition-colors">
                   <span className="text-[18px]">{m.icon}</span>
                   <span className="font-bold text-[14px] flex-1 text-left">{m.label}</span>

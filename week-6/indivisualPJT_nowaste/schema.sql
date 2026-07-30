@@ -160,3 +160,16 @@ CREATE TABLE IF NOT EXISTS fridge_activity (
   PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_fridge_activity_day ON fridge_activity (day);
+
+-- 제휴/마켓 구매 링크 클릭 로그 — 수익화의 선행지표.
+-- ⚠️ 클릭 ≠ 구매(담벼락 탓 실제 구매·매출은 파트너스 리포트에서만 확인). 여기선 '어디로 얼마나 보냈나'를 센다.
+CREATE TABLE IF NOT EXISTS fridge_buy_click (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid NOT NULL REFERENCES fridge_users(id) ON DELETE CASCADE,
+  market     text NOT NULL,                         -- 'coupang','kurly','emart','naver'
+  ingredient text,                                   -- 재료명(또는 밀키트 요리명)
+  affiliate  boolean NOT NULL DEFAULT false,         -- 제휴(수수료) 마켓 여부
+  kind       text NOT NULL DEFAULT 'ingredient',     -- 'ingredient' | 'mealkit'
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_fridge_buy_click_time ON fridge_buy_click (created_at);
