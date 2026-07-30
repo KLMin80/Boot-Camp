@@ -52,10 +52,33 @@ function auth(req, res, next) {
   if (!token) return res.status(401).json({ error: '로그인이 필요합니다.' });
   try {
     req.userId = jwt.verify(token, JWT_SECRET).uid;
+    // 활동 로그 — 리텐션(DAU/재방문)의 원천. 하루 1행(ON CONFLICT), 실패해도 요청은 진행(비차단).
+    pool.query(`INSERT INTO fridge_activity(user_id, day) VALUES ($1, ${TODAY_KST}) ON CONFLICT DO NOTHING`, [req.userId]).catch(() => {});
     next();
   } catch {
     return res.status(401).json({ error: '로그인이 만료됐습니다. 다시 로그인해 주세요.' });
   }
+}
+
+/* 관리자 게이트 — 운영/수익 대시보드 전용.
+   ADMIN_EMAILS(.env, 쉼표구분)에 든 계정만 통과. 기본은 아무도 아님(안전).
+   pooler는 RLS를 통과하므로, 전체 유저 집계는 반드시 이 게이트 뒤에서만 한다. */
+const ADMIN_EMAILS = String(process.env.ADMIN_EMAILS || '')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+async function adminAuth(req, res, next) {
+  const h = req.headers.authorization || '';
+  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
+  if (!token) return res.status(401).json({ error: '로그인이 필요합니다.' });
+  let uid;
+  try { uid = jwt.verify(token, JWT_SECRET).uid; }
+  catch { return res.status(401).json({ error: '로그인이 만료됐습니다.' }); }
+  const r = await pool.query('SELECT email FROM fridge_users WHERE id = $1', [uid]);
+  const email = r.rows[0]?.email?.toLowerCase();
+  if (!email || !ADMIN_EMAILS.includes(email)) {
+    return res.status(403).json({ error: '관리자 권한이 없습니다.' });
+  }
+  req.userId = uid;
+  next();
 }
 
 app.post('/api/auth/signup', async (req, res) => {
@@ -734,9 +757,108 @@ app.delete('/api/shopping/:id', auth, async (req, res) => {
 const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 // 개인정보처리방침 — 스토어 등록에 URL이 필요. 같은 방식(시작 시 1회 읽기 + vercel.json includeFiles).
 const PRIVACY_HTML = fs.readFileSync(path.join(__dirname, 'privacy.html'), 'utf8');
+// 운영자 관리 대시보드 — 최종 사용자 앱과 분리된 별도 페이지. 접근은 화면 안에서 관리자 API로 다시 검증.
+const ADMIN_HTML = fs.readFileSync(path.join(__dirname, 'admin.html'), 'utf8');
 
 app.get(['/', '/index.html'], (req, res) => res.type('html').send(INDEX_HTML));
 app.get(['/privacy', '/privacy.html'], (req, res) => res.type('html').send(PRIVACY_HTML));
+app.get(['/admin', '/admin.html'], (req, res) => res.type('html').send(ADMIN_HTML));
+
+/* ───────────────── 운영·수익 관리 대시보드 (읽기전용 · 관리자 전용) ─────────────────
+   설계 원칙(STRATEGY.md): 리텐션이 전부 · 진짜 자산은 데이터 · 매각은 로또지만 스키마/조항은 처음부터.
+   모든 쿼리 SELECT 전용. 집계는 SQL에서 캐스팅(pg는 숫자를 문자열로 돌려준다). */
+app.get('/api/admin/dashboard', adminAuth, async (req, res) => {
+  const TODAY = `(now() AT TIME ZONE 'Asia/Seoul')::date`;
+  // 활동 = 접속 로그 ∪ 재고 등록/소진 ∪ 장보기 추가. 과거분은 타임스탬프로 근사, 앞으로는 로그가 정확.
+  const ACT = `
+    WITH act AS (
+      SELECT user_id, day FROM fridge_activity
+      UNION SELECT user_id, (created_at AT TIME ZONE 'Asia/Seoul')::date FROM fridge_items
+      UNION SELECT user_id, closed_on FROM fridge_items WHERE closed_on IS NOT NULL
+      UNION SELECT user_id, (created_at AT TIME ZONE 'Asia/Seoul')::date FROM fridge_shopping
+    )`;
+
+  const now = (await pool.query(`SELECT to_char(now() AT TIME ZONE 'Asia/Seoul','YYYY-MM-DD HH24:MI') t`)).rows[0].t;
+
+  const users = (await pool.query(`
+    SELECT count(*)::int AS total,
+           count(*) FILTER (WHERE created_at >= now() - interval '7 days')::int  AS new7,
+           count(*) FILTER (WHERE created_at >= now() - interval '30 days')::int AS new30
+      FROM fridge_users`)).rows[0];
+
+  const active = (await pool.query(`${ACT}
+    SELECT count(DISTINCT user_id) FILTER (WHERE day = ${TODAY})::int       AS dau,
+           count(DISTINCT user_id) FILTER (WHERE day > ${TODAY} - 7)::int   AS wau,
+           count(DISTINCT user_id) FILTER (WHERE day > ${TODAY} - 30)::int  AS mau
+      FROM act`)).rows[0];
+
+  const signups = (await pool.query(`
+    SELECT to_char(date_trunc('week', created_at AT TIME ZONE 'Asia/Seoul'), 'MM/DD') AS wk, count(*)::int AS n
+      FROM fridge_users WHERE created_at >= now() - interval '56 days'
+     GROUP BY date_trunc('week', created_at AT TIME ZONE 'Asia/Seoul') ORDER BY 1`)).rows;
+
+  const activated = (await pool.query(`SELECT count(DISTINCT user_id)::int AS n FROM fridge_items`)).rows[0].n;
+
+  // 리텐션(근사): 나이 N일 이상 유저 중, 가입 이후 N일 내 재방문 비율
+  const ret = (await pool.query(`${ACT},
+    u AS (SELECT id, (created_at AT TIME ZONE 'Asia/Seoul')::date AS s,
+                 (${TODAY} - (created_at AT TIME ZONE 'Asia/Seoul')::date) AS age FROM fridge_users)
+    SELECT
+      count(*) FILTER (WHERE age>=1)::int  AS d1_den,
+      count(*) FILTER (WHERE age>=1  AND EXISTS(SELECT 1 FROM act a WHERE a.user_id=u.id AND a.day>u.s AND a.day<=u.s+1))::int  AS d1_num,
+      count(*) FILTER (WHERE age>=7)::int  AS d7_den,
+      count(*) FILTER (WHERE age>=7  AND EXISTS(SELECT 1 FROM act a WHERE a.user_id=u.id AND a.day>u.s AND a.day<=u.s+7))::int  AS d7_num,
+      count(*) FILTER (WHERE age>=30)::int AS d30_den,
+      count(*) FILTER (WHERE age>=30 AND EXISTS(SELECT 1 FROM act a WHERE a.user_id=u.id AND a.day>u.s AND a.day<=u.s+30))::int AS d30_num
+    FROM u`)).rows[0];
+
+  const eng = (await pool.query(`
+    SELECT count(*)::int AS items,
+           count(*) FILTER (WHERE expiry_source='ocr')::int AS scans,
+           count(*) FILTER (WHERE outcome='eaten')::int     AS eaten,
+           count(*) FILTER (WHERE outcome='discarded')::int AS discarded
+      FROM fridge_items`)).rows[0];
+  const shop = (await pool.query(`SELECT count(*)::int AS n FROM fridge_shopping`)).rows[0].n;
+  const recipes = (await pool.query(`
+    SELECT count(*)::int AS total, count(*) FILTER (WHERE source='llm')::int AS llm FROM fridge_recipe_cache`)).rows[0];
+
+  // 데이터 자산(매각 대비): 소비속도·폐기금액·재구매 예측가능쌍·커버리지
+  const asset = (await pool.query(`
+    SELECT count(*) FILTER (WHERE outcome IS NOT NULL)::int AS closed,
+           count(*) FILTER (WHERE price IS NOT NULL)::int   AS with_price,
+           round(avg(closed_on - purchased_on) FILTER (WHERE outcome='eaten')::numeric, 1)::float8 AS avg_consume_days,
+           COALESCE(round(sum(discarded_amount / NULLIF(capacity,0) * price) FILTER (WHERE outcome='discarded' AND price IS NOT NULL))::int, 0) AS waste_krw
+      FROM fridge_items`)).rows[0];
+  const pairs = (await pool.query(`
+    SELECT count(*)::int AS n FROM (
+      SELECT user_id, ingredient FROM fridge_items WHERE outcome='eaten' GROUP BY 1,2 HAVING count(*) >= 2) t`)).rows[0].n;
+
+  const denom = eng.items || 1;
+  res.json({
+    generatedAt: now,
+    north: { totalUsers: users.total, new7: users.new7, new30: users.new30,
+      dau: active.dau, wau: active.wau, mau: active.mau,
+      stickiness: active.mau ? Math.round(active.dau / active.mau * 100) : 0 },
+    growth: { signups, activated,
+      activationRate: users.total ? Math.round(activated / users.total * 100) : 0 },
+    retention: {
+      d1:  ret.d1_den  ? Math.round(ret.d1_num  / ret.d1_den  * 100) : null, d1Den: ret.d1_den,
+      d7:  ret.d7_den  ? Math.round(ret.d7_num  / ret.d7_den  * 100) : null, d7Den: ret.d7_den,
+      d30: ret.d30_den ? Math.round(ret.d30_num / ret.d30_den * 100) : null, d30Den: ret.d30_den },
+    engagement: { items: eng.items, scans: eng.scans, eaten: eng.eaten, discarded: eng.discarded,
+      shopping: shop, recipes: recipes.total, recipesLlm: recipes.llm,
+      itemsPerActive: active.mau ? Math.round(eng.items / active.mau * 10) / 10 : 0 },
+    economics: { ocrScans: eng.scans, ocrKrw: Math.round(eng.scans * 4.6),
+      recipeLlm: recipes.llm, recipeKrw: recipes.llm, aiKrw: Math.round(eng.scans * 4.6) + recipes.llm,
+      note: '제휴 클릭 추적은 아직 미구현 — 수익 측정의 최우선 계기판(다음 단계).' },
+    dataAsset: { closedCycles: asset.closed, wasteKrw: asset.waste_krw,
+      avgConsumeDays: asset.avg_consume_days, predictablePairs: pairs,
+      priceCoverage: Math.round(asset.with_price / denom * 100),
+      outcomeCoverage: Math.round(asset.closed / denom * 100) },
+    sale: { mau: active.mau, gates: [10000, 100000, 500000], transferClause: /양도|영업\s*양도|사업\s*양[수도]/.test(PRIVACY_HTML),
+      note: 'STRATEGY.md: 매각은 로또(④). ①우리집 절감 ②실력 ③제휴수익을 왜곡하지 말 것.' },
+  });
+});
 
 app.get('/api/health', async (req, res) => {
   await pool.query('SELECT 1');

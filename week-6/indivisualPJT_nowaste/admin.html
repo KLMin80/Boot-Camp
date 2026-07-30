@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>남김없이 · 운영 대시보드</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📊%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = { theme: { extend: { fontFamily: { sans: ['Pretendard', 'system-ui', 'sans-serif'] } } } };
+</script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+<style>
+  body { background:#0a0a0b; color:#e7e7ea; font-family:Pretendard,system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  ::-webkit-scrollbar { width:8px; height:8px; } ::-webkit-scrollbar-thumb { background:#2a2a2e; border-radius:8px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+const TOKEN = localStorage.getItem('nowaste.token');
+const won = (n) => (n || 0).toLocaleString('ko-KR');
+// 톤: 값이 good 이상=초록, ok 이상=주황, 그 밑=빨강, null=회색
+const TONE = {
+  emerald: 'text-emerald-400', amber: 'text-amber-400', rose: 'text-rose-400', zinc: 'text-zinc-400', sky: 'text-sky-400',
+};
+const BG = { emerald: 'bg-emerald-500', amber: 'bg-amber-500', rose: 'bg-rose-500', zinc: 'bg-zinc-600', sky: 'bg-sky-500' };
+const tone = (v, good, ok) => (v == null ? 'zinc' : v >= good ? 'emerald' : v >= ok ? 'amber' : 'rose');
+
+function Section({ title, sub, right, children }) {
+  return (
+    <section className="mb-7">
+      <div className="flex items-end justify-between mb-3">
+        <div>
+          <h2 className="text-[15px] font-extrabold tracking-tight">{title}</h2>
+          {sub && <p className="text-[12px] text-zinc-500 mt-0.5">{sub}</p>}
+        </div>
+        {right}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+// 큰 지표 카드
+function Kpi({ label, value, unit, sub, t = 'zinc', hint }) {
+  return (
+    <div className="rounded-2xl bg-zinc-900/70 border border-zinc-800 p-4">
+      <p className="text-[11px] font-bold text-zinc-500">{label}</p>
+      <p className={`tnum text-[26px] font-extrabold leading-tight mt-1 ${TONE[t]}`}>
+        {value}<span className="text-[13px] font-bold text-zinc-500 ml-0.5">{unit}</span>
+      </p>
+      {sub && <p className="tnum text-[11px] text-zinc-500 mt-0.5">{sub}</p>}
+      {hint && <p className="text-[10px] text-zinc-600 mt-1.5 leading-snug">{hint}</p>}
+    </div>
+  );
+}
+
+// 벤치마크 배지 (좋은 앱 기준선 대비)
+function Bench({ ok, children }) {
+  return <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${ok ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-700/40 text-zinc-400'}`}>{children}</span>;
+}
+
+// 커버리지/비율 막대
+function Cov({ label, pct, warnBelow = 70, hint }) {
+  const t = pct >= warnBelow ? 'emerald' : pct >= warnBelow * 0.6 ? 'amber' : 'rose';
+  return (
+    <div className="rounded-xl bg-zinc-900/70 border border-zinc-800 p-3">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[12px] font-bold text-zinc-300">{label}</span>
+        <span className={`tnum text-[13px] font-extrabold ${TONE[t]}`}>{pct}%</span>
+      </div>
+      <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
+        <div className={`h-full ${BG[t]}`} style={{ width: Math.min(100, pct) + '%' }} />
+      </div>
+      {hint && <p className="text-[10px] text-zinc-600 mt-1.5 leading-snug">{hint}</p>}
+    </div>
+  );
+}
+
+// 주별 막대 차트 (가입 등)
+function Bars({ data, xKey, yKey }) {
+  const max = Math.max(1, ...data.map((d) => d[yKey]));
+  if (!data.length) return <p className="text-[12px] text-zinc-600">데이터가 아직 없어요.</p>;
+  return (
+    <div className="flex items-end gap-2 h-28">
+      {data.map((d, i) => (
+        <div key={i} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+          <span className="tnum text-[10px] text-zinc-400">{d[yKey]}</span>
+          <div className="w-full rounded-t bg-sky-500/80" style={{ height: Math.max(3, d[yKey] / max * 84) + 'px' }} />
+          <span className="tnum text-[9px] text-zinc-600 truncate w-full text-center">{d[xKey]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// 노하우/경고 콜아웃
+function Note({ tone: tn = 'zinc', title, children }) {
+  const c = { zinc: 'border-zinc-800 bg-zinc-900/50', amber: 'border-amber-500/30 bg-amber-500/[.06]', rose: 'border-rose-500/30 bg-rose-500/[.06]', sky: 'border-sky-500/30 bg-sky-500/[.06]' }[tn];
+  return (
+    <div className={`rounded-xl border ${c} px-3.5 py-2.5 mt-3`}>
+      {title && <p className="text-[11px] font-extrabold text-zinc-300 mb-0.5">{title}</p>}
+      <p className="text-[11px] text-zinc-400 leading-relaxed">{children}</p>
+    </div>
+  );
+}
+
+function Gate({ msg }) {
+  return (
+    <div className="min-h-screen grid place-items-center p-6">
+      <div className="max-w-sm text-center">
+        <div className="text-[40px]">🔒</div>
+        <h1 className="text-[18px] font-extrabold mt-2">운영 대시보드</h1>
+        <p className="text-[13px] text-zinc-400 mt-2 leading-relaxed">{msg}</p>
+        <p className="text-[12px] text-zinc-600 mt-4 leading-relaxed">관리자 계정으로 <a href="/" className="text-sky-400 underline">앱에 로그인</a>한 뒤 이 페이지(<code className="text-zinc-400">/admin</code>)를 다시 열어주세요. 관리자 이메일은 서버 <code className="text-zinc-400">ADMIN_EMAILS</code>로 지정합니다.</p>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const load = () => {
+    setLoading(true);
+    fetch('/api/admin/dashboard', { headers: { Authorization: 'Bearer ' + TOKEN } })
+      .then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || ('오류 ' + r.status)); return r.json(); })
+      .then((j) => { setD(j); setErr(null); })
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { if (TOKEN) load(); else setLoading(false); }, []);
+
+  if (!TOKEN) return <Gate msg="아직 로그인 정보가 없어요." />;
+  if (loading) return <div className="min-h-screen grid place-items-center text-zinc-500 text-[13px]">불러오는 중…</div>;
+  if (err) return <Gate msg={err} />;
+  if (!d) return null;
+
+  const { north: n, growth: g, retention: r, engagement: e, economics: ec, dataAsset: a, sale: s } = d;
+  const gate = s.gates.find((x) => s.mau < x) || s.gates[s.gates.length - 1];
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+      {/* 헤더 */}
+      <header className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-[19px] font-extrabold tracking-tight">남김없이 · 운영 대시보드</h1>
+          <p className="text-[11px] text-zinc-500 mt-0.5">생성 {d.generatedAt} · 읽기전용 · 관리자 전용</p>
+        </div>
+        <button onClick={load} className="text-[12px] font-bold text-zinc-300 border border-zinc-700 rounded-lg px-3 py-1.5 hover:bg-zinc-800 active:scale-95 transition">새로고침</button>
+      </header>
+
+      {/* 0. 한눈에 — 북극성: 리텐션(끈적임) */}
+      <Section title="한눈에" sub="설치 수가 아니라 '얼마나 붙어 있나'가 북극성 (STRATEGY.md: 리텐션이 전부)">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Kpi label="MAU (월 활성)" value={won(n.mau)} sub={`WAU ${won(n.wau)} · DAU ${won(n.dau)}`} t="sky" />
+          <Kpi label="끈적임 (DAU/MAU)" value={n.stickiness} unit="%" t={tone(n.stickiness, 20, 10)}
+            hint="좋은 소비앱 ≥20% · 매일 여는 습관인지" />
+          <Kpi label="총 유저" value={won(n.totalUsers)} sub={`신규 7일 +${n.new7} · 30일 +${n.new30}`} />
+          <Kpi label="활성화율" value={g.activationRate} unit="%" t={tone(g.activationRate, 40, 20)}
+            sub={`${won(g.activated)}명이 재고 1개+ 등록`} hint="가입 후 첫 핵심행동 도달률" />
+        </div>
+      </Section>
+
+      {/* 1. 성장 & 리텐션 */}
+      <Section title="성장 & 리텐션" sub="신규 유입은 위, 남는지는 아래 — 리텐션 없는 유입은 밑빠진 독">
+        <div className="rounded-2xl bg-zinc-900/70 border border-zinc-800 p-4 mb-3">
+          <p className="text-[11px] font-bold text-zinc-500 mb-2">주별 가입 (최근 8주)</p>
+          <Bars data={g.signups} xKey="wk" yKey="n" />
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          {[['D1', r.d1, r.d1Den, 40, 20], ['D7', r.d7, r.d7Den, 20, 10], ['D30', r.d30, r.d30Den, 25, 10]].map(([lab, v, den, good, ok]) => (
+            <Kpi key={lab} label={`${lab} 재방문`} value={v == null ? '—' : v} unit={v == null ? '' : '%'} t={tone(v, good, ok)}
+              sub={den ? `n=${den}명` : '데이터 부족'} hint={lab === 'D30' ? '좋은 앱 ≥25%' : ''} />
+          ))}
+        </div>
+        <Note tone="sky" title="🔑 잘되는 앱 키포인트 — 리텐션">
+          설치 수·가입 수는 <b className="text-zinc-300">허영지표(vanity)</b>다. 광고로 살 수 있으니까. 진짜 신호는 <b className="text-zinc-300">한 달 뒤에도 다시 여는가(D30)</b>. 여기가 낮으면 유입에 돈 쓰지 말고 <b className="text-zinc-300">제품(첫 경험·주간 습관)</b>부터 고칠 것.
+        </Note>
+      </Section>
+
+      {/* 2. 인게이지먼트 (핵심 행동) */}
+      <Section title="인게이지먼트" sub="유저가 실제로 하는 행동 — 스캔·소진·폐기·레시피">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Kpi label="재고 등록(누적)" value={won(e.items)} sub={`활성당 ${e.itemsPerActive}개`} />
+          <Kpi label="라벨 스캔(OCR)" value={won(e.scans)} t="sky" hint="원가 발생 지점" />
+          <Kpi label="소진 / 폐기" value={`${won(e.eaten)}/${won(e.discarded)}`} t={e.eaten + e.discarded === 0 ? 'zinc' : tone(e.discarded === 0 ? 100 : Math.round(e.eaten / (e.eaten + e.discarded) * 100), 80, 60)} hint="먹음:버림 비율 = 앱 효용" />
+          <Kpi label="레시피 카탈로그" value={won(e.recipes)} sub={`LLM 생성 ${e.recipesLlm} · 장보기 ${e.shopping}`} hint="공유 캐시 = 플라이휠" />
+        </div>
+        <Note title="🔑 '아하 순간(aha moment)'">
+          이 앱의 첫 가치 경험은 <b className="text-zinc-300">첫 라벨 스캔</b>과 <b className="text-zinc-300">첫 레시피</b>다. 가입→첫 스캔 사이에서 이탈이 크면 온보딩을 여기에 집중. (백로그 #2 프로필·#3 퍼널과 연결)
+        </Note>
+      </Section>
+
+      {/* 3. 수익 — 유닛 이코노믹스 */}
+      <Section title="수익 · 유닛 이코노믹스" sub="쓰는 돈(AI 원가) vs 버는 돈(제휴) — COST.md 기준">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <Kpi label="AI 원가(누적)" value={`₩${won(ec.aiKrw)}`} t="amber" sub={`OCR ₩${won(ec.ocrKrw)} + 레시피 ₩${won(ec.recipeKrw)}`} hint="OCR이 95%+ — 스캔 1장 ≈ ₩4.6" />
+          <Kpi label="제휴 수익" value="추적 전" t="rose" hint="클릭→구매 추적 미구현" />
+          <Kpi label="손익(원가 회수)" value="—" hint="제휴 추적 붙으면 자동 계산" />
+        </div>
+        <Note tone="amber" title="⚠️ 다음 계기판 — 제휴 클릭 추적">
+          {ec.note} 수익화의 핵심 목표(STRATEGY.md §5: 파트너스 제휴수익)라, <b className="text-zinc-300">구매 링크 클릭 이벤트 로깅</b>이 다음 우선순위. 붙이면 "원가 ₩X vs 제휴 ₩Y" 손익이 여기서 자동으로 뜬다.
+        </Note>
+      </Section>
+
+      {/* 4. 데이터 자산 (매각 대비) */}
+      <Section title="데이터 자산 (매각 대비)" sub="쿠팡이 못 만드는 것 — 무엇을 언제 다 쓰고, 무엇을 버렸나">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+          <Kpi label="완결 소비사이클" value={won(a.closedCycles)} t="sky" hint="구매→소진/폐기까지 기록된 건" />
+          <Kpi label="재구매 예측가능" value={won(a.predictablePairs)} unit="쌍" t={a.predictablePairs ? 'emerald' : 'zinc'} hint="같은 재료 2회+ 소진 (집·재료)" />
+          <Kpi label="평균 소진일수" value={a.avgConsumeDays ?? '—'} unit={a.avgConsumeDays ? '일' : ''} hint="정기배송보다 정확한 재구매 신호" />
+          <Kpi label="폐기 금액(누적)" value={`₩${won(a.wasteKrw)}`} t="amber" hint="outcome·discarded_amount·price로 환산" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Cov label="가격 입력률" pct={a.priceCoverage} hint="낮으면 '식비 절감'·폐기금액을 측정 못 함 (STRATEGY §2)" />
+          <Cov label="소진·폐기 기록률" pct={a.outcomeCoverage} hint="낮으면 소비속도 데이터가 안 쌓임 = 자산의 원천" />
+        </div>
+        <Note tone="sky" title="🔑 진짜 자산은 기능이 아니라 데이터">
+          기능은 복제된다. 하지만 <b className="text-zinc-300">3년치 우리집 소비 이력은 복제되지 않는다.</b> 위 커버리지가 낮으면 지금 유저가 있어도 <b className="text-zinc-300">자산이 안 남는다</b> — 가격·소진 기록을 유도하는 UX가 곧 자산 축적률.
+        </Note>
+      </Section>
+
+      {/* 5. 매각 준비 체크 */}
+      <Section title="매각 준비 (장기·냉정하게)" sub="STRATEGY.md: 매각은 로또. 그래도 조항·규모는 처음부터 관리">
+        <div className="rounded-2xl bg-zinc-900/70 border border-zinc-800 p-4 mb-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[12px] font-bold text-zinc-300">규모 게이트 (다음 관문: MAU {won(gate)})</span>
+            <span className="tnum text-[12px] text-zinc-400">MAU {won(s.mau)} / {won(gate)}</span>
+          </div>
+          <div className="h-2.5 rounded-full bg-zinc-800 overflow-hidden">
+            <div className="h-full bg-sky-500" style={{ width: Math.min(100, s.mau / gate * 100) + '%' }} />
+          </div>
+          <div className="flex justify-between text-[10px] text-zinc-600 mt-1.5">
+            <span>1만 (얘기라도)</span><span>10만 (협상 시작)</span><span>50만+ (진짜)</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className={`rounded-xl border p-3 ${s.transferClause ? 'border-emerald-500/30 bg-emerald-500/[.06]' : 'border-rose-500/40 bg-rose-500/[.08]'}`}>
+            <p className="text-[12px] font-bold flex items-center gap-1.5">
+              {s.transferClause ? <span className="text-emerald-400">✓</span> : <span className="text-rose-400">✗</span>}
+              개인정보처리방침 · 영업양도 조항
+            </p>
+            <p className="text-[10px] text-zinc-400 mt-1 leading-snug">
+              {s.transferClause ? '있음 — 인수 시 데이터 이전 근거 확보.' : '없음 — ⚠️ 나중에 넣으면 전체 유저 재동의 필요, 딜 자체가 깨진다. 처음부터 넣을 것.'}
+            </p>
+          </div>
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
+            <p className="text-[12px] font-bold text-zinc-300">인수 이유는 넷뿐</p>
+            <p className="text-[10px] text-zinc-400 mt-1 leading-snug">팀·점유율·기술·<b className="text-zinc-200">데이터</b>. 개인 앱은 앞의 셋이 없다 → <b className="text-zinc-200">데이터 규모</b>가 유일한 카드. 그마저 로또.</p>
+          </div>
+        </div>
+        <Note tone="rose" title="⚠️ 중심 잡기">
+          {s.note} 이 대시보드는 <b className="text-zinc-300">①우리집 절감 ②실력 ③제휴수익</b>을 먼저 보게 배치했다 — 매각(④)은 그 결과로 따라오는 것.
+        </Note>
+      </Section>
+
+      {/* 6. 운영 노하우 요약 */}
+      <Section title="운영 노하우 — 잘되는 앱 키포인트" sub="앱 운영 경험이 없을 때 나침반으로">
+        <div className="grid sm:grid-cols-2 gap-3">
+          {[
+            ['리텐션 > 설치 수', '설치·가입은 광고로 산다. 살아남는 앱은 D30 재방문이 높다. 여기부터 본다.'],
+            ['아하 순간을 앞당겨라', '첫 스캔·첫 레시피까지 걸리는 마찰을 줄이면 리텐션이 오른다.'],
+            ['주간 습관을 심어라', '장보기·식단은 주 단위 리듬 — 주말에 돌아올 이유(#5 플래너)가 곧 WAU.'],
+            ['유닛 이코노믹스 양수', '유저 1명당 AI 원가 < 제휴 수익이면 규모가 커질수록 흑자. 지금은 원가만 측정 중.'],
+            ['데이터 커버리지가 자산', '가격·소진 기록률이 낮으면 유저가 있어도 자산이 안 쌓인다.'],
+            ['중립성이 해자', '쿠팡만 미는 앱은 못 이긴다. "컬리가 더 싸요"가 우리만의 자리(STRATEGY §3).'],
+          ].map(([t, desc]) => (
+            <div key={t} className="rounded-xl bg-zinc-900/70 border border-zinc-800 p-3.5">
+              <p className="text-[12px] font-extrabold text-zinc-200">{t}</p>
+              <p className="text-[11px] text-zinc-400 mt-1 leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <p className="text-[10px] text-zinc-600 text-center mt-8 leading-relaxed">
+        읽기전용 집계 · 개인 식별정보는 표시하지 않음 · 리텐션/활성은 접속·행동 로그 기반(조회만 한 과거 세션 일부는 근사).
+      </p>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

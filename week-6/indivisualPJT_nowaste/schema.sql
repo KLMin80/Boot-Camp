@@ -150,3 +150,13 @@ CREATE TABLE IF NOT EXISTS fridge_shopping (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_fridge_shopping_user ON fridge_shopping (user_id, created_at);
+
+-- 일자별 활동 로그 — 진짜 리텐션(DAU/WAU/MAU·재방문)의 원천.
+-- 인증된 요청마다 (user, 오늘) 1행만(ON CONFLICT). 조회만 한 세션도 여기 잡힌다(재고 변경 없이도).
+-- ⚠️ STRATEGY.md: 리텐션은 처음부터 안 쌓으면 과거를 복원할 수 없다. (과거분은 재고 타임스탬프로 근사)
+CREATE TABLE IF NOT EXISTS fridge_activity (
+  user_id uuid NOT NULL REFERENCES fridge_users(id) ON DELETE CASCADE,
+  day     date NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_fridge_activity_day ON fridge_activity (day);

@@ -1,7 +1,7 @@
 {
   "functions": {
     "server.js": {
-      "includeFiles": "{index,privacy}.html",
+      "includeFiles": "{index,privacy,admin}.html",
       "maxDuration": 60
     }
   }
