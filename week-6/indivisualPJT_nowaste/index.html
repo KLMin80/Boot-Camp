@@ -1810,74 +1810,97 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
   );
 }
 
-/* 멀티 마켓 구매 시트 — 재료마다 어느 마켓에서 살지 직접 고른다.
-   실시간 가격 비교는 불가하지만(담벼락), 마켓 선택권과 네이버 참고가를 준다.
-   외부에서 사고 온 뒤 '주문했어요'로 '곧 도착'(ordered) 재고에 넣을 수 있다. */
+/* 장보기 시트 — 실제 사용자는 한 마켓에서 다 담고 한 번에 결제한다(배송비·번거로움 회피).
+   그래서 재료별 링크가 아니라 '장보기 목록(체크리스트) + 마켓당 링크 1개 + 담은 것 일괄 곧 도착'.
+   쿠팡은 한 번 클릭이면 그 세션 장바구니 전체가 파트너스 실적에 잡힌다(세션·라스트클릭 기준). */
 function BuySheet({ data, onClose, onPick, onAddOrdered }) {
-  const [ordered, setOrdered] = useState({});
-  useEffect(() => { setOrdered({}); }, [data]);
-  if (!data) return null;
+  const [checked, setChecked] = useState({});   // 산 것 체크
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setChecked({}); setCopied(false); }, [data]);
+  if (!data || !data.items?.length) return null;
   const { items, markets, links, priceHint } = data;
 
-  const markOrdered = async (ing) => {
-    setOrdered((o) => ({ ...o, [ing]: 'loading' }));
-    try { await onAddOrdered(ing); setOrdered((o) => ({ ...o, [ing]: 'done' })); }
-    catch { setOrdered((o) => ({ ...o, [ing]: undefined })); }
+  const toggle = (ing) => setChecked((c) => ({ ...c, [ing]: !c[ing] }));
+  const picked = items.filter((ing) => checked[ing]);
+  const toMove = picked.length ? picked : items;
+
+  // 마켓 한 곳 열기 (마켓당 링크 1개). 쿠팡=고정 트래킹 링크, 나머지=첫 재료 검색을 시작점으로.
+  const openMarket = (m) => {
+    API.trackBuyClick({ market: m.key, ingredient: items.join(','), affiliate: !!m.affiliate, kind: 'ingredient' }).catch(() => {});
+    onPick(links[items[0]][m.key], m.label, `재료 ${items.length}개`);
+  };
+  const copyList = () => {
+    try { navigator.clipboard?.writeText(items.join('\n')); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch {}
+  };
+  const done = async () => {
+    if (!toMove.length || busy) return;
+    setBusy(true);
+    try { await onAddOrdered(toMove); onClose(); } catch {} finally { setBusy(false); }
   };
 
   return (
     <Sheet open onClose={onClose}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-[19px] font-extrabold">부족한 재료 사러 가기</h3>
-          <p className="text-[12px] text-muted mt-0.5">마켓을 골라 비교하고, 주문했으면 표시해요</p>
+          <h3 className="text-[19px] font-extrabold">장보기</h3>
+          <p className="text-[12px] text-muted mt-0.5">한 마켓에서 다 담고, 돌아와 담은 것만 표시하면 ‘곧 도착’으로</p>
         </div>
         <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
       </div>
 
-      {/* 유인 포인트 — 앱으로 사면 도착 때 확인 한 번으로 냉장고·식비가 자동 정리(직접 이커머스 대비 이점) */}
+      {/* 유인 — 도착 때 확인 한 번으로 냉장고·식비 자동 정리 */}
       <div className="mt-3 rounded-xl bg-frost/[.06] border border-frost/30 px-3.5 py-2.5">
         <p className="text-[11px] text-frost leading-relaxed">
-          🧊 <b className="font-extrabold">여기서 주문하면</b> ‘주문했어요 → 곧 도착’으로 담기고, 받을 때 <b className="font-extrabold">유통기한·가격만 확인</b>하면 냉장고·식비에 자동 정리돼요.
+          🧊 <b className="font-extrabold">여기서 담고</b> 돌아와 표시하면 ‘곧 도착’으로, 받을 때 <b className="font-extrabold">유통기한·가격만 확인</b>하면 냉장고·식비에 자동 정리돼요.
         </p>
       </div>
 
-      <div className="mt-4 max-h-[52vh] overflow-y-auto noscroll space-y-4">
-        {items.map((ing) => (
-          <div key={ing}>
-            <div className="flex items-baseline gap-2 mb-2">
-              <span className="font-extrabold">{ing}</span>
+      {/* 1) 장보기 목록 — 체크리스트 */}
+      <div className="mt-4 flex items-center justify-between">
+        <p className="text-[12px] font-bold text-muted">살 재료 <span className="tnum text-ink">{items.length}</span>개 <span className="font-normal">· 산 것만 체크</span></p>
+        <button onClick={copyList} className="tap text-[12px] font-bold text-muted border border-line rounded-full px-2.5 py-1 active:bg-paper">
+          {copied ? '✓ 복사됨' : '📋 목록 복사'}
+        </button>
+      </div>
+      <div className="mt-2 max-h-[34vh] overflow-y-auto noscroll space-y-1.5">
+        {items.map((ing) => {
+          const on = checked[ing];
+          return (
+            <button key={ing} onClick={() => toggle(ing)}
+              className={`tap w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border-2 transition-colors ${on ? 'border-frost bg-frost/10' : 'border-line bg-surface active:bg-paper'}`}>
+              <span className={`w-5 h-5 rounded-md border-2 grid place-items-center shrink-0 text-[11px] font-bold ${on ? 'bg-frost border-frost text-white' : 'border-line'}`}>{on ? '✓' : ''}</span>
+              <span className="font-bold text-[14px] flex-1 text-left">{ing}</span>
               {priceHint?.[ing] != null && (
-                <span className="tnum text-[12px] text-calm font-semibold">네이버 최저 {won(priceHint[ing])}원~</span>
+                <span className="tnum text-[11px] text-calm font-semibold shrink-0">네이버 최저 {won(priceHint[ing])}원~</span>
               )}
-              <button onClick={() => markOrdered(ing)} disabled={ordered[ing]}
-                className={`ml-auto text-[12px] font-bold px-2.5 py-1 rounded-md border-2 transition-colors ${
-                  ordered[ing] === 'done' ? 'border-frost text-frost bg-frost/10'
-                    : 'border-line text-muted active:bg-paper'}`}>
-                {ordered[ing] === 'done' ? '🛒 주문함 ✓' : ordered[ing] === 'loading' ? '…' : '주문했어요'}
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {markets.map((m) => (
-                <button key={m.key}
-                  onClick={() => {
-                    // 제휴 클릭 로그(비차단) 후 마켓 열기 — 수익화 선행지표
-                    API.trackBuyClick({ market: m.key, ingredient: ing, affiliate: !!m.affiliate, kind: 'ingredient' }).catch(() => {});
-                    onPick(links[ing][m.key], m.label, ing);
-                  }}
-                  className="tap flex items-center gap-2 h-[50px] px-3 rounded-xl border-2 border-line bg-surface active:bg-paper transition-colors">
-                  <span className="text-[18px]">{m.icon}</span>
-                  <span className="font-bold text-[14px] flex-1 text-left">{m.label}</span>
-                  {m.affiliate && <span className="text-[9px] font-bold text-calm border border-calm rounded px-1 leading-[14px]">제휴</span>}
-                  <span className="text-muted text-[13px]">→</span>
-                </button>
-              ))}
-            </div>
-          </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 2) 마켓 — 마켓당 버튼 1개 (한 곳에서 다 담기) */}
+      <p className="text-[12px] font-bold text-muted mt-4 mb-2">어디서 살까요? <span className="font-normal">한 곳에서 다 담으세요</span></p>
+      <div className="grid grid-cols-2 gap-2">
+        {markets.map((m) => (
+          <button key={m.key} onClick={() => openMarket(m)}
+            className="tap flex items-center gap-2 h-[50px] px-3 rounded-xl border-2 border-line bg-surface active:bg-paper transition-colors">
+            <span className="text-[18px]">{m.icon}</span>
+            <span className="font-bold text-[14px] flex-1 text-left">{m.label}</span>
+            {m.affiliate && <span className="text-[9px] font-bold text-calm border border-calm rounded px-1 leading-[14px]">제휴</span>}
+            <span className="text-muted text-[13px]">→</span>
+          </button>
         ))}
       </div>
 
-      {/* 제휴 고지 (표시·광고의 공정화에 관한 법률 + 쿠팡파트너스 필수 문구) — 제휴 마켓이 있으면 반드시 노출 */}
+      {/* 3) 담은 것 → 곧 도착 (일괄) */}
+      <button onClick={done} disabled={busy || !toMove.length}
+        className="tap w-full h-[52px] rounded-xl bg-ink text-white font-bold mt-4 active:opacity-80 disabled:opacity-40">
+        {busy ? '담는 중…' : picked.length ? `체크한 ${picked.length}개 곧 도착으로` : `전체 ${items.length}개 곧 도착으로`}
+      </button>
+      <p className="text-[11px] text-muted text-center mt-2">마켓에서 담고 결제했으면 눌러주세요. 도착하면 ‘받았어요’로 유통기한을 넣어요.</p>
+
+      {/* 제휴 고지 (표시·광고의 공정화에 관한 법률 + 쿠팡파트너스 필수 문구) */}
       {markets.some((m) => m.affiliate) && (
         <div className="mt-4 rounded-xl bg-paper border border-line px-3.5 py-2.5 space-y-1.5">
           <p className="text-[11px] text-muted leading-relaxed">
@@ -1890,9 +1913,6 @@ function BuySheet({ data, onClose, onPick, onAddOrdered }) {
           )}
         </div>
       )}
-      <p className="text-[11px] text-muted mt-2 leading-relaxed">
-        가격은 마켓마다 달라요. 눌러서 직접 확인하세요.{!Object.keys(priceHint || {}).length && ' (네이버 참고가는 설정 시 표시)'}
-      </p>
     </Sheet>
   );
 }
@@ -2372,9 +2392,10 @@ function NowasteApp() {
 
   // 주문한 재료 → '곧 도착'(ordered). 구매 시트의 "주문했어요"에서 호출.
   const addOrdered = async (ing) => {
-    await API.addItem({ name: ing, ingredient: ing, capacity: 1, remaining: 1, unit: '개', storage: 'fridge', status: 'ordered' });
+    const list = Array.isArray(ing) ? ing : [ing]; // 단건/일괄 모두 지원 (장보기 체크리스트에서 여러 개)
+    for (const name of list) await API.addItem({ name, ingredient: name, capacity: 1, remaining: 1, unit: '개', storage: 'fridge', status: 'ordered' });
     await refresh();
-    toast(`${ing} — 곧 도착으로 담았어요`);
+    toast(list.length === 1 ? `${list[0]} — 곧 도착으로 담았어요` : `${list.length}개 재료를 곧 도착으로 담았어요`);
   };
 
   // 주문분 도착 → 받기 시트를 연다 (여기서 실제 유통기한·가격을 넣는다)
