@@ -326,17 +326,17 @@ function Spinner({ label = '불러오는 중' }) {
   return <p className="text-center text-[13px] text-muted py-16">{label}…</p>;
 }
 
+// 하단 탭은 큰 흐름 3개만: 냉장고(첫 화면) · 요리 · 리포트.
+// '담기'는 냉장고 화면의 버튼으로, '확인'은 냉장고의 '확인 필요' 목록으로 흡수했다(직관성).
 const NAV = [
   { key:'home',    label:'냉장고', icon:'🧺' },
-  { key:'add',     label:'담기',   icon:'📷' },
-  { key:'confirm', label:'확인',   icon:'✓'  },
   { key:'cook',    label:'요리',   icon:'🥘' },
   { key:'report',  label:'리포트', icon:'📊' },
 ];
 
-function BottomNav({ view, setView, pendingCount }) {
+function BottomNav({ view, setView }) {
   return (
-    <nav className="sticky bottom-0 z-30 grid grid-cols-5 bg-surface/95 backdrop-blur border-t border-line">
+    <nav className="sticky bottom-0 z-30 grid grid-cols-3 bg-surface/95 backdrop-blur border-t border-line">
       {NAV.map((n) => {
         const on = view === n.key;
         return (
@@ -344,11 +344,6 @@ function BottomNav({ view, setView, pendingCount }) {
             className="tap relative flex flex-col items-center gap-0.5 pt-2.5 pb-3 active:bg-paper">
             <span className={`text-[17px] leading-none ${on ? '' : 'opacity-45 grayscale'}`}>{n.icon}</span>
             <span className={`text-[10px] font-semibold ${on ? 'text-ink' : 'text-muted'}`}>{n.label}</span>
-            {n.key === 'confirm' && pendingCount > 0 && (
-              <span className="tnum absolute top-1.5 right-[26%] min-w-[15px] h-[15px] px-1 rounded-full bg-urgent text-white text-[10px] font-bold leading-[15px] text-center">
-                {pendingCount}
-              </span>
-            )}
             {on && <span className="absolute top-0 inset-x-[26%] h-[2px] bg-ink rounded-full" />}
           </button>
         );
@@ -605,9 +600,12 @@ const TABS = [
   { key: 'room',    label: '실온' },
 ];
 
-function HomeView({ items, ordered = [], loading, presets, pendingCount, setView, onFreezeAll, onItemAction, onReceive, busy, email, onLogout, toast, onAddOrdered }) {
+function HomeView({ items, ordered = [], pending = [], loading, presets, setView, onFreezeAll, onItemAction, onReceive, onConfirm, onDrop, onCook, busy, email, onLogout, toast, onAddOrdered }) {
   const [tab, setTab] = useState('all');
-  const [sheet, setSheet] = useState(null);
+  const [sheet, setSheet] = useState(null);             // ItemSheet (냉장고 항목)
+  const [confirmItem, setConfirmItem] = useState(null); // 확인 필요 항목 편집
+  const [detail, setDetail] = useState(null);           // 오늘 추천요리 상세
+  const [recos, setRecos] = useState([]);               // 오늘 추천요리
   const [predict, setPredict] = useState([]);   // 소비 예측: 곧 떨어질 재료
   const [buyData, setBuyData] = useState(null);
 
@@ -618,11 +616,21 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
 
   // 부분 차감으로 남은 양이 바뀔 때마다 예측 갱신
   useEffect(() => { API.predict().then((r) => setPredict(r.items || [])).catch(() => {}); }, [items]);
+  // 오늘 추천요리 — 급한 재료 우선(서버가 urgent 순 정렬). 재고 있을 때만 상위 3개.
+  useEffect(() => {
+    if (!items.length) { setRecos([]); return; }
+    let alive = true;
+    API.recipes('전체', false, 8).then((r) => alive && setRecos((r.recipes || []).slice(0, 3))).catch(() => {});
+    return () => { alive = false; };
+  }, [items.length]);
 
   const buyOne = async (ing) => {
     try { const d = await API.buyLinks([ing]); setBuyData({ items: [ing], ...d }); }
     catch (e) { toast?.(e.message, 'bad'); }
   };
+  // 오늘 추천요리 상세에서 부족 재료 주문 / 밀키트 (요리 화면과 동일 동작)
+  const buy = async (missing) => { if (!missing?.length) return; try { const d = await API.buyLinks(missing); setDetail(null); setBuyData({ items: missing, ...d }); } catch (e) { toast?.(e.message, 'bad'); } };
+  const mealkit = async (dish) => { try { const { url } = await API.mealkitLink(dish); API.trackBuyClick({ market: 'coupang', ingredient: dish, affiliate: true, kind: 'mealkit' }).catch(() => {}); window.open(url, '_blank', 'noopener'); toast?.(`${dish} 밀키트 찾는 중`); } catch (e) { toast?.(e.message, 'bad'); } };
 
   const shown = useMemo(() => {
     if (tab === 'all') return items;
@@ -639,6 +647,9 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
     setSheet(null);
     await onItemAction(kind, item, extra);
   };
+  // 확인 시트에서 확정/버리기 → 성공 후 시트 닫기 (목록의 '확인' 버튼은 시트 없이 바로)
+  const okConfirm = async (card, edits) => { await onConfirm(card, edits); setConfirmItem(null); };
+  const okDrop = async (card) => { await onDrop(card); setConfirmItem(null); };
 
   return (
     <>
@@ -646,27 +657,79 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
         title="냉장고"
         sub={<span>{items.length}가지 · <button onClick={onLogout} className="underline underline-offset-2 active:text-ink">{email}</button></span>}
         right={
-          <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => setView('shopping')}
-              className="tap flex items-center gap-1 rounded-full border-2 border-line px-2.5 py-1.5 active:bg-paper">
-              <span className="text-[13px] leading-none">🛒</span>
-              <span className="text-[12px] font-bold">장보기</span>
-            </button>
-            {pendingCount > 0 && (
-              <button onClick={() => setView('confirm')}
-                className="tap flex items-center gap-1.5 rounded-full bg-ink text-white pl-3 pr-2.5 py-1.5 active:opacity-80">
-                <span className="text-[12px] font-bold">확인할 것</span>
-                <span className="tnum text-[12px] font-bold bg-white text-ink rounded-full w-[18px] h-[18px] leading-[18px] text-center">{pendingCount}</span>
-              </button>
-            )}
-          </div>
+          <button onClick={() => setView('shopping')}
+            className="tap flex items-center gap-1 rounded-full border-2 border-line px-2.5 py-1.5 active:bg-paper">
+            <span className="text-[13px] leading-none">🛒</span>
+            <span className="text-[12px] font-bold">장보기</span>
+          </button>
         }
       />
 
       {loading ? <Spinner /> : (
         <>
+          {/* 재료 담기 — 하단 탭 대신, 냉장고에서 가장 잘 보이는 버튼으로 */}
+          <button onClick={() => setView('add')}
+            className="tap mx-4 mt-4 w-[calc(100%-2rem)] h-[54px] rounded-2xl bg-ink text-white font-extrabold text-[15px] flex items-center justify-center gap-2 active:opacity-80 shadow-[0_6px_20px_-8px_rgba(22,25,26,.5)]">
+            <span className="text-[19px] leading-none">＋</span> 재료 담기 <span className="opacity-70 font-semibold text-[13px]">사진·영수증·직접</span>
+          </button>
+
+          {/* 확인 필요 — 방금 담은(사진·영수증) 재료. 값 맞는지 보고 '확인'하면 냉장고로. (별도 확인 탭 대신) */}
+          {pending.length > 0 && (
+            <section className="rise mx-4 mt-4 rounded-2xl border-2 border-ink/60 bg-surface overflow-hidden">
+              <div className="flex items-center gap-1.5 px-4 pt-3 pb-1">
+                <span className="text-[13px]">📝</span>
+                <span className="text-[13px] font-bold">확인 필요</span>
+                <span className="tnum text-[11px] text-muted">{pending.length}개 · 값 맞는지 보고 확인</span>
+              </div>
+              <div className="divide-y divide-line">
+                {pending.map((p) => {
+                  const guessed = p.expiry_source === 'preset';
+                  return (
+                    <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+                      <button onClick={() => setConfirmItem(p)} className="tap flex-1 min-w-0 text-left active:opacity-70">
+                        <p className="font-semibold truncate">{p.name}</p>
+                        <p className="tnum text-[11px] text-muted mt-0.5">
+                          {p.expiry_date.replace(/-/g, '.')}{guessed && <span className="text-warn"> · 날짜확인</span>} · {p.capacity}{p.unit}{p.price != null ? ` · ${won(p.price)}원` : ''}
+                        </p>
+                      </button>
+                      <button disabled={busy} onClick={() => onConfirm(p)}
+                        className="tap shrink-0 text-[12px] font-bold text-white bg-ink px-3.5 py-1.5 rounded-lg active:opacity-80 disabled:opacity-50">확인</button>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted px-4 py-2">값이 틀리면 항목을 눌러 고친 뒤 확인하세요.</p>
+            </section>
+          )}
+
           <RescueCard doomed={doomed} presets={presets} busy={busy}
             onFreezeAll={onFreezeAll} onCook={() => setView('cook')} />
+
+          {/* 오늘 추천요리 — 급한 재료부터 쓰는 요리. 탭하면 상세(만드는 법·주문·밀키트) */}
+          {recos.length > 0 && (
+            <section className="mx-4 mt-4">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[13px] font-bold">🍳 오늘 추천요리 <span className="font-normal text-muted text-[12px]">급한 재료부터</span></p>
+                <button onClick={() => setView('cook')} className="tap text-[12px] font-bold text-muted active:text-ink">더보기 →</button>
+              </div>
+              <div className="space-y-2">
+                {recos.map((r) => (
+                  <button key={r.title} onClick={() => setDetail(r)}
+                    className="tap w-full flex items-center gap-3 rounded-2xl border border-line bg-surface p-3 text-left active:bg-paper transition-colors">
+                    <div className="w-11 h-11 rounded-xl bg-paper grid place-items-center text-[22px] shrink-0">{r.emoji}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold truncate">{r.title}</span>
+                        {r.urgentUses >= 1 && <span className="shrink-0 text-[10px] font-bold text-white bg-urgent px-1.5 py-0.5 rounded">급한 재료</span>}
+                      </div>
+                      <p className="tnum text-[12px] text-muted mt-0.5">{r.mins}분 · {r.tag} · 만드는 법 보기</p>
+                    </div>
+                    <span className="text-muted text-[13px] shrink-0">→</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* 곧 떨어져요 — 소비 속도로 예측. 상하기 전이 아니라 '떨어지기 전에' 미리 담기. */}
           {predict.length > 0 && (
@@ -764,6 +827,9 @@ function HomeView({ items, ordered = [], loading, presets, pendingCount, setView
 
       <div className="h-6" />
       <ItemSheet item={sheet} presets={presets} busy={busy} onClose={() => setSheet(null)} onAction={act} />
+      <ConfirmSheet card={confirmItem} onClose={() => setConfirmItem(null)} onConfirm={okConfirm} onDrop={okDrop} busy={busy} />
+      <RecipeSheet recipe={detail} onClose={() => setDetail(null)} onBuy={buy}
+        onCook={(uses, title) => { setDetail(null); onCook?.(uses, title); }} onMealkit={mealkit} />
       <BuySheet data={buyData} onClose={() => setBuyData(null)} onAddOrdered={onAddOrdered}
         onPick={(url, market, ing) => { window.open(url, '_blank', 'noopener'); toast?.(`${market}에서 ${ing} 찾는 중`); }} />
     </>
@@ -1531,6 +1597,118 @@ function Row({ label, value, tnum }) {
       <span className="text-[11px] font-bold text-muted shrink-0 w-[42px]">{label}</span>
       <span className={`flex-1 text-right font-semibold truncate ${tnum ? 'tnum' : ''}`}>{value}</span>
     </div>
+  );
+}
+
+/* 확인 시트 — 냉장고의 '확인 필요' 항목 하나를 열어 값(제품명·용량·가격·유통기한·보관)을
+   확인/수정 후 확정한다. (별도 '확인' 탭 없이 냉장고 목록에서 바로) */
+function ConfirmSheet({ card, onClose, onConfirm, onDrop, busy }) {
+  const [edit, setEdit] = useState(null); // null=보기, 객체=수정
+  useEffect(() => { setEdit(null); }, [card?.id]);
+  if (!card) return null;
+  const editing = edit !== null;
+  const guessed = card.expiry_source === 'preset';
+  const startEdit = () => setEdit({ name: card.name, capacity: card.capacity, unit: card.unit, price: card.price ?? '', expiry_date: card.expiry_date, storage: card.storage });
+  const unitOpts = ['g', 'ml', '개'].includes(card.unit) ? ['g', 'ml', '개'] : [card.unit, 'g', 'ml', '개'];
+  const patch = (k) => (v) => setEdit((e) => ({ ...e, [k]: v }));
+
+  return (
+    <Sheet open onClose={onClose}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-[18px] font-extrabold">{editing ? '고치기' : '이 값 맞나요?'}</h3>
+          <p className="text-[12px] text-muted mt-0.5">맞으면 확인, 틀리면 고쳐서 넣어요</p>
+        </div>
+        <button onClick={onClose} className="tap text-[13px] font-semibold text-muted active:text-ink">닫기</button>
+      </div>
+
+      <div className="mt-4 space-y-2.5">
+        {editing ? (
+          <div>
+            <label className="block text-[11px] font-bold text-muted mb-1">제품명</label>
+            <input value={edit.name} onChange={(e) => patch('name')(e.target.value)}
+              className="w-full h-[46px] px-3 rounded-lg border-2 border-line bg-surface font-semibold focus:border-ink outline-none" />
+          </div>
+        ) : <Row label="제품명" value={card.name} />}
+
+        {editing ? (
+          <div>
+            <label className="block text-[11px] font-bold text-muted mb-1">용량</label>
+            <div className="grid grid-cols-[1fr_88px] gap-2">
+              <input type="number" min="1" inputMode="decimal" value={edit.capacity} onChange={(e) => patch('capacity')(e.target.value)}
+                className="w-full h-[46px] px-3 rounded-lg border-2 border-line bg-surface font-semibold tnum focus:border-ink outline-none" />
+              <select value={edit.unit} onChange={(e) => patch('unit')(e.target.value)}
+                className="w-full h-[46px] px-2 rounded-lg border-2 border-line bg-surface font-semibold focus:border-ink outline-none">
+                {unitOpts.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+        ) : <Row label="용량" value={`${card.capacity}${card.unit}`} tnum />}
+
+        {editing ? (
+          <div>
+            <label className="block text-[11px] font-bold text-muted mb-1">가격 <span className="font-normal opacity-70">— 아낀 돈 리포트에 쓰여요</span></label>
+            <div className="flex items-center rounded-lg border-2 border-line focus-within:border-ink px-3 h-[46px]">
+              <input type="number" min="0" inputMode="numeric" value={edit.price} onChange={(e) => patch('price')(e.target.value)} placeholder="가격 입력"
+                className="tnum w-full bg-transparent font-semibold outline-none" />
+              <span className="text-[13px] text-muted font-semibold ml-1">원</span>
+            </div>
+          </div>
+        ) : (card.price != null && <Row label="가격" value={`${won(card.price)}원`} tnum />)}
+
+        <div className={`rounded-xl border-2 px-3.5 py-3 ${
+          guessed && !editing ? 'border-warn bg-warn/[.07]' : `${TONE[urgencyOf(card.days_left)].border} ${TONE[urgencyOf(card.days_left)].soft}`}`}>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-muted">유통기한</span>
+            {!editing && <Stamp days={card.days_left} />}
+          </div>
+          {editing ? (
+            <input type="date" value={edit.expiry_date} onChange={(e) => patch('expiry_date')(e.target.value)}
+              className="mono w-full h-[44px] px-3 mt-1.5 rounded-lg border-2 border-line bg-surface text-[16px] font-bold focus:border-ink outline-none" />
+          ) : (
+            <>
+              <p className="mono text-[19px] font-bold mt-1">{card.expiry_date.replace(/-/g, '.')}</p>
+              <p className="text-[11px] mt-1 leading-relaxed">
+                {guessed ? <span className="text-warn font-semibold">라벨에서 날짜를 못 읽어 보관기간으로 잡았어요. 맞는지 봐주세요.</span> : <span className="text-muted">라벨에서 읽었어요</span>}
+              </p>
+            </>
+          )}
+        </div>
+
+        {editing && (
+          <div>
+            <label className="block text-[11px] font-bold text-muted mb-1.5">보관</label>
+            <div className="grid grid-cols-4 gap-2">
+              {Object.entries(STORAGE).map(([key, s]) => (
+                <button key={key} onClick={() => patch('storage')(key)}
+                  className={`tap h-[52px] rounded-lg border-2 grid place-items-center gap-0.5 transition-colors ${
+                    edit.storage === key ? 'bg-ink text-white border-ink' : 'bg-surface border-line active:bg-paper'}`}>
+                  <span className="text-[15px] leading-none">{s.icon}</span>
+                  <span className="text-[10px] font-bold">{s.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <button disabled={busy} onClick={() => onConfirm(card, editing ? edit : undefined)}
+          className="tap w-full h-[54px] rounded-xl bg-ink text-white font-bold text-[15px] active:opacity-80 disabled:opacity-50">
+          {editing ? '고쳐서 냉장고에 넣기' : '맞아요 — 냉장고에 넣기'}
+        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button disabled={busy} onClick={() => editing ? setEdit(null) : startEdit()}
+            className="tap h-[48px] rounded-xl border-2 border-line font-semibold text-[14px] active:bg-paper disabled:opacity-50">
+            {editing ? '취소' : '고칠게요'}
+          </button>
+          <button disabled={busy} onClick={() => onDrop(card)}
+            className="tap h-[48px] rounded-xl border-2 border-line text-muted font-semibold text-[14px] active:bg-paper disabled:opacity-50">
+            버릴 거예요
+          </button>
+        </div>
+      </div>
+    </Sheet>
   );
 }
 
@@ -2314,7 +2492,7 @@ function NowasteApp() {
   // 사진 판독 완료 → 확인 대기 갱신. goConfirm=true면 바로 확인 화면으로.
   const photosDone = (ok, goConfirm) => guard(async () => {
     await refresh();
-    if (goConfirm) { setAddMode('menu'); setView('confirm'); return; }
+    if (goConfirm) { setAddMode('menu'); setView('home'); return; } // 담은 뒤 홈의 '확인 필요'에서 확인
     if (ok) toast(`${ok}장 담았어요 — 정리 끝나고 확인하세요`);
   });
 
@@ -2430,8 +2608,9 @@ function NowasteApp() {
     <div className="phone">
       <main className="flex-1 overflow-y-auto noscroll">
         {view === 'home' && (
-          <HomeView items={items} ordered={ordered} loading={loading} presets={presets} pendingCount={pending.length}
-            setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} onReceive={setReceiving} busy={busy}
+          <HomeView items={items} ordered={ordered} pending={pending} loading={loading} presets={presets}
+            setView={goto} onFreezeAll={freezeAll} onItemAction={itemAction} onReceive={setReceiving}
+            onConfirm={confirmCard} onDrop={dropCard} onCook={cookRecipe} busy={busy}
             email={email || '내 계정'} onLogout={logout} toast={toast} onAddOrdered={addOrdered} />
         )}
         {view === 'add' && addMode === 'menu'   && <AddView setMode={setAddMode} />}
@@ -2439,10 +2618,7 @@ function NowasteApp() {
         {view === 'add' && addMode === 'photo'  && <PhotoCaptureView onDone={photosDone} back={() => setAddMode('menu')} />}
         {view === 'add' && addMode === 'fresh'  && <FreshView presets={presets} onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}
         {view === 'add' && addMode === 'manual' && <ManualView onAdd={addItem} back={() => setAddMode('menu')} busy={busy} />}
-        {view === 'confirm' && (
-          <ConfirmView queue={pending} loading={loading} setView={goto}
-            onConfirm={confirmCard} onDrop={dropCard} busy={busy} />
-        )}
+        {/* '확인'은 냉장고의 '확인 필요' 목록 + ConfirmSheet로 흡수 (별도 탭 없음) */}
         {view === 'cook'   && <CookView toast={toast} onAddOrdered={addOrdered} hasOrdered={ordered.length > 0} items={items} onCook={cookRecipe} />}
         {view === 'shopping' && <ShoppingView toast={toast} onAddOrdered={addOrdered} back={() => goto('home')} />}
         {view === 'report' && <ReportView toast={toast} />}
@@ -2450,7 +2626,7 @@ function NowasteApp() {
 
       <ReceiveSheet item={receiving} onClose={() => setReceiving(null)} onConfirm={doReceive} busy={busy} toast={toast} />
       <Toast msg={msg} />
-      <BottomNav view={view} setView={goto} pendingCount={pending.length} />
+      <BottomNav view={view} setView={goto} />
     </div>
   );
 }
