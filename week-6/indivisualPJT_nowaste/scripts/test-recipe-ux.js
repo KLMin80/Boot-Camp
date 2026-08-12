@@ -43,6 +43,9 @@ const hasAmt = (s) => /[0-9]|큰술|작은술|약간|스푼|컵|톨|줌/.test(s)
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.locator('nav button:has-text("요리")').click();
   await page.waitForSelector('article', { timeout: 60000 });
+  // 2단계(캐시 표시 후 백그라운드 생성)가 끝나 호출 수가 고정된 뒤 기준을 잡는다
+  await page.waitForFunction(() => !document.body.innerText.includes('레시피 더 찾는 중'), { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(500);
   const callsAfterLoad = recipeCalls;
   ok(await page.getByRole('button', { name: '어른', exact: true }).count() === 0, "UI: '어른' 탭 제거됨(정확히 '어른'인 버튼 없음)");
   ok(await page.locator('button:has-text("아이")').first().isVisible(), "UI: '아이' 탭 있음");

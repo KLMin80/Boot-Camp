@@ -147,7 +147,7 @@ const API = {
 
   waste:    (months = 6) => api('GET', `/api/stats/waste?months=${months}`),
   predict:  () => api('GET', '/api/stats/predict'),
-  recipes:  (tag, includeOrdered, want) => api('POST', '/api/recipes/suggest', { tag, includeOrdered, want }),
+  recipes:  (tag, includeOrdered, want, gen) => api('POST', '/api/recipes/suggest', { tag, includeOrdered, want, gen }),
   recipeByName: (dish, tag, includeOrdered) => api('POST', '/api/recipes/byname', { dish, tag, includeOrdered }),
   recipesWith: (ingredients, tag) => api('POST', '/api/recipes/with', { ingredients, tag }),
   cook: (uses) => api('POST', '/api/recipes/cook', { uses }),
@@ -620,7 +620,8 @@ function HomeView({ items, ordered = [], pending = [], loading, presets, setView
   useEffect(() => {
     if (!items.length) { setRecos([]); return; }
     let alive = true;
-    API.recipes('전체', false, 8).then((r) => alive && setRecos((r.recipes || []).slice(0, 3))).catch(() => {});
+    // 캐시-온리(gen=false) — 홈은 즉시 떠야 하니 LLM 생성 안 함. 부족하면 요리 화면이 채운다.
+    API.recipes('전체', false, 6, false).then((r) => alive && setRecos((r.recipes || []).slice(0, 3))).catch(() => {});
     return () => { alive = false; };
   }, [items.length]);
 
@@ -1722,6 +1723,7 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
   const [includeOrdered, setIncludeOrdered] = useState(false);
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [genLoading, setGenLoading] = useState(false); // 캐시 표시 후 생성 백그라운드 진행중
   const [detail, setDetail] = useState(null);
   const [buyData, setBuyData] = useState(null);  // { items, markets, links, priceHint }
   const [buying, setBuying] = useState(false);
@@ -1763,13 +1765,19 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
   };
 
   // 전체를 한 번에 받아두고, 탭(아이/건강)은 서버 재호출 없이 클라에서 '필터'만 한다.
+  // 2단계: ① 캐시-온리로 즉시 표시(빠름) → ② 생성 포함은 백그라운드로 받아 더 있으면 갱신.
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    API.recipes('전체', includeOrdered, 16)
-      .then((r) => alive && setList(r.recipes))
+    setLoading(true); setGenLoading(true);
+    API.recipes('전체', includeOrdered, 16, false)
+      .then((r) => { if (alive) { setList(r.recipes || []); setLoading(false); } })
       .catch((e) => alive && toast(e.message, 'bad'))
-      .finally(() => alive && setLoading(false));
+      .finally(() => {
+        API.recipes('전체', includeOrdered, 16, true)
+          .then((r) => { if (alive && r.recipes?.length) setList(r.recipes); })
+          .catch(() => {})
+          .finally(() => { if (alive) { setLoading(false); setGenLoading(false); } });
+      });
     return () => { alive = false; };
   }, [includeOrdered]);
 
@@ -1924,6 +1932,11 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
             </p>
           )}
         </div>
+      )}
+
+      {/* 캐시로 먼저 보여준 뒤, 새 조합은 백그라운드로 더 찾는다 */}
+      {genLoading && !loading && !pickResults && (
+        <p className="text-center text-[12px] text-muted py-2">🍳 레시피 더 찾는 중…</p>
       )}
 
       <div className="h-6" />

@@ -162,7 +162,7 @@ async function store(recipes, source = 'llm') {
 }
 
 /* ── 진입점 ── */
-async function suggest({ inventory, vocab, tag, want = 6 }) {
+async function suggest({ inventory, vocab, tag, want = 6, gen = true }) {
   const invNames = [...new Set(inventory.map((i) => i.ing))];
   const urgent = inventory.filter((i) => i.days_left <= 4).map((i) => i.ing);
   const focus = urgent.length ? [...new Set(urgent)] : invNames;
@@ -176,7 +176,7 @@ async function suggest({ inventory, vocab, tag, want = 6 }) {
 
   const MIN_FRESH = 3;
   let generatedNow = false;
-  const shouldGen = client && invNames.length && (ranked.length < MIN_FRESH || uncovered.length > 0);
+  const shouldGen = gen && client && invNames.length && (ranked.length < MIN_FRESH || uncovered.length > 0);
   if (shouldGen) {
     try {
       const genFocus = uncovered.length ? uncovered : focus; // 커버 안 된 것부터

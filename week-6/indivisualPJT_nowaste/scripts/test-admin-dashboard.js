@@ -106,7 +106,7 @@ const close = (token, id, outcome, amt) => api('POST', `/api/items/${id}/close`,
     await p2.locator('button:has-text("닫기")').first().click(); await p2.waitForTimeout(150);
   }
   await p2.getByRole('button', { name: /장보기/ }).click();
-  await p2.waitForSelector('text=사러 가기', { timeout: 8000 });
+  await p2.waitForSelector('text=한 마켓에서 다 담고', { timeout: 8000 });
   await p2.locator('button:has-text("쿠팡")').first().click();
   await p2.waitForTimeout(1000);
   const after = (await pool.query('SELECT count(*)::int n FROM fridge_buy_click WHERE user_id = $1', [uid])).rows[0].n;

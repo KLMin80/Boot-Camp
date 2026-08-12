@@ -81,8 +81,8 @@ const getItem = async (token, id) => (await api('GET', '/api/items?status=confir
     await page.locator('button:has-text("닫기")').first().click(); await page.waitForTimeout(150);
   }
   await page.getByRole('button', { name: /장보기/ }).click();
-  await page.waitForSelector('text=사러 가기', { timeout: 8000 });
-  ok(await page.getByText(/여기서 주문하면/).isVisible(), 'BuySheet에 유인 배너 노출(자동 정리 안내)');
+  await page.waitForSelector('text=한 마켓에서 다 담고', { timeout: 8000 });
+  ok(await page.getByText(/여기서 담고/).isVisible(), 'BuySheet에 유인 배너 노출(자동 정리 안내)');
 
   await browser.close();
   await pool.query('DELETE FROM fridge_users WHERE email = $1', [EMAIL]);

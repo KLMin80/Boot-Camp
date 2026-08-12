@@ -555,7 +555,7 @@ app.post('/api/recipes/suggest', auth, async (req, res) => {
   const want = Math.min(Math.max(Number(req.body.want) || 6, 1), 20);
   const inventory = await inventoryForRecipes(req.userId, Boolean(req.body.includeOrdered));
   const vocab = await recipeVocab(inventory);
-  const out = await recipes.suggest({ inventory, vocab, tag, want });
+  const out = await recipes.suggest({ inventory, vocab, tag, want, gen: req.body.gen !== false });
   res.json(out);
 });
 

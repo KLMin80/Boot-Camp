@@ -73,14 +73,14 @@ const addItem = (token, name, ingredient) => api('POST', '/api/items', { token, 
   ok(await page.getByRole('button', { name: /장보기/ }).isVisible(), "양념 옆 '🛒 장보기' 버튼 보임");
 
   await page.getByRole('button', { name: /장보기/ }).click();
-  await page.waitForSelector('text=사러 가기', { timeout: 8000 });
-  ok(await page.locator('text=사러 가기').isVisible(), '장보기 → BuySheet 열림');
-  // BuySheet에 양념 '이름'이 그대로 노출(양 없이). 첫 양념 이름으로 확인.
+  await page.waitForSelector('text=한 마켓에서 다 담고', { timeout: 8000 });
+  ok(await page.getByText('한 마켓에서 다 담고').isVisible(), '장보기 → BuySheet(장보기 모드) 열림');
+  // BuySheet 체크리스트에 양념 '이름'이 그대로 노출(양 없이). 첫 양념 이름으로 확인.
   const first = seasNames[0];
-  const shownName = await page.locator('.font-extrabold', { hasText: first }).first().isVisible().catch(() => false);
+  const shownName = await page.getByText(first, { exact: false }).first().isVisible().catch(() => false);
   ok(shownName, `BuySheet에 양념 이름 '${first}' 노출(양 제거됨)`);
   // 쿠팡(제휴) 마켓 버튼도 있어야
-  ok(await page.locator('text=쿠팡').first().isVisible(), 'BuySheet에 마켓(쿠팡) 노출');
+  ok(await page.getByText('쿠팡프레시').first().isVisible(), 'BuySheet에 마켓(쿠팡) 노출');
 
   await browser.close();
   await pool.query('DELETE FROM fridge_users WHERE email = $1', [EMAIL]);
