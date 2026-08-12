@@ -693,13 +693,17 @@ app.post('/api/buy-links', auth, async (req, res) => {
   });
 });
 
-/* 밀키트 링크 — 레시피를 직접 요리 대신 '밀키트로 편하게'. 쿠팡 밀키트 검색으로 보내
-   쿠팡파트너스(coupang) 제휴에 그대로 얹힌다(식재료보다 마진·수수료 큼). */
+/* 밀키트 링크 — 레시피를 직접 요리 대신 '밀키트로 편하게'. 밀키트는 식재료보다 마진·수수료가 커
+   따로 둔 버튼인데, 장보기용 고정 트래킹 링크를 재사용하면 '밀키트'가 아니라 같은 곳으로 랜딩돼 의미가 없어진다.
+   ★ 밀키트 전용 링크(MARKET_URL_COUPANG_MEALKIT)를 두면 장보기와 다른 '밀키트' 페이지로 보내면서 트래킹 유지.
+     {q} 있으면 요리별("{요리} 밀키트") 검색, 없으면 고정 밀키트 랜딩. 없으면 기존 폴백(=장보기와 동일, 임시). */
 const COUPANG = MARKETS.find((m) => m.key === 'coupang');
 app.post('/api/mealkit-link', auth, (req, res) => {
   const dish = String(req.body.dish || '').trim().slice(0, 40);
   if (!dish) return res.status(400).json({ error: '요리 이름이 필요합니다.' });
-  res.json({ url: COUPANG.url(`${dish} 밀키트`), label: '쿠팡프레시', affiliate: COUPANG.affiliate });
+  const tmpl = process.env.MARKET_URL_COUPANG_MEALKIT;
+  const url = tmpl ? tmpl.replace(/\{q\}/g, encodeURIComponent(`${dish} 밀키트`)) : COUPANG.url(`${dish} 밀키트`);
+  res.json({ url, label: '쿠팡프레시', affiliate: COUPANG.affiliate });
 });
 
 /* ───────────────── 장보기 리스트 ─────────────────
