@@ -701,9 +701,17 @@ const COUPANG = MARKETS.find((m) => m.key === 'coupang');
 app.post('/api/mealkit-link', auth, (req, res) => {
   const dish = String(req.body.dish || '').trim().slice(0, 40);
   if (!dish) return res.status(400).json({ error: '요리 이름이 필요합니다.' });
+  // 밀키트의 핵심은 '요리명으로 검색'(원래 동작). 고정 트래킹 링크(장보기용)를 재사용하면 검색어가 무시돼
+  // 장보기와 같은 곳으로 가버린다 → 여기선 항상 '{요리} 밀키트'로 검색되게 한다.
+  //  · MARKET_URL_COUPANG_MEALKIT에 {q}가 있으면 요리별 '트래킹' 링크(Open API 등) → 검색+수수료 둘 다.
+  //  · 없으면 트래킹 없는 쿠팡 '{요리} 밀키트' 검색(원래 동작 복원). 수수료는 Open API 전까진 미집계.
+  const q = `${dish} 밀키트`;
   const tmpl = process.env.MARKET_URL_COUPANG_MEALKIT;
-  const url = tmpl ? tmpl.replace(/\{q\}/g, encodeURIComponent(`${dish} 밀키트`)) : COUPANG.url(`${dish} 밀키트`);
-  res.json({ url, label: '쿠팡프레시', affiliate: COUPANG.affiliate });
+  const tracked = Boolean(tmpl && tmpl.includes('{q}'));
+  const url = tracked
+    ? tmpl.replace(/\{q\}/g, encodeURIComponent(q))
+    : `https://www.coupang.com/np/search?q=${encodeURIComponent(q)}&channel=user`;
+  res.json({ url, label: '쿠팡프레시', affiliate: tracked && COUPANG.affiliate });
 });
 
 /* ───────────────── 장보기 리스트 ─────────────────

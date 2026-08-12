@@ -631,7 +631,7 @@ function HomeView({ items, ordered = [], pending = [], loading, presets, setView
   };
   // 오늘 추천요리 상세에서 부족 재료 주문 / 밀키트 (요리 화면과 동일 동작)
   const buy = async (missing) => { if (!missing?.length) return; try { const d = await API.buyLinks(missing); setDetail(null); setBuyData({ items: missing, ...d }); } catch (e) { toast?.(e.message, 'bad'); } };
-  const mealkit = async (dish) => { try { const { url } = await API.mealkitLink(dish); API.trackBuyClick({ market: 'coupang', ingredient: dish, affiliate: true, kind: 'mealkit' }).catch(() => {}); window.open(url, '_blank', 'noopener'); toast?.(`${dish} 밀키트 찾는 중`); } catch (e) { toast?.(e.message, 'bad'); } };
+  const mealkit = async (dish) => { try { const { url, affiliate } = await API.mealkitLink(dish); API.trackBuyClick({ market: 'coupang', ingredient: dish, affiliate: !!affiliate, kind: 'mealkit' }).catch(() => {}); window.open(url, '_blank', 'noopener'); toast?.(`${dish} 밀키트 찾는 중`); } catch (e) { toast?.(e.message, 'bad'); } };
 
   const shown = useMemo(() => {
     if (tab === 'all') return items;
@@ -1811,8 +1811,8 @@ function CookView({ toast, onAddOrdered, hasOrdered, items = [], onCook }) {
   // 밀키트로 편하게 — 요리 대신 밀키트 검색으로(쿠팡 밀키트 = 파트너스 제휴)
   const mealkit = async (dish) => {
     try {
-      const { url } = await API.mealkitLink(dish);
-      API.trackBuyClick({ market: 'coupang', ingredient: dish, affiliate: true, kind: 'mealkit' }).catch(() => {});
+      const { url, affiliate } = await API.mealkitLink(dish);
+      API.trackBuyClick({ market: 'coupang', ingredient: dish, affiliate: !!affiliate, kind: 'mealkit' }).catch(() => {});
       window.open(url, '_blank', 'noopener');
       toast(`${dish} 밀키트 찾는 중`);
     } catch (e) { toast(e.message, 'bad'); }
