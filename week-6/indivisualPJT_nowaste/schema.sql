@@ -173,3 +173,11 @@ CREATE TABLE IF NOT EXISTS fridge_buy_click (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_fridge_buy_click_time ON fridge_buy_click (created_at);
+
+-- 쿠팡 딥링크 캐시 — 딥링크 API로 변환한 '원본 URL → 트래킹 링크'를 재사용(호출 한도 안전 + 빠름).
+-- 재료·요리 검색 URL은 어휘가 한정적이라 금방 캐시가 차서 API 호출이 0에 수렴한다.
+CREATE TABLE IF NOT EXISTS fridge_coupang_deeplink (
+  url        text PRIMARY KEY,
+  shorten    text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);

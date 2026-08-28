@@ -13,6 +13,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('./db');
 const recipes = require('./recipes');
 const ocr = require('./ocr');
+const coupang = require('./coupang'); // 쿠팡파트너스 딥링크(트래킹 링크 변환)
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -682,6 +683,14 @@ app.post('/api/buy-links', auth, async (req, res) => {
     links[ing] = Object.fromEntries(MARKETS.map((m) => [m.key, m.url(ing)]));
   }
 
+  // 쿠팡: 딥링크 API가 있으면 '재료별 검색'을 트래킹 링크로 변환(정확한 랜딩 + 수수료 집계).
+  // 키 없으면 위 고정 링크 유지, API 실패해도 원본 검색 URL로 폴백(coupang.deeplinks 내부).
+  if (coupang.enabled && items.length) {
+    const searchUrl = (ing) => `https://www.coupang.com/np/search?q=${encodeURIComponent(ing)}&channel=user`;
+    const map = await coupang.deeplinks(items.map(searchUrl));
+    for (const ing of items) { const t = map[searchUrl(ing)]; if (t) links[ing].coupang = t; }
+  }
+
   // 네이버 참고가는 키가 있을 때만 (없으면 빈 객체)
   const priceHint = {};
   const priced = await Promise.all(items.map(async (ing) => [ing, await naverLowestPrice(ing)]));
@@ -693,24 +702,24 @@ app.post('/api/buy-links', auth, async (req, res) => {
   });
 });
 
-/* 밀키트 링크 — 레시피를 직접 요리 대신 '밀키트로 편하게'. 밀키트는 식재료보다 마진·수수료가 커
-   따로 둔 버튼인데, 장보기용 고정 트래킹 링크를 재사용하면 '밀키트'가 아니라 같은 곳으로 랜딩돼 의미가 없어진다.
-   ★ 밀키트 전용 링크(MARKET_URL_COUPANG_MEALKIT)를 두면 장보기와 다른 '밀키트' 페이지로 보내면서 트래킹 유지.
-     {q} 있으면 요리별("{요리} 밀키트") 검색, 없으면 고정 밀키트 랜딩. 없으면 기존 폴백(=장보기와 동일, 임시). */
+/* 밀키트 링크 — 레시피를 직접 요리 대신 '밀키트로 편하게'. 마진·수수료가 커 따로 둔 버튼.
+   핵심은 '{요리} 밀키트'로 검색되게 하는 것. 딥링크 API가 있으면 그 검색을 트래킹 링크로 변환해
+   검색 + 수수료를 둘 다 잡는다(장보기와 동일 원리). 없으면 트래킹 없는 검색으로 폴백. */
 const COUPANG = MARKETS.find((m) => m.key === 'coupang');
-app.post('/api/mealkit-link', auth, (req, res) => {
+app.post('/api/mealkit-link', auth, async (req, res) => {
   const dish = String(req.body.dish || '').trim().slice(0, 40);
   if (!dish) return res.status(400).json({ error: '요리 이름이 필요합니다.' });
-  // 밀키트의 핵심은 '요리명으로 검색'(원래 동작). 고정 트래킹 링크(장보기용)를 재사용하면 검색어가 무시돼
-  // 장보기와 같은 곳으로 가버린다 → 여기선 항상 '{요리} 밀키트'로 검색되게 한다.
-  //  · MARKET_URL_COUPANG_MEALKIT에 {q}가 있으면 요리별 '트래킹' 링크(Open API 등) → 검색+수수료 둘 다.
-  //  · 없으면 트래킹 없는 쿠팡 '{요리} 밀키트' 검색(원래 동작 복원). 수수료는 Open API 전까진 미집계.
   const q = `${dish} 밀키트`;
+  const searchUrl = `https://www.coupang.com/np/search?q=${encodeURIComponent(q)}&channel=user`;
+  if (coupang.enabled) {
+    const map = await coupang.deeplinks([searchUrl]);
+    const url = map[searchUrl] || searchUrl;
+    return res.json({ url, label: '쿠팡프레시', affiliate: url !== searchUrl }); // 딥링크로 바뀌면 트래킹O
+  }
+  // 폴백(키 없을 때): MARKET_URL_COUPANG_MEALKIT({q}) 또는 트래킹 없는 검색
   const tmpl = process.env.MARKET_URL_COUPANG_MEALKIT;
   const tracked = Boolean(tmpl && tmpl.includes('{q}'));
-  const url = tracked
-    ? tmpl.replace(/\{q\}/g, encodeURIComponent(q))
-    : `https://www.coupang.com/np/search?q=${encodeURIComponent(q)}&channel=user`;
+  const url = tracked ? tmpl.replace(/\{q\}/g, encodeURIComponent(q)) : searchUrl;
   res.json({ url, label: '쿠팡프레시', affiliate: tracked && COUPANG.affiliate });
 });
 
